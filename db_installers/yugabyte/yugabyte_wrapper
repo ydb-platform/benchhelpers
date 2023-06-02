@@ -1,0 +1,9 @@
+#!/bin/bash
+
+dt=`date +%Y-%m-%d-%s`
+args=$@
+log_file="/place/berkanavt/yugabyte/logs/start.${dt}"
+
+ulimit -n 1048576
+
+nohup $@ &>$log_file </dev/null &

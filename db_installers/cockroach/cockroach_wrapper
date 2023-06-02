@@ -1,0 +1,8 @@
+#!/bin/bash
+
+dt=`date +%Y-%m-%d-%s`
+args=$@
+log_file="/place/berkanavt/cockroach/logs/start.${dt}"
+
+ulimit -n 500000
+nohup /place/berkanavt/cockroach/cockroach $@ --background &>$log_file </dev/null
