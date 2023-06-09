@@ -6,14 +6,11 @@ import datetime
 import logging
 import os
 import pipes
-import subprocess
 import sys
-import time
+
+from db_installers.pylib.common import ErrorExit, SSHAction, PSSHAction, BaseAction
 
 
-logger = logging.getLogger(__name__)
-DEPLOY_PATH = "/place/berkanavt/yugabyte"
-DEPLOY_TMP_PATH = "/var/tmp"
 HTTP_PORT = 8080
 LISTEN_PORT_MASTER = 7100
 LISTEN_PORT_SERVER = 9100
@@ -24,238 +21,19 @@ WEBSERVER_PORT = 9000
 CQL_WEBSERVER_PORT = 12000
 PSQL_WEBSERVER_PORT = 13000
 
+logger = logging.getLogger(__name__)
 Nodes = []
+
 
 def disk2mnt(disk):
     name = os.path.basename(disk)
     return DEPLOY_PATH + "/data/" + name
 
 
-class ErrorExit(Exception):
-    pass
-
-
-class JobException(Exception):
-    pass
-
-
-class Job(object):
-
-    def __init__(self, command, timeout=3600, kill_timeout=5, shell=False):
-        super(Job, self).__init__()
-        self._logger = logger.getChild(self.__class__.__name__)
-        if isinstance(command, basestring):
-            self.command = tuple(command.split())
-        else:
-            self.command = command
-        self.timeout = timeout
-        self.kill_timeout = kill_timeout
-        self.shell = shell
-        self.time_elapsed = 0
-        self.terminated = False
-        self.process = None
-
-    def check_terminate_timeout(self):
-        if self.terminated or self.time_elapsed <= self.timeout:
-            return
-        self._logger.warning("Execution of '%r' timeout. Terminating (timeout = %d)", self.command, self.timeout)
-        try:
-            self.process.terminate()
-        except Exception:
-            self._logger.error("Failed to terminate job.", exc_info=True)
-        self.terminated = True
-
-    def check_kill_timeout(self):
-        if self.time_elapsed <= self.timeout + self.kill_timeout:
-            return False
-        self._logger.warning("Termination timeout. Killing (kill_timeout = %d)", self.kill_timeout)
-        try:
-            self.process.kill()
-        except Exception:
-            self._logger.error("Failed to kill job.", exc_info=True)
-        return True
-
-    def wait_exit_code(self):
-        while True:
-            time.sleep(0.1)
-            self.time_elapsed += 0.1
-
-            return_code = self.process.poll()
-            if return_code is not None:
-                return return_code
-
-            self.check_terminate_timeout()
-            if self.check_kill_timeout():
-                return -9
-
-    def run(self):
-        """Run command with timeout"""
-        logging.debug("Executing: '%r'", self.command)
-        self.time_elapsed = 0
-        self.terminated = False
-
-        try:
-            self.process = subprocess.Popen(
-                self.command,
-                stdout=sys.stdout,
-                stderr=sys.stderr,
-                shell=self.shell
-            )
-        except Exception:
-            self._logger.warning("Execution of '%r' failed with:", self.command, exc_info=True)
-            raise
-
-        return self.wait_exit_code()
-
-    def safe_run(self):
-        try:
-            return_code = self.run()
-        except BaseException:
-            self._logger.error("Error run job '%r'", self.command, exc_info=True)
-            raise
-        if return_code != 0:
-            raise JobException("Job '{}' return code {}".format(self.command, return_code))
-
-    def get_output(self):
-        try:
-            self.process = subprocess.Popen(
-                self.command,
-                stdout=subprocess.PIPE,
-                stderr=sys.stderr,
-                shell=self.shell
-            )
-        except Exception:
-            self._logger.warning("Execution of '%r' failed with:", self.command, exc_info=True)
-            raise
-
-        return_code = self.wait_exit_code()
-        output = self.process.stdout
-        if return_code != 0:
-            raise JobException("Job '{}' return code {}".format(self.command, return_code))
-        return output
-
-
-class BaseAction(object):
-
-    def __init__(self, _args):
-        super(BaseAction, self).__init__()
-        self._logger = logger.getChild(self.__class__.__name__)
-
-    def run(self):
-        pass
-
-
-class SSHAction(BaseAction):
-    TIMEOUT = 60
-
-    def __init__(self, args):
-        super(SSHAction, self).__init__(None)
-        if len(args.hosts.split(",")) != 1:
-            self._logger.error("Multiple hosts for SSH: ", args.hosts, exc_info=True)
-            raise ErrorExit()
-        self.host = args.hosts
-        self.dry_run = args.dry_run
-        self.fail_on_error = args.fail_on_error
-
-    def ssh_cmd(self, cmd):
-        ssh_cmd = list()
-        if self.dry_run:
-            ssh_cmd.append("echo")
-        ssh_cmd += ["ssh", self.host, cmd]
-        job = Job(ssh_cmd, timeout=self.TIMEOUT)
-        try:
-            job.safe_run()
-        except JobException:
-            if self.fail_on_error:
-                self._logger.error("Command '%s' failed", ssh_cmd, exc_info=True)
-                raise ErrorExit()
-        except Exception:
-            raise ErrorExit()
-
-    def run(self):
-        super(SSHAction, self).run()
-
-
-class PSSHAction(BaseAction):
-    TIMEOUT = 5 * 60
-
-    def __init__(self, args):
-        super(PSSHAction, self).__init__(args)
-        self.pssh_hosts = list()
-        self.dry_run = args.dry_run
-        self.hosts = args.hosts
-        self.fail_on_error = args.fail_on_error
-        self.username = args.username
-        self.sudo_user = args.sudo_user
-
-    def pssh_cmd(self, cmd):
-        pssh_cmd = list()
-        if self.dry_run:
-            pssh_cmd.append("echo")
-        pssh_cmd += ["pssh", "-p", "100", "--no-bastion", "--no-yubikey"] + cmd + self.pssh_hosts
-        job = Job(pssh_cmd, timeout=self.TIMEOUT)
-        try:
-            job.safe_run()
-        except JobException:
-            if self.fail_on_error:
-                self._logger.error("Command '%s' failed", pssh_cmd, exc_info=True)
-                raise ErrorExit()
-        except Exception:
-            raise ErrorExit()
-
-    def _get_base_pssh_args(self):
-        if self.username is not None:
-            return ["-u", self.username]
-        return []
-
-    def pssh_run(self, cmd, stream=False):
-        pssh_cmd = ["run"]
-        pssh_cmd += self._get_base_pssh_args()
-        pssh_cmd.append(cmd)
-        self.pssh_cmd(pssh_cmd)
-
-    def pssh_upload(self, src, dst_dir):
-        pssh_cmd = list()
-        if self.dry_run:
-            pssh_cmd.append("echo")
-
-        hosts_with_dir = []
-        for host in self.pssh_hosts:
-            hosts_with_dir.append(host + ":" + dst_dir)
-
-        pssh_cmd += ["pssh", "scp", "-p", "100", "--no-bastion", "--no-yubikey", src] + hosts_with_dir
-        job = Job(pssh_cmd, timeout=self.TIMEOUT)
-        try:
-            job.safe_run()
-        except JobException:
-            if self.fail_on_error:
-                self._logger.error("Command '%s' failed", pssh_cmd, exc_info=True)
-                raise ErrorExit()
-        except Exception:
-            raise ErrorExit()
-
-
-    def _select_hosts(self):
-        if self.hosts is not None:
-            # overwrite Nodes
-            self.pssh_hosts.append(self.hosts)
-        else:
-            self.pssh_hosts = Nodes
-
-        if len(self.pssh_hosts) == 0:
-            self._logger.error("PSSH hosts list is empty. Need specify --config or/and --hosts")
-            raise ErrorExit()
-
-    def run(self):
-        self._select_hosts()
-        self._logger.info("PSSH hosts %s", " ".join(self.pssh_hosts))
-        super(PSSHAction, self).run()
-
-
 class Deploy(PSSHAction):
 
     def __init__(self, args):
-        super(Deploy, self).__init__(args)
+        super().__init__(args)
         self.package = args.deploy
         self.config = args.config
 
@@ -265,7 +43,7 @@ class Deploy(PSSHAction):
         return "sudo mkdir -p " + " ".join(paths)
 
     def run(self):
-        super(Deploy, self).run()
+        super().run()
         self._logger.info("Deploy %s", self.package)
         filename = os.path.basename(self.package)
         upload_path = os.path.join(DEPLOY_TMP_PATH, filename)
@@ -284,7 +62,7 @@ class Deploy(PSSHAction):
 class Start(PSSHAction):
 
     def __init__(self, args):
-        super(Start, self).__init__(args)
+        super().__init__(args)
         self.per_disk_instance = args.per_disk_instance
 
     def start_master(self, host, store_args, listen_addr, http_addr, master_nodes):
@@ -378,7 +156,7 @@ class Start(PSSHAction):
         return join_nodes
 
     def run(self):
-        super(Start, self).run()
+        super().run()
 
         mount_dirs = [disk2mnt(d) for d in Disks]
         mount_dirs_str = ",".join(mount_dirs)
@@ -455,10 +233,10 @@ class Start(PSSHAction):
 class Stop(PSSHAction):
 
     def __init__(self, args):
-        super(Stop, self).__init__(args)
+        super().__init__(args)
 
     def run(self):
-        super(Stop, self).run()
+        super().run()
         self._logger.info("Stop")
         cmd = "sudo -u {user} sh -c \"pkill yb-master; pkill yb-tserver; pkill haproxy; sleep 5;"
         cmd += " pkill -9 yb-master; pkill -9 yb-tserver; pkill -9 haproxy\""
@@ -467,10 +245,10 @@ class Stop(PSSHAction):
 
 class Clean(Stop):
     def __init__(self, args):
-        super(Clean, self).__init__(args)
+        super().__init__(args)
 
     def run(self):
-        super(Clean, self).run()
+        super().run()
         self._logger.info("Clean")
 
         disk_cmd = "sudo -u {user} umount {mnt} 2>&1"
@@ -485,10 +263,10 @@ class Clean(Stop):
 class Format(PSSHAction):
 
     def __init__(self, args):
-        super(Format, self).__init__(args)
+        super().__init__(args)
 
     def run(self):
-        super(Format, self).run()
+        super().run()
         logging.info("Formatting hosts")
 
         disk_cmd = "sudo -u {user} umount {mnt} 2>&1;"
@@ -504,6 +282,28 @@ class Format(PSSHAction):
         self.pssh_run(";".join(disk_cmds))
 
 
+class ReturnHosts(BaseAction):
+
+    def __init__(self, args):
+        super().__init__(args)
+        self.hosts = args.hosts
+
+    def run(self):
+        list_hosts = Nodes
+        if self.hosts:
+            print(f"{self.hosts}")
+        print(' '.join(list_hosts))
+
+
+class ReturnDeployPath(BaseAction):
+
+    def __init__(self, args):
+        super().__init__(args)
+
+    def run(self):
+        print(f"{DEPLOY_PATH}")
+
+
 # [ control.py -c cluster_config.py stop ]
 # control.py -c cluster_config.py format
 # control.py -c cluster_config.py deploy
@@ -512,7 +312,7 @@ class Format(PSSHAction):
 class Main(object):
 
     def __init__(self):
-        super(Main, self).__init__()
+        super().__init__()
         self._logger = logger.getChild(self.__class__.__name__)
         self.args = None
         self.parser = None
@@ -537,6 +337,8 @@ class Main(object):
         self.add_cmd("format", Format, "format hosts")
         self.add_cmd("clean", Clean, "umount fs, etc")
         self.add_cmd("deploy", Deploy, "deploy release to cluster", has_arg=True)
+        self.add_cmd("list-hosts", ReturnHosts, "return list of hosts")
+        self.add_cmd("deploy-path", ReturnDeployPath, "return deploy path")
 
         # general options
         self.parser.add_argument("-c", "--config", type=str, help="Yugabyte Cluster Config")
@@ -546,7 +348,7 @@ class Main(object):
         self.parser.add_argument("--sudo-user", type=str, help="pssh sudo username", default="root")
         self.parser.add_argument("--fail-on-error", action="store_true", help="Abort if any subcommand failed")
         self.parser.add_argument("--dry-run", action="store_true", help="Don't execute commands")
-        self.parser.add_argument("--per-disk-instance", action="store_true", help="Run per disk yugabyte instances")
+        self.parser.add_argument("--per-disk-instance", action="store_true", help="Run per disk Yugabyte instances")
         self.args = self.parser.parse_args()
 
     def run(self):

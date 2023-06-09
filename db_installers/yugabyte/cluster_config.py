@@ -1,4 +1,7 @@
-# Config for cocroachDB on ydb-dev-vla04 cluster
+# Config sample for YugabyteDB cluster with 3 nodes
+
+DEPLOY_PATH = "/benchmark/yugabyte"
+DEPLOY_TMP_PATH = "/var/tmp"
 
 KIND_NVME = 0
 KIND_SSD = 1
@@ -27,6 +30,5 @@ Disks = [
 Kind = KIND_NVME
 
 Cores = 128
-
-Cache="20GB"
-SqlMemory="30GB"
+Cache = "20GB"
+SqlMemory = "30GB"

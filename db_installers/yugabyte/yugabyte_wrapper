@@ -1,8 +1,15 @@
 #!/bin/bash
 
 dt=`date +%Y-%m-%d-%s`
-args=$@
-log_file="/place/berkanavt/yugabyte/logs/start.${dt}"
+
+DEPLOY_PATH=$(dirname $0)
+
+if [[ ! -d DEPLOY_PATH ]]; then
+  echo "ERROR: $DEPLOY_PATH is not a directory."
+  exit 1
+fi
+
+log_file="$DEPLOY_PATH/logs/start.${dt}"
 
 ulimit -n 1048576
 
