@@ -1,5 +1,7 @@
-# Config sample for CocroachDB cluster with 3 nodes
+# Config sample for CockroachDB cluster with 3 nodes
 
+DEPLOY_PATH = "/benchmark/cockroach"
+DEPLOY_TMP_PATH = "/var/tmp"
 
 KIND_NVME = 0
 KIND_SSD = 1
