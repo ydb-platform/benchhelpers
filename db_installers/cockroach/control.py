@@ -1,22 +1,22 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: UTF-8 -*-
 
 import argparse
-import datetime
 import logging
 import os
 import pipes
 import sys
 
-from db_installers.pylib.common import ErrorExit, SSHAction, PSSHAction, BaseAction
+if __package__:
+    from ..pylib.common import ErrorExit, SSHAction, PSSHAction, BaseAction, Nodes
+else:
+    sys.path.append(os.path.dirname(__file__) + '/..')
+    from pylib.common import ErrorExit, SSHAction, PSSHAction, BaseAction, Nodes
 
 
 HTTP_PORT = 8080
-LISTEN_PORT = 26257
-HA_PROXY_PORT = LISTEN_PORT
 
 logger = logging.getLogger(__name__)
-Nodes = []
 
 
 def disk2mnt(disk):
@@ -80,6 +80,7 @@ class Start(PSSHAction):
         self._logger.info("Start on " + host + ", addr " + listen_addr)
         join_nodes_str = ",".join(join_nodes)
         cmd = "sudo -u {user} sh -c \""
+        self._logger.info(task_set)
         if task_set:
             cmd += "taskset -c " + task_set + " "
         cmd += DEPLOY_PATH + "/cockroach_wrapper start --insecure --listen-addr={listen_addr} --http-addr={http_addr} --join={join} --locality=region={region} "
@@ -114,19 +115,22 @@ class Start(PSSHAction):
     def run_per_disk(self):
         join_nodes = self.get_join_nodes()
 
-        cores_per_instance = Cores / len(Disks)
-        cache_per_instance = CacheSizeGB / len(Disks)
-        sql_mem_per_instance = SqlMemorySizeGB / len(Disks)
+        cores_per_instance = Cores // len(Disks)
+        cache_per_instance = CacheSizeGB // len(Disks)
+        sql_mem_per_instance = SqlMemorySizeGB // len(Disks)
         for region in Regions:
             for host in region.Nodes:
                 port = LISTEN_PORT
                 http_port = HTTP_PORT
                 start_core = 0
+                sql_mem_reminder = SqlMemorySizeGB % len(Disks)
+                cache_reminder = CacheSizeGB % len(Disks)
+                cores_reminder = Cores % len(Disks)
                 for d in Disks:
                     store_args = "--store " + disk2mnt(d) + " "
                     listen_host = ":" + str(port)
                     http_listen = "localhost:" + str(http_port)
-                    end_core = start_core + cores_per_instance - 1
+                    end_core = start_core + cores_per_instance - 1 + (cores_reminder > 0)
                     task_set = str(start_core) + "-" + str(end_core)
                     self.start_instance(
                         host,
@@ -136,11 +140,14 @@ class Start(PSSHAction):
                         join_nodes,
                         task_set,
                         region.Name,
-                        cache_per_instance,
-                        sql_mem_per_instance)
+                        cache_per_instance + (cache_reminder > 0),
+                        sql_mem_per_instance + (sql_mem_reminder > 0))
                     port += 1
                     http_port += 1
-                    start_core += cores_per_instance
+                    start_core = end_core + 1
+                    cores_reminder -= (cores_reminder > 0)
+                    cache_reminder -= (cache_reminder > 0)
+                    sql_mem_reminder -= (sql_mem_reminder > 0)
 
     def run(self):
         super().run()
@@ -177,9 +184,9 @@ class Stop(PSSHAction):
     def run(self):
         super().run()
         self._logger.info("Stop")
-        cmd = "sudo -u {user} sh -c \"pkill cockroach; pkill haproxy; sleep 1;"
-        cmd += "pkill -9 cockroach; pkill -9 haproxy\""
-        self.pssh_run(cmd.format(user=self.sudo_user))
+        cmd = "sudo -u {user} sh -c 'pkill cockroach; pkill haproxy; sleep 1;"
+        cmd += "pkill -9 cockroach; pkill -9 haproxy; echo \"DONE\"'"
+        self.pssh_run(cmd.format(user=self.sudo_user), add_hosts=HA_PROXY_NODES)
 
 
 class Clean(Stop):
@@ -211,7 +218,7 @@ class Format(PSSHAction):
         disk_cmd = "sudo -u {user} umount {mnt} 2>&1;"
         disk_cmd += "sudo -u {user} mkfs -t ext4 {disk} 2>&1;"
         disk_cmd += "sudo -u {user} mkdir -p {mnt};"
-        disk_cmd += "sudo -u {user} mount -o defaults,noatime,nodiratime,nobarrier {disk} {mnt}"
+        disk_cmd += "sudo -u {user} mount -o defaults,noatime,nodiratimed,nobarrier {disk} {mnt}"
 
         disk_cmds = []
         for disk in Disks:
@@ -234,13 +241,40 @@ class ReturnHosts(BaseAction):
         print(' '.join(list_hosts))
 
 
+class ReturnListenPort(BaseAction):
+
+    def __init__(self, args):
+        super().__init__(args)
+
+    def run(self):
+        print(LISTEN_PORT)
+
+
 class ReturnDeployPath(BaseAction):
 
     def __init__(self, args):
         super().__init__(args)
 
     def run(self):
-        print(f"{DEPLOY_PATH}")
+        print(DEPLOY_PATH)
+
+
+class ReturnHaProxyHosts(BaseAction):
+
+    def __init__(self, args):
+        super().__init__(args)
+
+    def run(self):
+        print(' '.join(HA_PROXY_NODES))
+
+
+class ReturnHaProxySetupPath(BaseAction):
+
+    def __init__(self, args):
+        super().__init__(args)
+
+    def run(self):
+        print(HA_PROXY_SETUP_PATH)
 
 
 # [ control.py -c cluster_config.py stop ]
@@ -279,6 +313,9 @@ class Main(object):
         self.add_cmd("init", Init, "init Cockroach cluster")
         self.add_cmd("deploy", Deploy, "deploy release to cluster", has_arg=True)
         self.add_cmd("list-hosts", ReturnHosts, "return list of hosts")
+        self.add_cmd("listen-port", ReturnListenPort, "return listen port")
+        self.add_cmd("ha-proxy-hosts", ReturnHaProxyHosts, "return list of ha-proxy hosts")
+        self.add_cmd("ha-proxy-setup-path", ReturnHaProxySetupPath, "return list of ha-proxy hosts")
         self.add_cmd("deploy-path", ReturnDeployPath, "return deploy path")
 
         # general options

@@ -4,9 +4,9 @@ usage() {
     echo "Usage: setup.sh --package <PATH_TO_YUGABYTE_PACKAGE>"
 }
 
-if ! command -v pssh &> /dev/null
+if ! command -v parallel-ssh &> /dev/null
 then
-    echo "`pssh` could not be found in your PATH. You can install it using the command: `pip install pssh`."
+    echo "'parallel-ssh' could not be found in your PATH. You can install it using the command: 'pip install parallel-ssh'."
     exit 1
 fi
 
@@ -33,21 +33,23 @@ if [[ ! -e "$YUGABYTE_CONFIG" ]]; then
 fi
 
 
-YUGABYTE_DEPLOY_PATH=$(./control.py -c $YUGABYTE_CONFIG --deploy-path)
-YUGABYTE_HOSTS=$(./control.py -c $YUGABYTE_CONFIG --list-hosts)
+PATH_TO_SCRIPT=$(dirname "$0")
+
+YUGABYTE_DEPLOY_PATH=$("$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --deploy-path)
+YUGABYTE_HOSTS=$("$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --list-hosts)
 
 if [[ ! -v YUGABYTE_HOSTS ]]; then
     echo "YUGABYTE_HOSTS is not set in config."
     exit 1
 fi
 
-pscp -H $YUGABYTE_HOSTS -p 30 "./yugabyte_wrapper" "$YUGABYTE_DEPLOY_PATH"
-pssh -H $YUGABYTE_HOSTS -p 30 "sudo rm -rf /place/berkanavt/yugabyte; sudo mkdir -p /place/berkanavt/yugabyte; sudo mv $YUGABYTE_DEPLOY_PATH/yugabyte_wrapper /place/berkanavt/yugabyte/"
+parallel-scp -H $YUGABYTE_HOSTS -p 30 "./yugabyte_wrapper" "$YUGABYTE_DEPLOY_PATH"
+parallel-ssh -H $YUGABYTE_HOSTS -p 30 "sudo rm -rf /place/berkanavt/yugabyte; sudo mkdir -p /place/berkanavt/yugabyte; sudo mv $YUGABYTE_DEPLOY_PATH/yugabyte_wrapper /place/berkanavt/yugabyte/"
 
 echo "Deploy yugabyte"
-./control.py -c $YUGABYTE_CONFIG --clean
-./control.py -c $YUGABYTE_CONFIG --format
-./control.py -c $YUGABYTE_CONFIG --deploy "$YUGABYTE_TAR"
-./control.py -c $YUGABYTE_CONFIG --start #--per-disk-instance
+"$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --clean
+"$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --format
+"$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --deploy "$YUGABYTE_TAR"
+"$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --start #--per-disk-instance
 sleep 10s
 

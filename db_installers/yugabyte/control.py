@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: UTF-8 -*-
 
 import argparse
@@ -8,7 +8,11 @@ import os
 import pipes
 import sys
 
-from db_installers.pylib.common import ErrorExit, SSHAction, PSSHAction, BaseAction
+if __package__:
+    from ..pylib.common import ErrorExit, SSHAction, PSSHAction, BaseAction, Nodes
+else:
+    sys.path.append(os.path.dirname(__file__) + '/..')
+    from pylib.common import ErrorExit, SSHAction, PSSHAction, BaseAction, Nodes
 
 
 HTTP_PORT = 8080
@@ -22,7 +26,6 @@ CQL_WEBSERVER_PORT = 12000
 PSQL_WEBSERVER_PORT = 13000
 
 logger = logging.getLogger(__name__)
-Nodes = []
 
 
 def disk2mnt(disk):
