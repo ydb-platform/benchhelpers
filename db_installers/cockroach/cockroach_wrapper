@@ -4,7 +4,7 @@ dt=`date +%Y-%m-%d-%s`
 
 DEPLOY_PATH=$(dirname $0)
 
-if [[ ! -d DEPLOY_PATH ]]; then
+if [[ ! -d $DEPLOY_PATH ]]; then
   echo "ERROR: $DEPLOY_PATH is not a directory."
   exit 1
 fi

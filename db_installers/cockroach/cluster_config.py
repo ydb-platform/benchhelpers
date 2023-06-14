@@ -6,6 +6,9 @@ DEPLOY_TMP_PATH = "/var/tmp"
 KIND_NVME = 0
 KIND_SSD = 1
 
+HA_PROXY_NODES = ["host4.com", "host5.com"]
+HA_PROXY_SETUP_PATH = "/benchmark/haproxy"
+
 
 class Region:
     def __init__(self, name, nodes):
@@ -18,6 +21,7 @@ Regions = [
     Region("us-west-2", ["host2.com", ]),
     Region("us-west-3", ["host3.com", ]),
 ]
+LISTEN_PORT = 26257
 
 Disks = [
     "/dev/nvme0n1p2",

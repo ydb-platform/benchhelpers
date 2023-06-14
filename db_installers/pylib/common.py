@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: UTF-8 -*-
 
 import logging
@@ -8,6 +8,7 @@ import time
 
 
 logger = logging.getLogger(__name__)
+Nodes = []
 
 
 def set_return_message(message):
@@ -169,18 +170,18 @@ class PSSHAction(BaseAction):
 
     def __init__(self, args):
         super().__init__(args)
-        self.pssh_hosts = list()
+        self.pssh_hosts = ""
         self.dry_run = args.dry_run
         self.hosts = args.hosts
         self.fail_on_error = args.fail_on_error
         self.username = args.username
         self.sudo_user = args.sudo_user
 
-    def pssh_cmd(self, cmd):
+    def pssh_cmd(self, cmd, add_hosts=None):
         pssh_cmd = list()
         if self.dry_run:
             pssh_cmd.append("echo")
-        pssh_cmd += ["pssh", "-p", "100", "--no-bastion", "--no-yubikey"] + cmd + self.pssh_hosts
+        pssh_cmd += ["parallel-ssh", "-p", "100", "-H", self._get_hosts(add_hosts)] + cmd
         job = Job(pssh_cmd, timeout=self.TIMEOUT)
         try:
             job.safe_run()
@@ -193,25 +194,20 @@ class PSSHAction(BaseAction):
 
     def _get_base_pssh_args(self):
         if self.username is not None:
-            return ["-u", self.username]
+            return ["-l", self.username]
         return []
 
-    def pssh_run(self, cmd, stream=False):
-        pssh_cmd = ["run"]
-        pssh_cmd += self._get_base_pssh_args()
+    def pssh_run(self, cmd, add_hosts=None):
+        pssh_cmd = self._get_base_pssh_args()
         pssh_cmd.append(cmd)
-        self.pssh_cmd(pssh_cmd)
+        self.pssh_cmd(pssh_cmd, add_hosts)
 
     def pssh_upload(self, src, dst_dir):
         pssh_cmd = list()
         if self.dry_run:
             pssh_cmd.append("echo")
 
-        hosts_with_dir = []
-        for host in self.pssh_hosts:
-            hosts_with_dir.append(host + ":" + dst_dir)
-
-        pssh_cmd += ["pssh", "scp", "-p", "100", "--no-bastion", "--no-yubikey", src] + hosts_with_dir
+        pssh_cmd += ["parallel-scp", "-p", "100", "-H", self._get_hosts(), src, dst_dir]
         job = Job(pssh_cmd, timeout=self.TIMEOUT)
         try:
             job.safe_run()
@@ -222,16 +218,26 @@ class PSSHAction(BaseAction):
         except Exception:
             raise ErrorExit()
 
-    def _select_hosts(self, config_nodes):
+    def _select_hosts(self):
         if self.hosts is not None:
             # overwrite Nodes
-            self.pssh_hosts.append(self.hosts)
+            self.pssh_hosts = self.hosts.split()
         else:
-            self.pssh_hosts = config_nodes
+            self.pssh_hosts = Nodes
 
         if len(self.pssh_hosts) == 0:
             self._logger.error("PSSH hosts list is empty. Need specify --config or/and --hosts")
             raise ErrorExit()
+
+    def _get_hosts(self, add_hosts=None):
+        hosts = self.pssh_hosts
+
+        if add_hosts:
+            if not isinstance(add_hosts, list):
+                raise ValueError(f"'{add_hosts}' is not list.")
+            hosts += add_hosts
+
+        return ' '.join(set(hosts))
 
     def run(self):
         self._select_hosts()
