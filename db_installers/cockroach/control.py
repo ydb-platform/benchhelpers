@@ -218,7 +218,7 @@ class Format(PSSHAction):
         disk_cmd = "sudo -u {user} umount {mnt} 2>&1;"
         disk_cmd += "sudo -u {user} mkfs -t ext4 {disk} 2>&1;"
         disk_cmd += "sudo -u {user} mkdir -p {mnt};"
-        disk_cmd += "sudo -u {user} mount -o defaults,noatime,nodiratimed,nobarrier {disk} {mnt}"
+        disk_cmd += "sudo -u {user} mount -o defaults,noatime,nodiratime,nobarrier {disk} {mnt}"
 
         disk_cmds = []
         for disk in Disks:
