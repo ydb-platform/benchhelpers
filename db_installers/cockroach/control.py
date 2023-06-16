@@ -129,7 +129,7 @@ class Start(PSSHAction):
                 for d in Disks:
                     store_args = "--store " + disk2mnt(d) + " "
                     listen_host = ":" + str(port)
-                    http_listen = "localhost:" + str(http_port)
+                    http_listen = ":" + str(http_port)
                     end_core = start_core + cores_per_instance - 1 + (cores_reminder > 0)
                     task_set = str(start_core) + "-" + str(end_core)
                     self.start_instance(
@@ -162,7 +162,7 @@ class Start(PSSHAction):
         join_nodes = self.get_join_nodes()
         for region in Regions:
             for host in region.Nodes:
-                http_listen = "localhost:" + str(HTTP_PORT)
+                http_listen = ":" + str(HTTP_PORT)
                 listen_host = ":" + str(LISTEN_PORT)
                 self.start_instance(
                     host,
