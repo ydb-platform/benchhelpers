@@ -1,0 +1,40 @@
+MAX_PARTS=1000
+MAX_PART_SIZE_MB=512
+
+DISTRIBUTIONS="zipfian"
+
+# set empty to skip loading data
+LOAD_DATA="a"
+
+WORKLOADS="a b c f"
+
+# these are special (unset to not run):
+# 1. run only with default distribution: d - latest, e - zipfian
+# 2. run only using single YCSB instance (because of inserts)
+# 3. D is executed after WORKLOADS without data load (or with data load if workloads empty),
+# E is executed with data load.
+RUN_WORKLOAD_D=1
+RUN_WORKLOAD_E=1
+
+# The load stops because either time limit reached
+# or because all operations are done
+MAX_EXECUTION_TIME_SECONDS=60
+
+OP_COUNT_TOTAL=1000000 # 1M
+
+# Note that this parameter is crucial (at least in Java YCSB impl):
+# impl uses keyspace of size RECORD_COUNT + OP_COUNT * insert_proportion * 2,
+# thus too big OP_COUNT and too small RECORD_COUNT will produce bad distribution
+OP_COUNT_E=100000 # 10K
+
+# note that each row is ~1 KiB
+RECORD_COUNT=1000000 # 1M
+
+KEY_ORDER="ordered"
+
+YCSB_THREADS=32
+YCSB_THREADS_DE=512
+LOAD_YCSB_THREADS=256
+
+# time between workloads
+SLEEP_TIME="1"
