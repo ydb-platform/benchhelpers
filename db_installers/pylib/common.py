@@ -181,7 +181,7 @@ class PSSHAction(BaseAction):
         pssh_cmd = list()
         if self.dry_run:
             pssh_cmd.append("echo")
-        pssh_cmd += ["parallel-ssh", "-p", "100", "-H", self._get_hosts(add_hosts)] + cmd
+        pssh_cmd += ["parallel-ssh", "-t", "0", "-p", "100", "-H", self._get_hosts(add_hosts)] + cmd
         job = Job(pssh_cmd, timeout=self.TIMEOUT)
         try:
             job.safe_run()
@@ -207,7 +207,7 @@ class PSSHAction(BaseAction):
         if self.dry_run:
             pssh_cmd.append("echo")
 
-        pssh_cmd += ["parallel-scp", "-p", "100", "-H", self._get_hosts(), src, dst_dir]
+        pssh_cmd += ["parallel-scp", "-t", "0", "-p", "100", "-H", self._get_hosts(), src, dst_dir]
         job = Job(pssh_cmd, timeout=self.TIMEOUT)
         try:
             job.safe_run()
@@ -230,7 +230,7 @@ class PSSHAction(BaseAction):
             raise ErrorExit()
 
     def _get_hosts(self, add_hosts=None):
-        hosts = self.pssh_hosts
+        hosts = self.pssh_hosts[:]
 
         if add_hosts:
             if not isinstance(add_hosts, list):

@@ -2,7 +2,8 @@
 # -*- coding: UTF-8 -*-
 
 import argparse
-import datetime
+
+
 import logging
 import os
 import pipes
@@ -14,16 +15,6 @@ else:
     sys.path.append(os.path.dirname(__file__) + '/..')
     from pylib.common import ErrorExit, SSHAction, PSSHAction, BaseAction, Nodes
 
-
-HTTP_PORT = 8080
-LISTEN_PORT_MASTER = 7100
-LISTEN_PORT_SERVER = 9100
-PSQL_PORT = 5433
-CQL_PORT = 9042
-REDIS_WEBSERVER_PORT = 11001
-WEBSERVER_PORT = 9000
-CQL_WEBSERVER_PORT = 12000
-PSQL_WEBSERVER_PORT = 13000
 
 logger = logging.getLogger(__name__)
 
@@ -68,20 +59,19 @@ class Start(PSSHAction):
         super().__init__(args)
         self.per_disk_instance = args.per_disk_instance
 
-    def start_master(self, host, store_args, listen_addr, http_addr, master_nodes):
+    def start_master(self, host, store_args, listen_addr, webserver_port, master_nodes):
         self._logger.info("Start master on " + host + ", addr " + listen_addr)
-        now = datetime.datetime.now()
         master_nodes_str = ",".join(master_nodes)
         cmd = "sudo -u {user} sh -c \""
         cmd += "{path}/yugabyte_wrapper {path}/bin/yb-master --rpc_bind_addresses={listen_addr} --master_addresses={master_nodes_str} "
-        cmd += " --db_block_cache_num_shard_bits=7 "
-        cmd += store_args
+        cmd += " --db_block_cache_num_shard_bits=7 --webserver_port {webserver_port}"
+        cmd += " " + store_args
         cmd += " \""
         cmd = cmd.format(
             path=DEPLOY_PATH,
             user=self.sudo_user,
+            webserver_port=webserver_port,
             listen_addr=listen_addr,
-            http_addr=http_addr,
             master_nodes_str=master_nodes_str)
         if self.dry_run:
             cmd = "echo '" + cmd + "'"
@@ -97,20 +87,19 @@ class Start(PSSHAction):
 
     def start_server(
             self,
-            host, store_args,
+            host,
+            store_args,
             listen_addr,
-            http_addr,
             master_nodes,
+            psql_port,
+            cql_port,
+            redis_webserver_port,
+            webserver_port,
+            cql_webserver_port,
+            psql_webserver_port,
             task_set=None,
-            memory_ratio=None,
-            psql_port=PSQL_PORT,
-            cql_port=CQL_PORT,
-            redis_webserver_port=REDIS_WEBSERVER_PORT,
-            webserver_port=WEBSERVER_PORT,
-            cql_webserver_port=CQL_WEBSERVER_PORT,
-            psql_webserver_port=PSQL_WEBSERVER_PORT):
+            memory_ratio=None):
         self._logger.info("Start server on " + host + ", addr " + listen_addr)
-        now = datetime.datetime.now()
         master_nodes_str = ",".join(master_nodes)
         cmd = "sudo -u {user} sh -c \""
         if task_set:
@@ -129,10 +118,9 @@ class Start(PSSHAction):
             path=DEPLOY_PATH,
             user=self.sudo_user,
             listen_addr=listen_addr,
-            http_addr=http_addr,
             master_nodes_str=master_nodes_str,
-            psql_addr=host + ":" + str(psql_port),
-            cql_addr=host + ":" + str(cql_port),
+            psql_addr=LOCAL_IP[host] + ":" + str(psql_port),
+            cql_addr=LOCAL_IP[host] + ":" + str(cql_port),
             redis_webserver_port=str(redis_webserver_port),
             webserver_port=str(webserver_port),
             cql_webserver_port=str(cql_webserver_port),
@@ -155,7 +143,7 @@ class Start(PSSHAction):
     def get_master_nodes_listen(self):
         join_nodes = []
         for host in self.get_master_nodes():
-            join_nodes.append(host + ":" + str(LISTEN_PORT_MASTER))
+            join_nodes.append(LOCAL_IP[host] + ":" + str(LISTEN_PORT_MASTER))
         return join_nodes
 
     def run(self):
@@ -167,52 +155,49 @@ class Start(PSSHAction):
 
         master_nodes = self.get_master_nodes_listen()
         for host in self.get_master_nodes():
-            http_listen = "localhost:" + str(HTTP_PORT)
-            listen_host = host + ":" + str(LISTEN_PORT_MASTER)
-            self.start_master(host, store_args, listen_host, http_listen, master_nodes)
+            listen_host = LOCAL_IP[host] + ":" + str(LISTEN_PORT_MASTER)
+            self.start_master(host, store_args, listen_host, MASTER_WEBSERVER_PORT, master_nodes)
 
         cores_per_instance = Cores
-        memory_ratio_per_instance = 85 # default in yugabyte is 85% for tserver
+        memory_ratio_per_instance = 85  # default in yugabyte is 85% for tserver
         if self.per_disk_instance:
-            memory_ratio_per_instance = int(85 / len(Disks))
-            cores_per_instance = Cores / len(Disks)
+            memory_ratio_per_instance = int(85 // len(Disks))
+            cores_per_instance = Cores // len(Disks)
 
         for host in Nodes:
             if self.per_disk_instance:
                 start_core = 0
-                current_http_port = HTTP_PORT + 1
                 current_server_port = LISTEN_PORT_SERVER
                 current_psql_port = PSQL_PORT
                 current_cql_port = CQL_PORT
                 current_redis_webserver_port = REDIS_WEBSERVER_PORT
-                current_webserver_port = WEBSERVER_PORT
+                current_webserver_port = SERVER_WEBSERVER_PORT
                 current_cql_webserver_port = CQL_WEBSERVER_PORT
                 current_psql_webserver_port = PSQL_WEBSERVER_PORT
+                memory_ratio_reminder = 85 % len(Disks)
+                cores_reminder = Cores % len(Disks)
 
                 for dir in mount_dirs:
-                    http_listen = "localhost:" + str(current_http_port)
-                    listen_host = host + ":" + str(current_server_port)
+                    listen_host = LOCAL_IP[host] + ":" + str(current_server_port)
                     store_args = "--fs_data_dirs=" + dir
 
-                    end_core = start_core + cores_per_instance - 1
+                    end_core = start_core + cores_per_instance - 1 + (cores_reminder > 0)
                     task_set = str(start_core) + "-" + str(end_core)
 
                     self.start_server(
                         host,
                         store_args,
                         listen_host,
-                        http_listen,
                         master_nodes,
-                        task_set,
-                        memory_ratio=memory_ratio_per_instance,
                         psql_port=current_psql_port,
                         cql_port=current_cql_port,
                         redis_webserver_port=current_redis_webserver_port,
                         webserver_port=current_webserver_port,
                         cql_webserver_port=current_cql_webserver_port,
-                        psql_webserver_port=current_psql_webserver_port)
+                        psql_webserver_port=current_psql_webserver_port,
+                        task_set=task_set,
+                        memory_ratio=memory_ratio_per_instance + (memory_ratio_reminder > 0))
 
-                    current_http_port += 1
                     current_server_port += 1
                     current_psql_port += 1
                     current_cql_port += 1
@@ -220,16 +205,22 @@ class Start(PSSHAction):
                     current_webserver_port += 1
                     current_cql_webserver_port += 1
                     current_psql_webserver_port += 1
-                    start_core += cores_per_instance
+                    start_core = end_core + 1
+                    memory_ratio_reminder -= (memory_ratio_reminder > 0)
+                    cores_reminder -= (cores_reminder > 0)
             else:
-                http_listen = "localhost:" + str(HTTP_PORT + 1)
-                listen_host = host + ":" + str(LISTEN_PORT_SERVER)
+                listen_host = LOCAL_IP[host] + ":" + str(LISTEN_PORT_SERVER)
                 self.start_server(
                     host,
                     store_args,
                     listen_host,
-                    http_listen,
                     master_nodes,
+                    psql_port=PSQL_PORT,
+                    cql_port=CQL_PORT,
+                    redis_webserver_port=REDIS_WEBSERVER_PORT,
+                    webserver_port=SERVER_WEBSERVER_PORT,
+                    cql_webserver_port=CQL_WEBSERVER_PORT,
+                    psql_webserver_port=PSQL_WEBSERVER_PORT,
                     memory_ratio=memory_ratio_per_instance)
 
 
@@ -241,12 +232,13 @@ class Stop(PSSHAction):
     def run(self):
         super().run()
         self._logger.info("Stop")
-        cmd = "sudo -u {user} sh -c \"pkill yb-master; pkill yb-tserver; pkill haproxy; sleep 5;"
-        cmd += " pkill -9 yb-master; pkill -9 yb-tserver; pkill -9 haproxy\""
+        cmd = "sudo -u {user} sh -c 'pkill yb-master; pkill yb-tserver; pkill haproxy; sleep 5;"
+        cmd += " pkill -9 yb-master; pkill -9 yb-tserver; pkill -9 haproxy; echo \"DONE\"'"
         self.pssh_run(cmd.format(user=self.sudo_user))
 
 
 class Clean(Stop):
+
     def __init__(self, args):
         super().__init__(args)
 
@@ -373,7 +365,7 @@ class Main(object):
                 self._logger.error("Can't open packge: " + self.args.deploy)
                 return -1
 
-        for cmd_name, cmd_cls in self.cmds.iteritems():
+        for cmd_name, cmd_cls in self.cmds.items():
             if cmd_name in vars(self.args) and vars(self.args)[cmd_name]:
                 try:
                     action = cmd_cls(self.args)
