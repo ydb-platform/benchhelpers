@@ -113,9 +113,9 @@ class Start(PSSHAction):
     def run_per_disk(self):
         join_nodes = self.get_join_nodes()
 
-        cores_per_instance = Cores // len(Disks)
-        cache_per_instance = CacheSizeGB // len(Disks)
-        sql_mem_per_instance = SqlMemorySizeGB // len(Disks)
+        cores_per_instance = max(1, Cores // len(Disks))
+        cache_per_instance = max(1, CacheSizeGB // len(Disks))
+        sql_mem_per_instance = max(1, SqlMemorySizeGB // len(Disks))
         for region in Regions:
             for host in region.Nodes:
                 port = LISTEN_PORT

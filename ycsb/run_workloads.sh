@@ -18,10 +18,11 @@ fi
 
 TYPE=ydb
 EXTRA_ARGS=
+LOG_DIR=logs
 
 while [[ $# -gt 0 ]]; do case $1 in
     -l|--log-dir)
-        log_dir=$2
+        LOG_DIR=$2
         shift;;
     --name)
         name=$2
@@ -59,17 +60,17 @@ for source in $@; do
     fi
 done
 
-if [ ! -d "$log_dir" ]; then
-  if [ -a "$log_dir" ]; then
-    echo "$log_dir is not a directory"
+if [ ! -d "$LOG_DIR" ]; then
+  if [ -a "$LOG_DIR" ]; then
+    echo "$LOG_DIR is not a directory"
     exit 1
   fi
-  mkdir -p "$log_dir"
-  echo "Directory $log_dir created"
+  mkdir -p "$LOG_DIR"
+  echo "Directory $LOG_DIR created"
 fi
 
 dt=`date +%Y%m%d_%H%M`
-log_path="$log_dir/${dt}_${name}"
+log_path="$LOG_DIR/${dt}_${name}"
 
 echo "Raw log file: ${log_path}"
 
