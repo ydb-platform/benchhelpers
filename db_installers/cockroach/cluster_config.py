@@ -21,7 +21,9 @@ Regions = [
     Region("us-west-2", ["host2.com", ]),
     Region("us-west-3", ["host3.com", ]),
 ]
+
 LISTEN_PORT = 26257
+HTTP_PORT = 8080
 
 Disks = [
     "/dev/nvme0n1p2",

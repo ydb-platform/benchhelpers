@@ -11,13 +11,13 @@ load_data() {
 
     if [ "$TYPE" = "yugabyte" ]; then
         log "Prepare YCSB keyspace"
-        log "$YU_PATH/bin/ycqlsh -f $YU_YCSB_PATH/yugabyte_cql.sql $TARGET"
-        $debug parallel-ssh -H "$TARGET" -p 1 "$YU_PATH/bin/ycqlsh -f $YU_YCSB_PATH/yugabyte_cql.sql $TARGET"
+        log "$YU_PATH/bin/ycqlsh -f $YU_PATH/yugabyte_cql.sql $TARGET"
+        $debug parallel-ssh -H "$TARGET" -p 1 "$YU_PATH/bin/ycqlsh -f $YU_PATH/yugabyte_cql.sql $TARGET"
     fi
 
     if [ "$TYPE" = "yugabyteSQL" ]; then
         log "Prepare YCSB table"
-        $debug parallel-ssh -H "$TARGET" -p 1 "$YU_PATH/bin/ysqlsh -f $YU_YCSB_PATH/yugabyte_sql.sql -h $TARGET"
+        $debug parallel-ssh -H "$TARGET" -p 1 "$YU_PATH/bin/ysqlsh -f $YU_PATH/yugabyte_sql.sql -h $TARGET"
     fi
 
     start_ts=`date +%s`
@@ -122,18 +122,27 @@ done
 PATH_TO_SCRIPT=$(dirname "$0")
 
 if [ "$TYPE" == "yugabyte" ]; then
+
+  if [ ! -n "$YU_DB_CONFIG" ]; then
+    echo "Missing path to db.properties. Please, declare a variable YU_DB_CONFIG."
+    exit 1
+  fi
+
+  if [ ! -n "$YU_YCSB_TAR_PATH" ] && [ ! -n "$YU_YCSB_PATH" ]; then
+    echo "Missing path to YCSB. Please, declare a variable YU_YCSB_PATH, or YU_YCSB_TAR_PATH for deploy."
+    exit 1
+  fi
+
   parallel-ssh -H "$YCSB_NODES" "sudo mkdir -p $YU_YCSB_DEPLOY_PATH;"
 
-  parallel-scp -H "$YCSB_NODES" "$PATH_TO_SCRIPT/sources/yugabyte/yugabyte_cql.sql" "~"
-  parallel-scp -H "$YCSB_NODES" "$PATH_TO_SCRIPT/sources/yugabyte/yugabyte_sql.sql" "~"
-  parallel-ssh -H "$YCSB_NODES" "sudo mv ~/yugabyte_cql.sql $YU_YCSB_DEPLOY_PATH; \
-                                 sudo mv ~/yugabyte_sql.sql $YU_YCSB_DEPLOY_PATH"
+  parallel-scp -H "$TARGET" "$PATH_TO_SCRIPT/sources/yugabyte/yugabyte_cql.sql" "~"
+  parallel-scp -H "$TARGET" "$PATH_TO_SCRIPT/sources/yugabyte/yugabyte_sql.sql" "~"
+  parallel-ssh -H "$TARGET" "sudo mv ~/yugabyte_cql.sql $YU_PATH; \
+                             sudo mv ~/yugabyte_sql.sql $YU_PATH"
 
-  if [ -n "$YU_DB_CONFIG" ]; then
-    db_config_name=$(basename "$YU_DB_CONFIG")
-    parallel-scp -H "$YCSB_NODES" "$YU_DB_CONFIG" "~"
-    parallel-ssh -H "$YCSB_NODES" "sudo mv ~/$db_config_name $YU_YCSB_DEPLOY_PATH/db.properties"
-  fi
+  db_config_name=$(basename "$YU_DB_CONFIG")
+  parallel-scp -H "$YCSB_NODES" "$YU_DB_CONFIG" "~"
+  parallel-ssh -H "$YCSB_NODES" "sudo mv ~/$db_config_name $YU_YCSB_DEPLOY_PATH/db.properties"
 
   if [ -n "$YU_YCSB_TAR_PATH" ]; then
     tar_name=$(basename "$YU_YCSB_TAR_PATH")
