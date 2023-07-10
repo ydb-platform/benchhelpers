@@ -25,7 +25,7 @@ def format_number(num, decimal_places=1):
 workload_p = re.compile(".*: ([a-zA-Z]+) workload (.) from ([1-9]+) ycsb instances started on ([0-9]+)$")
 workload_done_p = re.compile(".*: done$")
 
-host_p = re.compile(r"\[\d\] \d\d:\d\d:\d\d \[SUCCESS\] (?P<host>.*)")
+host_p = re.compile(r"\[\d+\] \d\d:\d\d:\d\d \[SUCCESS\] (?P<host>.*)")
 
 
 # YCSB result: either of one instance (host) or total (aggregated from all hosts)

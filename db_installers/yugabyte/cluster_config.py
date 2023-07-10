@@ -19,6 +19,18 @@ Regions = [
     Region("us-west-1", ["host2.com", ]),
     Region("us-west-1", ["host3.com", ]),
 ]
+LOCAL_IP = {'host1.com': 'localhost1', 'host2.com': 'localhost2', 'host3.com': 'localhost3'}
+
+# More information can be found here https://docs.yugabyte.com/preview/reference/configuration/default-ports/
+LISTEN_PORT_MASTER = 7100
+LISTEN_PORT_SERVER = 9100
+PSQL_PORT = 5433
+CQL_PORT = 9042
+REDIS_WEBSERVER_PORT = 11001
+MASTER_WEBSERVER_PORT = 7000
+SERVER_WEBSERVER_PORT = 9000
+CQL_WEBSERVER_PORT = 12000
+PSQL_WEBSERVER_PORT = 13000
 
 Disks = [
     "/dev/nvme0n1p2",

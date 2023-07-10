@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -e
+
 usage() {
     echo "Usage: setup.sh --package <PATH_TO_YUGABYTE_PACKAGE>"
 }
@@ -43,8 +45,8 @@ if [[ ! -v YUGABYTE_HOSTS ]]; then
     exit 1
 fi
 
-parallel-scp -H $YUGABYTE_HOSTS -p 30 "./yugabyte_wrapper" "$YUGABYTE_DEPLOY_PATH"
-parallel-ssh -H $YUGABYTE_HOSTS -p 30 "sudo rm -rf /place/berkanavt/yugabyte; sudo mkdir -p /place/berkanavt/yugabyte; sudo mv $YUGABYTE_DEPLOY_PATH/yugabyte_wrapper /place/berkanavt/yugabyte/"
+parallel-scp -H "$YUGABYTE_HOSTS" -p 30 "$PATH_TO_SCRIPT/yugabyte_wrapper" "~"
+parallel-ssh -H "$YUGABYTE_HOSTS" -p 30 "sudo rm -rf $YUGABYTE_DEPLOY_PATH; sudo mkdir -p $YUGABYTE_DEPLOY_PATH; sudo mv ~/yugabyte_wrapper $YUGABYTE_DEPLOY_PATH"
 
 echo "Deploy yugabyte"
 "$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --clean
@@ -52,4 +54,3 @@ echo "Deploy yugabyte"
 "$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --deploy "$YUGABYTE_TAR"
 "$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --start #--per-disk-instance
 sleep 10s
-

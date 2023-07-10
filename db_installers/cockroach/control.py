@@ -14,8 +14,6 @@ else:
     from pylib.common import ErrorExit, SSHAction, PSSHAction, BaseAction, Nodes
 
 
-HTTP_PORT = 8080
-
 logger = logging.getLogger(__name__)
 
 
@@ -190,6 +188,7 @@ class Stop(PSSHAction):
 
 
 class Clean(Stop):
+
     def __init__(self, args):
         super().__init__(args)
 

@@ -11,12 +11,13 @@ load_data() {
 
     if [ "$TYPE" = "yugabyte" ]; then
         log "Prepare YCSB keyspace"
-        $debug parallel-ssh -H "$TARGET" -p 1  "/place/berkanavt/yugabyte/bin/ycqlsh -f yugabyte_cql.sql $TARGET"
+        log "$YU_PATH/bin/ycqlsh -f $YU_YCSB_PATH/yugabyte_cql.sql $TARGET"
+        $debug parallel-ssh -H "$TARGET" -p 1 "$YU_PATH/bin/ycqlsh -f $YU_YCSB_PATH/yugabyte_cql.sql $TARGET"
     fi
 
     if [ "$TYPE" = "yugabyteSQL" ]; then
         log "Prepare YCSB table"
-        $debug parallel-ssh -H "$TARGET" -p 1  "/place/berkanavt/yugabyte/bin/ysqlsh -f yugabyte_sql.sql -h $TARGET"
+        $debug parallel-ssh -H "$TARGET" -p 1 "$YU_PATH/bin/ysqlsh -f $YU_YCSB_PATH/yugabyte_sql.sql -h $TARGET"
     fi
 
     start_ts=`date +%s`
@@ -82,7 +83,7 @@ fi
 
 TYPE=ydb
 
-while [[ "$#" > 0 ]]; do case $1 in
+while [[ $# -gt 0 ]]; do case $1 in
     --type)
         TYPE=$2
         shift;;
@@ -117,6 +118,47 @@ for source in $source_files; do
     log "Source $source"
     . "$source"
 done
+
+PATH_TO_SCRIPT=$(dirname "$0")
+
+if [ "$TYPE" == "yugabyte" ]; then
+  parallel-ssh -H "$YCSB_NODES" "sudo mkdir -p $YU_YCSB_DEPLOY_PATH;"
+
+  parallel-scp -H "$YCSB_NODES" "$PATH_TO_SCRIPT/sources/yugabyte/yugabyte_cql.sql" "~"
+  parallel-scp -H "$YCSB_NODES" "$PATH_TO_SCRIPT/sources/yugabyte/yugabyte_sql.sql" "~"
+  parallel-ssh -H "$YCSB_NODES" "sudo mv ~/yugabyte_cql.sql $YU_YCSB_DEPLOY_PATH; \
+                                 sudo mv ~/yugabyte_sql.sql $YU_YCSB_DEPLOY_PATH"
+
+  if [ -n "$YU_DB_CONFIG" ]; then
+    db_config_name=$(basename "$YU_DB_CONFIG")
+    parallel-scp -H "$YCSB_NODES" "$YU_DB_CONFIG" "~"
+    parallel-ssh -H "$YCSB_NODES" "sudo mv ~/$db_config_name $YU_YCSB_DEPLOY_PATH/db.properties"
+  fi
+
+  if [ -n "$YU_YCSB_TAR_PATH" ]; then
+    tar_name=$(basename "$YU_YCSB_TAR_PATH")
+    parallel-scp -H "$YCSB_NODES" "$YU_YCSB_TAR_PATH" "~"
+    log "sudo tar -xzvf $YU_YCSB_DEPLOY_PATH/$tar_name -C $YU_YCSB_DEPLOY_PATH"
+    parallel-ssh -H "$YCSB_NODES" "sudo mv ~/$tar_name $YU_YCSB_DEPLOY_PATH; \
+                                   sudo tar -xzf $YU_YCSB_DEPLOY_PATH/$tar_name --strip-components=1 -C $YU_YCSB_DEPLOY_PATH; \
+                                   sudo rm -f $YU_YCSB_DEPLOY_PATH/$tar_name"
+    YU_YCSB_PATH=$YU_YCSB_DEPLOY_PATH
+  fi
+fi
+
+
+if [ "$TYPE" == "ydb" ]; then
+  if [ -n "$YCSB_TAR_PATH" ]; then
+    parallel-ssh -H "$YCSB_NODES" "sudo mkdir -p $YCSB_DEPLOY_PATH"
+    tar_name=$(basename "$YCSB_TAR_PATH")
+    parallel-scp -H "$YCSB_NODES" "$YCSB_TAR_PATH" "~"
+    log "sudo tar -xzvf $YCSB_DEPLOY_PATH/$tar_name -C $YCSB_DEPLOY_PATH"
+    parallel-ssh -H "$YCSB_NODES" "sudo mv ~/$tar_name $YCSB_DEPLOY_PATH; \
+                                   sudo tar -xzf $YCSB_DEPLOY_PATH/$tar_name --strip-components=1 -C $YCSB_DEPLOY_PATH; \
+                                   sudo rm -f $YCSB_DEPLOY_PATH/$tar_name"
+    YCSB_PATH=$YCSB_DEPLOY_PATH
+  fi
+fi
 
 if [ -n "$THREADS" ]; then
     YCSB_THREADS=$THREADS
@@ -169,13 +211,13 @@ fi
 if [ "$TYPE" = "ydb" ]; then
     # note that we should use ycsb.sh, because it will source user's profile/bashrc
     # which possibly contain Java setup
-    cmd_init_template='YDB_ANONYMOUS_CREDENTIALS=1 $YCSB_PATH/bin/ycsb.sh load ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://$TARGET:2135${TEST_DB} -p dropOnInit=true -p splitByLoad=true -p recordcount=$RECORD_COUNT -p import=true -p insertorder=$KEY_ORDER -p maxparts=$MAX_PARTS -p maxpartsizeMB=$MAX_PART_SIZE_MB'
-    cmd_run_template='YDB_ANONYMOUS_CREDENTIALS=1 $YCSB_PATH/bin/ycsb.sh run ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:2135${TEST_DB} -threads $threads -p insertorder=$KEY_ORDER -p recordcount=$RECORD_COUNT -p operationcount=$OP_COUNT -p requestdistribution=$distribution -p maxexecutiontime=$MAX_EXECUTION_TIME_SECONDS'
+    cmd_init_template='YDB_ANONYMOUS_CREDENTIALS=1 $YCSB_PATH/bin/ycsb.sh load ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:${STATIC_NODE_GRPC_PORT}${TEST_DB} -p dropOnInit=true -p splitByLoad=true -p recordcount=$RECORD_COUNT -p import=true -p insertorder=$KEY_ORDER -p maxparts=$MAX_PARTS -p maxpartsizeMB=$MAX_PART_SIZE_MB'
+    cmd_run_template='YDB_ANONYMOUS_CREDENTIALS=1 $YCSB_PATH/bin/ycsb.sh run ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:${STATIC_NODE_GRPC_PORT}${TEST_DB} -threads $threads -p insertorder=$KEY_ORDER -p recordcount=$RECORD_COUNT -p operationcount=$OP_COUNT -p requestdistribution=$distribution -p maxexecutiontime=$MAX_EXECUTION_TIME_SECONDS'
 elif [ "$TYPE" = "ydbu" ]; then
     # note that we should use ycsb.sh, because it will source user's profile/bashrc
     # which possibly contain Java setup
-    cmd_init_template='YDB_ANONYMOUS_CREDENTIALS=1 $YCSB_PATH/bin/ycsb.sh load ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://$TARGET:2135${TEST_DB} -p dropOnInit=true -p splitByLoad=true -p recordcount=$RECORD_COUNT -p import=true -p insertorder=$KEY_ORDER -p maxparts=$MAX_PARTS -p maxpartsizeMB=$MAX_PART_SIZE_MB'
-    cmd_run_template='YDB_ANONYMOUS_CREDENTIALS=1 $YCSB_PATH/bin/ycsb.sh run ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:2135${TEST_DB} -threads $threads -p insertorder=$KEY_ORDER -p recordcount=$RECORD_COUNT -p operationcount=$OP_COUNT -p requestdistribution=$distribution -p maxexecutiontime=$MAX_EXECUTION_TIME_SECONDS -p forceUpdate=true'
+    cmd_init_template='YDB_ANONYMOUS_CREDENTIALS=1 $YCSB_PATH/bin/ycsb.sh load ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:${STATIC_NODE_GRPC_PORT}${TEST_DB} -p dropOnInit=true -p splitByLoad=true -p recordcount=$RECORD_COUNT -p import=true -p insertorder=$KEY_ORDER -p maxparts=$MAX_PARTS -p maxpartsizeMB=$MAX_PART_SIZE_MB'
+    cmd_run_template='YDB_ANONYMOUS_CREDENTIALS=1 $YCSB_PATH/bin/ycsb.sh run ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:${STATIC_NODE_GRPC_PORT}${TEST_DB} -threads $threads -p insertorder=$KEY_ORDER -p recordcount=$RECORD_COUNT -p operationcount=$OP_COUNT -p requestdistribution=$distribution -p maxexecutiontime=$MAX_EXECUTION_TIME_SECONDS -p forceUpdate=true'
 elif [ "$TYPE" = "cockroach" ]; then
     cmd_init_template='$COCKROACH workload init ycsb --data-loader=IMPORT --drop --insert-count $RECORD_COUNT --insert-hash=$INSERT_HASH "postgresql://root@$HA_PROXY_NODE:26257?sslmode=disable" --concurrency $LOAD_YCSB_THREADS --workload $what'
     cmd_run_template='sh -c \"2\>\&1 $COCKROACH workload run ycsb --workload $what --request-distribution $distribution --insert-count $RECORD_COUNT --max-ops $OP_COUNT --insert-hash=$INSERT_HASH --display-every 10001s "postgresql://root@$HA_PROXY_NODE:26257?sslmode=disable" --concurrency $threads --duration ${MAX_EXECUTION_TIME_SECONDS}s \"'
@@ -183,8 +225,8 @@ elif [ "$TYPE" = "yugabyte" ]; then
     cmd_init_template='$YU_YCSB_PATH/bin/ycsb.sh load yugabyteCQL -P $YU_YCSB_PATH/db.properties -P $YU_YCSB_PATH/workloads/workload${what} -p recordcount=$RECORD_COUNT -p insertorder=$KEY_ORDER -p threadcount=$LOAD_YCSB_THREADS'
     cmd_run_template='$YU_YCSB_PATH/bin/ycsb.sh run yugabyteCQL -P $YU_YCSB_PATH/db.properties -P $YU_YCSB_PATH/workloads/workload${what} -p threadcount=$threads -p insertorder=$KEY_ORDER -p recordcount=$RECORD_COUNT -p operationcount=$OP_COUNT -p requestdistribution=$distribution -p maxexecutiontime=$MAX_EXECUTION_TIME_SECONDS'
 elif [ "$TYPE" = "yugabyteSQL" ]; then
-    cmd_init_template='$YU_SQL_YCSB_PATH/bin/ycsb.sh load yugabyteSQL -P $YU_SQL_YCSB_PATH/db.properties -P $YU_SQL_YCSB_PATH/workloads/workload${what} -p recordcount=$RECORD_COUNT -p insertorder=$KEY_ORDER -p threadcount=$LOAD_YCSB_THREADS'
-    cmd_run_template='$YU_SQL_YCSB_PATH/bin/ycsb.sh run yugabyteSQL -P $YU_SQL_YCSB_PATH/db.properties -P $YU_SQL_YCSB_PATH/workloads/workload${what} -p threadcount=$threads -p insertorder=$KEY_ORDER -p recordcount=$RECORD_COUNT -p operationcount=$OP_COUNT -p requestdistribution=$distribution -p maxexecutiontime=$MAX_EXECUTION_TIME_SECONDS'
+    cmd_init_template='$YU_YCSB_PATH/bin/ycsb.sh load yugabyteSQL -P $YU_YCSB_PATH/db.properties -P $YU_YCSB_PATH/workloads/workload${what} -p recordcount=$RECORD_COUNT -p insertorder=$KEY_ORDER -p threadcount=$LOAD_YCSB_THREADS'
+    cmd_run_template='$YU_YCSB_PATH/bin/ycsb.sh run yugabyteSQL -P $YU_YCSB_PATH/db.properties -P $YU_YCSB_PATH/workloads/workload${what} -p threadcount=$threads -p insertorder=$KEY_ORDER -p recordcount=$RECORD_COUNT -p operationcount=$OP_COUNT -p requestdistribution=$distribution -p maxexecutiontime=$MAX_EXECUTION_TIME_SECONDS'
 elif [ "$TYPE" = "postgresql" ]; then
     cmd_init_template='$GO_YCSB_PATH/bin/go-ycsb load postgresql -p pg.host=$PG_HOST -p pg.port=$PG_PORT -p pg.user=$PG_USER -p pg.password=$PG_PASSWORD -p pg.db=$PG_DB -p pg.sslmode=verify-full -P $GO_YCSB_PATH/workloads/workload${what} -p recordcount=$RECORD_COUNT -p insertorder=$KEY_ORDER -p threadcount=$LOAD_YCSB_THREADS -p dropdata=true --interval 600'
     cmd_run_template='$GO_YCSB_PATH/bin/go-ycsb run postgresql -p pg.host=$PG_HOST -p pg.port=$PG_PORT -p pg.user=$PG_USER -p pg.password=$PG_PASSWORD -p pg.db=$PG_DB -p pg.sslmode=verify-full -P $GO_YCSB_PATH/workloads/workload${what} --threads $threads -p insertorder=$KEY_ORDER -p recordcount=$RECORD_COUNT -p operationcount=$OP_COUNT -p requestdistribution=$distribution --interval 600 -p maxexecutiontime=$MAX_EXECUTION_TIME_SECONDS'
