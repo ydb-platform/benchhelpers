@@ -11,15 +11,6 @@ logger = logging.getLogger(__name__)
 Nodes = []
 
 
-def set_return_message(message):
-    def decorator(obj):
-        def wrapper(*args, **kwargs):
-            obj.return_message = message
-            return obj(*args, **kwargs)
-        return wrapper
-    return decorator
-
-
 class ErrorExit(Exception):
     pass
 

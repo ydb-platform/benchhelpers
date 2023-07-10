@@ -13,4 +13,4 @@ log_file="$DEPLOY_PATH/logs/start.${dt}"
 
 
 ulimit -n 500000
-nohup $DEPLOY_PATH/cockroach $@ --background &>$log_file </dev/null
+nohup "$DEPLOY_PATH"/cockroach $@ --background &>$log_file </dev/null

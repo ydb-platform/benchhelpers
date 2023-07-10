@@ -6,18 +6,31 @@ log() {
     echo "`date`: $@"
 }
 
+unzip_tar() {
+  deploy_path=$1
+  tar_path=$2
+  hosts=$3
+  parallel-ssh -t 0 -H "$hosts" "sudo mkdir -p $deploy_path"
+  tar_name=$(basename "$tar_path")
+  parallel-scp -H "$hosts" "$tar_path" "~"
+  log "sudo tar -xzf $deploy_path/$tar_name -C $deploy_path"
+  parallel-ssh -t 0 -H "$hosts" "sudo mv ~/$tar_name $deploy_path; \
+                                 sudo tar -xzf $deploy_path/$tar_name --strip-components=1 -C $deploy_path; \
+                                 sudo rm -f $deploy_path/$tar_name"
+}
+
 load_data() {
     what=$1
 
     if [ "$TYPE" = "yugabyte" ]; then
         log "Prepare YCSB keyspace"
         log "$YU_PATH/bin/ycqlsh -f $YU_PATH/yugabyte_cql.sql $TARGET"
-        $debug parallel-ssh -H "$TARGET" -p 1 "$YU_PATH/bin/ycqlsh -f $YU_PATH/yugabyte_cql.sql $TARGET"
+        $debug parallel-ssh -t 0 -H "$TARGET" -p 1 "$YU_PATH/bin/ycqlsh -f $YU_PATH/yugabyte_cql.sql $TARGET"
     fi
 
     if [ "$TYPE" = "yugabyteSQL" ]; then
         log "Prepare YCSB table"
-        $debug parallel-ssh -H "$TARGET" -p 1 "$YU_PATH/bin/ysqlsh -f $YU_PATH/yugabyte_sql.sql -h $TARGET"
+        $debug parallel-ssh -t 0 -H "$TARGET" -p 1 "$YU_PATH/bin/ysqlsh -f $YU_PATH/yugabyte_sql.sql -h $TARGET"
     fi
 
     start_ts=`date +%s`
@@ -37,7 +50,7 @@ load_data() {
         fi
 
         log "Setting MVCC"
-        $debug ssh $load_node "$COCKROACH sql --insecure --host $HA_PROXY_NODE --execute 'ALTER TABLE ycsb.usertable CONFIGURE ZONE USING gc.ttlseconds = 600;'"
+        $debug ssh $load_node "$COCKROACH/cockroach sql --insecure --host $HA_PROXY_NODE --execute 'ALTER TABLE ycsb.usertable CONFIGURE ZONE USING gc.ttlseconds = 600;'"
     fi
 
     log "Finished loading data"
@@ -121,53 +134,45 @@ done
 
 PATH_TO_SCRIPT=$(dirname "$0")
 
+if [ "$TYPE" == "ydb" ] && [ -z "$YCSB_PATH" ]; then
+  unzip_tar $YCSB_DEPLOY_PATH $YCSB_TAR_PATH $YCSB_NODES
+  YCSB_PATH=$YCSB_DEPLOY_PATH
+fi
+
+if [ "$TYPE" == "cockroach" ] && [ -z "$COCKROACH_PATH" ]; then
+  unzip_tar $COCKROACH_DEPLOY_PATH $COCKROACH_TAR_PATH $YCSB_NODES
+  COCKROACH=$COCKROACH_DEPLOY_PATH
+fi
+
 if [ "$TYPE" == "yugabyte" ]; then
 
-  if [ ! -n "$YU_DB_CONFIG" ]; then
+  if [ -z "$YU_DB_CONFIG" ]; then
     echo "Missing path to db.properties. Please, declare a variable YU_DB_CONFIG."
     exit 1
   fi
 
-  if [ ! -n "$YU_YCSB_TAR_PATH" ] && [ ! -n "$YU_YCSB_PATH" ]; then
+  if [ -z "$YU_YCSB_TAR_PATH" ] && [ -z "$YU_YCSB_PATH" ]; then
     echo "Missing path to YCSB. Please, declare a variable YU_YCSB_PATH, or YU_YCSB_TAR_PATH for deploy."
     exit 1
   fi
 
-  parallel-ssh -H "$YCSB_NODES" "sudo mkdir -p $YU_YCSB_DEPLOY_PATH;"
+  parallel-ssh -t 0 -H "$YCSB_NODES" "sudo mkdir -p $YU_YCSB_DEPLOY_PATH;"
 
   parallel-scp -H "$TARGET" "$PATH_TO_SCRIPT/sources/yugabyte/yugabyte_cql.sql" "~"
   parallel-scp -H "$TARGET" "$PATH_TO_SCRIPT/sources/yugabyte/yugabyte_sql.sql" "~"
-  parallel-ssh -H "$TARGET" "sudo mv ~/yugabyte_cql.sql $YU_PATH; \
+  parallel-ssh -t 0 -H "$TARGET" "sudo mv ~/yugabyte_cql.sql $YU_PATH; \
                              sudo mv ~/yugabyte_sql.sql $YU_PATH"
 
-  db_config_name=$(basename "$YU_DB_CONFIG")
+  YU_DB_CONFIG="$PATH_TO_SCRIPT/sources/yugabyte/db.properties"
   parallel-scp -H "$YCSB_NODES" "$YU_DB_CONFIG" "~"
-  parallel-ssh -H "$YCSB_NODES" "sudo mv ~/$db_config_name $YU_YCSB_DEPLOY_PATH/db.properties"
+  parallel-ssh -t 0 -H "$YCSB_NODES" "sudo mv ~/db.properties $YU_YCSB_DEPLOY_PATH/db.properties"
 
   if [ -n "$YU_YCSB_TAR_PATH" ]; then
-    tar_name=$(basename "$YU_YCSB_TAR_PATH")
-    parallel-scp -H "$YCSB_NODES" "$YU_YCSB_TAR_PATH" "~"
-    log "sudo tar -xzvf $YU_YCSB_DEPLOY_PATH/$tar_name -C $YU_YCSB_DEPLOY_PATH"
-    parallel-ssh -H "$YCSB_NODES" "sudo mv ~/$tar_name $YU_YCSB_DEPLOY_PATH; \
-                                   sudo tar -xzf $YU_YCSB_DEPLOY_PATH/$tar_name --strip-components=1 -C $YU_YCSB_DEPLOY_PATH; \
-                                   sudo rm -f $YU_YCSB_DEPLOY_PATH/$tar_name"
+    unzip_tar $YU_YCSB_DEPLOY_PATH $YU_YCSB_TAR_PATH $YCSB_NODES
     YU_YCSB_PATH=$YU_YCSB_DEPLOY_PATH
   fi
 fi
 
-
-if [ "$TYPE" == "ydb" ]; then
-  if [ -n "$YCSB_TAR_PATH" ]; then
-    parallel-ssh -H "$YCSB_NODES" "sudo mkdir -p $YCSB_DEPLOY_PATH"
-    tar_name=$(basename "$YCSB_TAR_PATH")
-    parallel-scp -H "$YCSB_NODES" "$YCSB_TAR_PATH" "~"
-    log "sudo tar -xzvf $YCSB_DEPLOY_PATH/$tar_name -C $YCSB_DEPLOY_PATH"
-    parallel-ssh -H "$YCSB_NODES" "sudo mv ~/$tar_name $YCSB_DEPLOY_PATH; \
-                                   sudo tar -xzf $YCSB_DEPLOY_PATH/$tar_name --strip-components=1 -C $YCSB_DEPLOY_PATH; \
-                                   sudo rm -f $YCSB_DEPLOY_PATH/$tar_name"
-    YCSB_PATH=$YCSB_DEPLOY_PATH
-  fi
-fi
 
 if [ -n "$THREADS" ]; then
     YCSB_THREADS=$THREADS
@@ -228,8 +233,8 @@ elif [ "$TYPE" = "ydbu" ]; then
     cmd_init_template='YDB_ANONYMOUS_CREDENTIALS=1 $YCSB_PATH/bin/ycsb.sh load ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:${STATIC_NODE_GRPC_PORT}${TEST_DB} -p dropOnInit=true -p splitByLoad=true -p recordcount=$RECORD_COUNT -p import=true -p insertorder=$KEY_ORDER -p maxparts=$MAX_PARTS -p maxpartsizeMB=$MAX_PART_SIZE_MB'
     cmd_run_template='YDB_ANONYMOUS_CREDENTIALS=1 $YCSB_PATH/bin/ycsb.sh run ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:${STATIC_NODE_GRPC_PORT}${TEST_DB} -threads $threads -p insertorder=$KEY_ORDER -p recordcount=$RECORD_COUNT -p operationcount=$OP_COUNT -p requestdistribution=$distribution -p maxexecutiontime=$MAX_EXECUTION_TIME_SECONDS -p forceUpdate=true'
 elif [ "$TYPE" = "cockroach" ]; then
-    cmd_init_template='$COCKROACH workload init ycsb --data-loader=IMPORT --drop --insert-count $RECORD_COUNT --insert-hash=$INSERT_HASH "postgresql://root@$HA_PROXY_NODE:26257?sslmode=disable" --concurrency $LOAD_YCSB_THREADS --workload $what'
-    cmd_run_template='sh -c \"2\>\&1 $COCKROACH workload run ycsb --workload $what --request-distribution $distribution --insert-count $RECORD_COUNT --max-ops $OP_COUNT --insert-hash=$INSERT_HASH --display-every 10001s "postgresql://root@$HA_PROXY_NODE:26257?sslmode=disable" --concurrency $threads --duration ${MAX_EXECUTION_TIME_SECONDS}s \"'
+    cmd_init_template='$COCKROACH/cockroach workload init ycsb --data-loader=IMPORT --drop --insert-count $RECORD_COUNT --insert-hash=$INSERT_HASH "postgresql://root@$HA_PROXY_NODE:26257?sslmode=disable" --concurrency $LOAD_YCSB_THREADS --workload $what'
+    cmd_run_template='sh -c \"2\>\&1 $COCKROACH/cockroach workload run ycsb --workload $what --request-distribution $distribution --insert-count $RECORD_COUNT --max-ops $OP_COUNT --insert-hash=$INSERT_HASH --display-every 10001s "postgresql://root@$HA_PROXY_NODE:26257?sslmode=disable" --concurrency $threads --duration ${MAX_EXECUTION_TIME_SECONDS}s \"'
 elif [ "$TYPE" = "yugabyte" ]; then
     cmd_init_template='$YU_YCSB_PATH/bin/ycsb.sh load yugabyteCQL -P $YU_YCSB_PATH/db.properties -P $YU_YCSB_PATH/workloads/workload${what} -p recordcount=$RECORD_COUNT -p insertorder=$KEY_ORDER -p threadcount=$LOAD_YCSB_THREADS'
     cmd_run_template='$YU_YCSB_PATH/bin/ycsb.sh run yugabyteCQL -P $YU_YCSB_PATH/db.properties -P $YU_YCSB_PATH/workloads/workload${what} -p threadcount=$threads -p insertorder=$KEY_ORDER -p recordcount=$RECORD_COUNT -p operationcount=$OP_COUNT -p requestdistribution=$distribution -p maxexecutiontime=$MAX_EXECUTION_TIME_SECONDS'
@@ -250,7 +255,7 @@ if [[ -n "$WORKLOADS" ]]; then
     for distribution in $DISTRIBUTIONS; do
         need_load=
         # load initial data
-        if [[ ! -z "$LOAD_DATA" ]]; then
+        if [[ -n "$LOAD_DATA" ]]; then
             log "load workload $LOAD_DATA data for $distribution"
             load_data $LOAD_DATA
         fi
