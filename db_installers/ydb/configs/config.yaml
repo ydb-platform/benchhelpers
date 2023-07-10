@@ -138,3 +138,17 @@ blob_storage_config:         # configuration of static blobstorage group.
           - node_id: ydb-node-zone-c.local
             pdisk_category: SSD
             path: /dev/disk/by-partlabel/ydb_disk_ssd_03
+
+channel_profile_config:
+  profile:
+  - channel:
+    - erasure_species: mirror-3-dc
+      pdisk_category: 0
+      storage_pool_kind: ssd
+    - erasure_species: mirror-3-dc
+      pdisk_category: 0
+      storage_pool_kind: ssd
+    - erasure_species: mirror-3-dc
+      pdisk_category: 0
+      storage_pool_kind: ssd
+    profile_id: 0

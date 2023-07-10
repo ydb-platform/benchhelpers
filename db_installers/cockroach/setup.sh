@@ -68,8 +68,8 @@ done
 
 echo "Deploy Cockroach"
 
-parallel-ssh -H "$COCKROACH_NODES $HA_PROXY_NODES" -p 30 "sudo mkdir -p $COCKROACH_DEPLOY_PATH/logs"
-parallel-scp -H "$COCKROACH_NODES $HA_PROXY_NODES" -p 30 $PATH_TO_SCRIPT/cockroach_wrapper $COCKROACH_DEPLOY_PATH
+parallel-scp -H "$COCKROACH_NODES $HA_PROXY_NODES" -p 30 $PATH_TO_SCRIPT/cockroach_wrapper '~'
+parallel-ssh -H "$COCKROACH_NODES $HA_PROXY_NODES" -p 30 "sudo mkdir -p $COCKROACH_DEPLOY_PATH/logs; sudo mv ~/cockroach_wrapper $COCKROACH_DEPLOY_PATH"
 
 "$PATH_TO_SCRIPT"/control.py -c "$COCKROACH_CONFIG" --format
 "$PATH_TO_SCRIPT"/control.py -c "$COCKROACH_CONFIG" --deploy "$COCKROACH_TAR" --hosts "$COCKROACH_NODES $HA_PROXY_NODES"
