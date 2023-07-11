@@ -1,73 +1,68 @@
 # YDB
 
-Инструкция по разворачиванию YDB на своих машинах.
+This guide explains how to deploy YDB on your machines.
 
-Алгоритм развертывания в скриптах практически идентичен инструкции [Deploying a YDB cluster on virtual or bare-metal servers
-](https://ydb.tech/en/docs/deploy/manual/deploy-ydb-on-premises) при выключенной аутентификации. 
+The deployment algorithm in the scripts is almost identical to the instructions in [Deploying a YDB cluster on virtual or bare-metal servers](https://ydb.tech/en/docs/deploy/manual/deploy-ydb-on-premises) with authentication disabled.
 
 ## Requirements
-+ Убедитесь, что из машины откуда вы запускаете, есть доступ по ssh ко всем другим машинам,
-и при подключении у пользователя были права с sudo.
-+ У всех машин должны быть синхронизированы часы. Можете следовать инструкциям [Synchronize clocks](https://www.digitalocean.com/community/tutorials/how-to-set-up-time-synchronization-on-ubuntu-20-04).
-+ Проверьте [Prerequisites](https://ydb.tech/en/docs/deploy/manual/deploy-ydb-on-premises#requirements).
++ Make sure you have SSH access to all other machines from the machine where you are running the script, and the user has sudo privileges.
++ All machines must have synchronized clocks. You can follow the instructions in [Synchronize clocks](https://www.digitalocean.com/community/tutorials/how-to-set-up-time-synchronization-on-ubuntu-20-04).
++ Check the [Prerequisites](https://ydb.tech/en/docs/deploy/manual/deploy-ydb-on-premises#requirements).
+
 
 ## Getting Started
 
-### Config
-Настроим конфиг [setup_config.sh](setup_config.sh):
-+ `Regions` - список ваших машин, на котором запускается YDB
-+ `DEPLOY_PATH` - путь по которому распаковывается YDB
-+ `DEPLOY_TMP_PATH` - путь по которому будут временные файлы
-+ `Disks` - диски которые будут хранилищем базы данных
-> Осторожно, при запуске скрипта форматируются диски `Disks`.
-+ `CONFIG_DIR` - путь до директории с конфигами `config.yaml` и `config_dynnodes.yaml` (о них чуть ниже)
-+ `YDB_SETUP_PATH` - путь по которому будет устанавливаться YDB
-+ `GRPC_PORT_BEGIN` - порт по которому GRPC для клиент-кластерного взаимодействия
-+ `IC_PORT_BEGIN` - порт по которому Interconnect для внутрикластерного взаимодействия узлов
-+ `MON_PORT_BEGIN` - порт по которому HTTP интерфейс YDB Embedded UI
-> Для каждого динамического узла берется следующий по очереди порт. Поэтому сетевая конфигурация
-> должна разрешать TCP соединения по портам
+### Configuration
+Set up the [setup_config.sh](setup_config.sh) file:
++ `HOSTS` - a list of your machines where YDB will be deployed.
++ `Disks` - the disks that will store the database.
+> Note: the `Disks` will be formatted when the script is run.
++ `CONFIG_DIR` - the path to the directory with the `config.yaml` and `config_dynnodes.yaml` files (details below).
++ `YDB_SETUP_PATH` - the path where YDB will be installed.
++ `GRPC_PORT_BEGIN` - the GRPC port for client-cluster interaction.
++ `IC_PORT_BEGIN` - the Interconnect port for intra-cluster node interaction.
++ `MON_PORT_BEGIN` - the port for HTTP interface of YDB Embedded UI.
+> For each dynamic node, the next port in line is taken. Therefore, the network configuration
+> must allow TCP connections on ports
 > + `GRPC_PORT_BEGIN...GRPC_PORT_BEGIN+DYNNODE_COUNT`
 > + `IC_PORT_BEGIN...IC_PORT_BEGIN+DYNNODE_COUNT`
 > + `MON_PORT_BEGIN...MON_PORT_BEGIN+DYNNODE_COUNT`
-+ `DYNNODE_COUNT` - количество динамических узлов для каждой машины
-+ `DYNNODE_TASKSET_CPU` - разделение ядер между динамическими узлами
-+ `DATABASE_NAME` - название базы данных
-+ `STORAGE_POOLS` - имя пула хранения и количество выделяемых групп хранения. 
-Имя пула обычно означает тип устройств хранения данных и должно соответствовать
-настройке `storage_pool_types.kind` внутри элемента `domains_config.domain` файла
-конфигурации.
++ `DYNNODE_COUNT` - the number of dynamic nodes for each machine.
++ `DYNNODE_TASKSET_CPU` - the distribution of cores among dynamic nodes.
++ `DATABASE_NAME` - the name of the database.
++ `STORAGE_POOLS` - the name of the storage pool and the number of storage groups allocated.
+The pool name usually means the type of data storage devices and must match the
+`storage_pool_types.kind` setting inside the `domains_config.domain` element of the configuration file.
 
-Чтобы настроить конфиг `config.yaml` для запуска статических узлов,
-ознакомьтесь с [краткой инструкцией](https://ydb.tech/en/docs/deploy/manual/deploy-ydb-on-premises#config),
-либо с [более детальной](https://ydb.tech/en/docs/deploy/configuration/config).
-Конфиг `config_dynnodes.yaml` настраивается также, но
-используется при создании динамических узлов.
+To configure `config.yaml` for static node deployment,
+see the [quick guide](https://ydb.tech/en/docs/deploy/manual/deploy-ydb-on-premises#config) or the [detailed guide](https://ydb.tech/en/docs/deploy/configuration/config).
+`config_dynnodes.yaml` is configured in a similar way, but
+is used for creating dynamic nodes.
 
-В репозитории конфиги [config.yaml](./configs/config.yaml), [config_dynnodes.yaml](./configs/config_dynnodes.yaml) для `mirror-3dc-3nodes`.
+The repository contains [config.yaml](./configs/config.yaml) and [config_dynnodes.yaml](./configs/config_dynnodes.yaml) files for `mirror-3dc-3nodes`.
 
 ### Start
-Запуск осуществляется в несколько этапов:
-1. `Stop` - Остановка YDB, если он был запущен
-2. `Clean and Format disks` - Форматирование дисков `Disks` по пути `DEPLOY_PATH`/data/<disk_name>
-3. `Deploy` - Распаковка пакета YDB
-4. `Start static nodes` - Запуск статических узлов
-5. `Init BS` - Создание базы данных
-6. `Start dynnodes` - Запуск динамических узлов
+The launch is performed in several stages:
+1. `Stop` - Stop YDB if it is running.
+2. `Clean and Format disks` - Format the `Disks` at the `DEPLOY_PATH`/data/<disk_name> path.
+3. `Deploy` - Unpack the YDB package.
+4. `Start static nodes` - Start the static nodes.
+5. `Init BS` - Create the database.
+6. `Start dynnodes` - Start the dynamic nodes.
 
 ```sh
 cd <PATH_TO_SCRIPT>
 ./setup.sh --ydbd <PATH_TO_YDBD_PACKAGE> --config <PATH_TO_CONFIG>
 ```
-+ `<PATH_TO_YDBD_PACKAGE>` - путь до архива с YDBD. Скачать можно по [ссылке](https://binaries.ydb.tech/ydbd-stable-linux-amd64.tar.gz) или выполнив команду:
++ `<PATH_TO_YDBD_PACKAGE>` - the path to the YDBD archive. You can download it from the [link](https://binaries.ydb.tech/ydbd-stable-linux-amd64.tar.gz) or execute the command:
 ```shell
 wget https://binaries.ydb.tech/ydbd-stable-linux-amd64.tar.gz
 ```
-+ `<PATH_TO_CONFIG>` - путь до конфига вида [setup_config.sh](setup_config.sh)
++ `<PATH_TO_CONFIG>` - the path to the configuration file, for example [setup_config.sh](setup_config.sh).
 
 ### Stop
 ```sh
 cd <PATH_TO_SCRIPT>
 ./setup.sh -c <PATH_TO_CONFIG> --stop
 ```
-+ `<PATH_TO_CONFIG>` - путь до конфига вида [setup_config.sh](setup_config.sh)
++ `<PATH_TO_CONFIG>` - the path to the configuration file, for example [setup_config.sh](setup_config.sh).
