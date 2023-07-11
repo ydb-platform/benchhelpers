@@ -50,7 +50,7 @@ load_data() {
         fi
 
         log "Setting MVCC"
-        $debug ssh $load_node "$COCKROACH/cockroach sql --insecure --host $HA_PROXY_NODE --execute 'ALTER TABLE ycsb.usertable CONFIGURE ZONE USING gc.ttlseconds = 600;'"
+        $debug ssh $load_node "$COCKROACH_PATH/cockroach sql --insecure --host $HA_PROXY_NODE --execute 'ALTER TABLE ycsb.usertable CONFIGURE ZONE USING gc.ttlseconds = 600;'"
     fi
 
     log "Finished loading data"
@@ -141,15 +141,10 @@ fi
 
 if [ "$TYPE" == "cockroach" ] && [ -z "$COCKROACH_PATH" ]; then
   unzip_tar $COCKROACH_DEPLOY_PATH $COCKROACH_TAR_PATH $YCSB_NODES
-  COCKROACH=$COCKROACH_DEPLOY_PATH
+  COCKROACH_PATH=$COCKROACH_DEPLOY_PATH
 fi
 
 if [ "$TYPE" == "yugabyte" ]; then
-
-  if [ -z "$YU_DB_CONFIG" ]; then
-    echo "Missing path to db.properties. Please, declare a variable YU_DB_CONFIG."
-    exit 1
-  fi
 
   if [ -z "$YU_YCSB_TAR_PATH" ] && [ -z "$YU_YCSB_PATH" ]; then
     echo "Missing path to YCSB. Please, declare a variable YU_YCSB_PATH, or YU_YCSB_TAR_PATH for deploy."
@@ -233,8 +228,8 @@ elif [ "$TYPE" = "ydbu" ]; then
     cmd_init_template='YDB_ANONYMOUS_CREDENTIALS=1 $YCSB_PATH/bin/ycsb.sh load ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:${STATIC_NODE_GRPC_PORT}${TEST_DB} -p dropOnInit=true -p splitByLoad=true -p recordcount=$RECORD_COUNT -p import=true -p insertorder=$KEY_ORDER -p maxparts=$MAX_PARTS -p maxpartsizeMB=$MAX_PART_SIZE_MB'
     cmd_run_template='YDB_ANONYMOUS_CREDENTIALS=1 $YCSB_PATH/bin/ycsb.sh run ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:${STATIC_NODE_GRPC_PORT}${TEST_DB} -threads $threads -p insertorder=$KEY_ORDER -p recordcount=$RECORD_COUNT -p operationcount=$OP_COUNT -p requestdistribution=$distribution -p maxexecutiontime=$MAX_EXECUTION_TIME_SECONDS -p forceUpdate=true'
 elif [ "$TYPE" = "cockroach" ]; then
-    cmd_init_template='$COCKROACH/cockroach workload init ycsb --data-loader=IMPORT --drop --insert-count $RECORD_COUNT --insert-hash=$INSERT_HASH "postgresql://root@$HA_PROXY_NODE:26257?sslmode=disable" --concurrency $LOAD_YCSB_THREADS --workload $what'
-    cmd_run_template='sh -c \"2\>\&1 $COCKROACH/cockroach workload run ycsb --workload $what --request-distribution $distribution --insert-count $RECORD_COUNT --max-ops $OP_COUNT --insert-hash=$INSERT_HASH --display-every 10001s "postgresql://root@$HA_PROXY_NODE:26257?sslmode=disable" --concurrency $threads --duration ${MAX_EXECUTION_TIME_SECONDS}s \"'
+    cmd_init_template='$COCKROACH_PATH/cockroach workload init ycsb --data-loader=IMPORT --drop --insert-count $RECORD_COUNT --insert-hash=$INSERT_HASH "postgresql://root@$HA_PROXY_NODE:26257?sslmode=disable" --concurrency $LOAD_YCSB_THREADS --workload $what'
+    cmd_run_template='sh -c \"2\>\&1 $COCKROACH_PATH/cockroach workload run ycsb --workload $what --request-distribution $distribution --insert-count $RECORD_COUNT --max-ops $OP_COUNT --insert-hash=$INSERT_HASH --display-every 10001s "postgresql://root@$HA_PROXY_NODE:26257?sslmode=disable" --concurrency $threads --duration ${MAX_EXECUTION_TIME_SECONDS}s \"'
 elif [ "$TYPE" = "yugabyte" ]; then
     cmd_init_template='$YU_YCSB_PATH/bin/ycsb.sh load yugabyteCQL -P $YU_YCSB_PATH/db.properties -P $YU_YCSB_PATH/workloads/workload${what} -p recordcount=$RECORD_COUNT -p insertorder=$KEY_ORDER -p threadcount=$LOAD_YCSB_THREADS'
     cmd_run_template='$YU_YCSB_PATH/bin/ycsb.sh run yugabyteCQL -P $YU_YCSB_PATH/db.properties -P $YU_YCSB_PATH/workloads/workload${what} -p threadcount=$threads -p insertorder=$KEY_ORDER -p recordcount=$RECORD_COUNT -p operationcount=$OP_COUNT -p requestdistribution=$distribution -p maxexecutiontime=$MAX_EXECUTION_TIME_SECONDS'

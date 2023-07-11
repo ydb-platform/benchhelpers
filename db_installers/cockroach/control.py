@@ -182,9 +182,23 @@ class Stop(PSSHAction):
     def run(self):
         super().run()
         self._logger.info("Stop")
-        cmd = "sudo -u {user} sh -c 'pkill cockroach; pkill haproxy; sleep 1;"
-        cmd += "pkill -9 cockroach; pkill -9 haproxy; echo \"DONE\"'"
-        self.pssh_run(cmd.format(user=self.sudo_user), add_hosts=HA_PROXY_NODES)
+
+        class HAProxyArgs:
+            def __init__(self, hosts, parent):
+                self.hosts = " ".join(hosts)
+                self.dry_run = parent.dry_run
+                self.fail_on_error = parent.fail_on_error
+                self.username = parent.username
+                self.sudo_user = parent.sudo_user
+
+        haproxy_action = PSSHAction(HAProxyArgs(HA_PROXY_NODES, self))
+        cmd = "sudo -u {user} sh -c 'pkill haproxy; sleep 1;"
+        cmd += "pkill -9 haproxy; echo \"DONE\"'"
+        haproxy_action.pssh_run(cmd.format(user=self.sudo_user))
+
+        cmd = "sudo -u {user} sh -c 'pkill cockroach; sleep 1;"
+        cmd += "pkill -9 cockroach; echo \"DONE\"'"
+        self.pssh_run(cmd.format(user=self.sudo_user))
 
 
 class Clean(Stop):

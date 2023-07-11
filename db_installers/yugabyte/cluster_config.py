@@ -3,9 +3,6 @@
 DEPLOY_PATH = "/benchmark/yugabyte"
 DEPLOY_TMP_PATH = "/var/tmp"
 
-KIND_NVME = 0
-KIND_SSD = 1
-
 
 class Region:
     def __init__(self, name, nodes):
@@ -38,8 +35,6 @@ Disks = [
     "/dev/nvme2n1p2",
     "/dev/nvme3n1p2",
 ]
-
-Kind = KIND_NVME
 
 Cores = 128
 Cache = "20GB"

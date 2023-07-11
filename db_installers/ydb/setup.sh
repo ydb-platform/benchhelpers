@@ -16,12 +16,17 @@ then
     exit 1
 fi
 
+STOP_YDB=0
+
 while [[ $# -gt 0 ]]; do case $1 in
     --ydbd)
         YDBD_TAR=$2
         shift;;
-    --config)
+    --config|-c)
         SETUP_CONFIG=$2
+        shift;;
+    --stop)
+        STOP_YDB=1
         shift;;
     --help|-h)
         usage
@@ -31,7 +36,7 @@ while [[ $# -gt 0 ]]; do case $1 in
         exit;;
 esac; shift; done
 
-if [[ ! -e "$YDBD_TAR" ]]; then
+if [[ ! -e "$YDBD_TAR" ]] && [ $STOP_YDB -eq 0 ]; then
     log "YDBD $YDBD_TAR is not exist"
     exit 1
 fi
@@ -45,23 +50,24 @@ source $SETUP_CONFIG
 
 INIT_HOST=$(echo "$HOSTS" | tr ' ' '\n' | head -1)
 
-echo "Kill ydbd"
-$debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "sudo sh -c 'pkill ydbd; sleep 5; pkill -9 ydbd; sudo rm -rf $YDB_SETUP_PATH/*'"
+echo "Stop"
+$debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "sudo sh -c 'pkill ydbd; sleep 5; pkill -9 ydbd; echo \'DONE\''"
 
-echo "mkdirs"
-$debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "sudo mkdir -p $YDB_SETUP_PATH/cfg $YDB_SETUP_PATH/logs"
+if [ $STOP_YDB -eq 1 ]; then
+  exit 0
+fi
 
-echo "Upload ydbd"
-$debug parallel-scp -H "$HOSTS" -t 0 -p 20 "$YDBD_TAR" "~"
-$debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "sudo tar -xzf ~/$(basename "$YDBD_TAR") --strip-component=1 -C $YDB_SETUP_PATH; \
-                                            rm -f $(basename "$YDBD_TAR")"
-
-echo "Format disks"
+echo "Clean and Format disks"
 for d in "${DISKS[@]}"; do
   $debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "sudo LD_LIBRARY_PATH=$YDB_SETUP_PATH/lib $YDB_SETUP_PATH/bin/ydbd admin bs disk obliterate $d"
 done
 
-echo "Upload config"
+echo "Deploy"
+$debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "sudo mkdir -p $YDB_SETUP_PATH/cfg $YDB_SETUP_PATH/logs"
+$debug parallel-scp -H "$HOSTS" -t 0 -p 20 "$YDBD_TAR" "~"
+$debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "sudo tar -xzf ~/$(basename "$YDBD_TAR") --strip-component=1 -C $YDB_SETUP_PATH; \
+                                            rm -f $(basename "$YDBD_TAR")"
+
 $debug parallel-scp -H "$HOSTS" -t 0 -p 20 $CONFIG_DIR/config.yaml "~"
 $debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "sudo mv ~/config.yaml $YDB_SETUP_PATH/cfg"
 $debug parallel-scp -H "$HOSTS" -t 0 -p 20 $CONFIG_DIR/config_dynnodes.yaml "~"
@@ -84,7 +90,7 @@ $debug parallel-ssh -H "$INIT_HOST" -t 0 -p 20  \
     "sudo LD_LIBRARY_PATH=$YDB_SETUP_PATH/lib $YDB_SETUP_PATH/bin/ydbd admin blobstorage config init --yaml-file $YDB_SETUP_PATH/cfg/config.yaml"
 
 $debug parallel-ssh -H "$INIT_HOST" -t 0 -p 20  \
-    "sudo LD_LIBRARY_PATH=$YDB_SETUP_PATH/lib $YDB_SETUP_PATH/bin/ydbd admin database $DATABASE_NAME create $STORAGE_POOLS"
+    "sudo LD_LIBRARY_PATH=$YDB_SETUP_PATH/lib $YDB_SETUP_PATH/bin/ydbd admin database /Root/$DATABASE_NAME create $STORAGE_POOLS"
 
 if [[ $DYNNODE_COUNT -gt ${#DYNNODE_TASKSET_CPU[@]} ]]; then
   echo "DYNNODE_COUNT is greater than DYNNODE_TASKSET_CPU. The values are equalized."
@@ -97,7 +103,7 @@ for ind in $(seq 0 $(($DYNNODE_COUNT-1))); do
       taskset -c ${DYNNODE_TASKSET_CPU[$ind]} nohup \
       sudo LD_LIBRARY_PATH=$YDB_SETUP_PATH/lib $YDB_SETUP_PATH/bin/ydbd server --log-level 3 --grpc-port $((GRPC_PORT++)) --ic-port $((IC_PORT++)) --mon-port $((MON_PORT++)) \
       --yaml-config  $YDB_SETUP_PATH/cfg/config_dynnodes.yaml \
-      --tenant $DATABASE_NAME \
+      --tenant /Root/$DATABASE_NAME \
       $NODE_BROKERS \
       &>$YDB_SETUP_PATH/logs/dyn$(($ind+1)).log &'"
 done

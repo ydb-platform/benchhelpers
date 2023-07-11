@@ -5,7 +5,14 @@
 
 Эти скрипты использовались при написании статьи [YCSB performance series](https://blog.ydb.tech/ycsb-performance-series-ydb-cockroachdb-and-yugabytedb-f25c077a382b).
 
-## Instruction
+## Requirements
++ `Java13+`
++ Requirements для выбранной БД: [YDB](./db_installers/ydb/README.md#requirements),
+[CockroachDB](./db_installers/cockroach/README.md#requirements), 
+[YugabyteDB](./db_installers/yugabyte/README.md#requirements)
+
+
+## Getting Started
 
 Для начала нужно развернуть базы данных на машинах. Подробнее для каждой базы данных:
 + [YDB](./db_installers/ydb/README.md)
@@ -54,7 +61,7 @@ cd <PATH_TO_BENCHHELPERS>/ycsb
 + `TARGET` - один из кластеров на котором запущена CockroachDB
 + `YCSB_NODES` - список нод на которых будет запускаться YCSB
 + `YCSB_NODES_COUNT` - если хотите ограничить количество `YCSB_NODES` без изменений списка 
-+ `COCKROACH` - путь до папки с CockroachDB в `YCSB_NODES`
++ `COCKROACH_PATH` - путь до папки с CockroachDB на `YCSB_NODES`
 + `COCKROACH_TAR_PATH` - при отсутствии `COCKROACH`, архив по этому пути будет распаковываться в `COCKROACH_DEPLOY_PATH`
 + `HA_PROXY_NODE` - один из нодов на котором запущен haproxy
 + `COCKROACH_INIT_SLEEP_TIME_MINUTES` - иногда экспорт завершается с ошибкой CLI, но продолжается в cockroach, поэтому продолжаем ждать
@@ -75,7 +82,7 @@ cd <PATH_TO_BENCHHELPERS>/ycsb
 + `TARGET` - один из кластеров на котором запущена YugabyteDB
 + `YCSB_NODES` - список нод на которых будет запускаться YCSB
 + `YCSB_NODES_COUNT` - если хотите ограничить количество `YCSB_NODES` без изменений списка 
-+ `YU_YCSB_PATH` - путь до бинарного файла cockroach на `YCSB_NODES`
++ `YU_YCSB_PATH` - путь до папки с YugabyteDB  на `YCSB_NODES`
 + `YU_YCSB_TAR_PATH` - при отсутствии `YU_YCSB_PATH`, архив по этому пути будет распаковываться в `YU_YCSB_DEPLOY_PATH`
 + `YU_PATH` - путь до папки с YugabyteDB в `TARGET`
 
@@ -88,5 +95,7 @@ cd <PATH_TO_BENCHHELPERS>/ycsb
 
 ### Workload
 
+На странице [Running a Workload](https://github.com/brianfrankcooper/YCSB/wiki/Running-a-Workload)
+есть детальная документация по запуску workload'а YCSB.
 
-
+Легко понять, какая переменная из [workload.rc](./ycsb/configs/workload.rc) за что отвечает.
