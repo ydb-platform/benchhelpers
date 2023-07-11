@@ -161,12 +161,12 @@ class PSSHAction(BaseAction):
 
     def __init__(self, args):
         super().__init__(args)
-        self.pssh_hosts = ""
         self.dry_run = args.dry_run
         self.hosts = args.hosts
         self.fail_on_error = args.fail_on_error
         self.username = args.username
         self.sudo_user = args.sudo_user
+        self._select_hosts()
 
     def pssh_cmd(self, cmd, add_hosts=None):
         pssh_cmd = list()
@@ -231,6 +231,5 @@ class PSSHAction(BaseAction):
         return ' '.join(set(hosts))
 
     def run(self):
-        self._select_hosts()
         self._logger.info("PSSH hosts %s", " ".join(self.pssh_hosts))
         super().run()

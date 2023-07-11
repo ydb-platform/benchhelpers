@@ -3,9 +3,6 @@
 DEPLOY_PATH = "/benchmark/cockroach"
 DEPLOY_TMP_PATH = "/var/tmp"
 
-KIND_NVME = 0
-KIND_SSD = 1
-
 HA_PROXY_NODES = ["host4.com", "host5.com"]
 HA_PROXY_SETUP_PATH = "/benchmark/haproxy"
 
@@ -31,8 +28,7 @@ Disks = [
     "/dev/nvme2n1p2",
     "/dev/nvme3n1p2",
 ]
-
-Kind = KIND_NVME
+INIT_PER_DISK = 1
 
 # per host
 Cores = 128
