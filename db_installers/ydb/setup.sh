@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -e
+
 debug=
 
 log() {
@@ -26,8 +28,7 @@ while [[ $# -gt 0 ]]; do case $1 in
         SETUP_CONFIG=$2
         shift;;
     --stop)
-        STOP_YDB=1
-        shift;;
+        STOP_YDB=1;;
     --help|-h)
         usage
         exit;;
@@ -51,7 +52,7 @@ source $SETUP_CONFIG
 INIT_HOST=$(echo "$HOSTS" | tr ' ' '\n' | head -1)
 
 echo "Stop"
-$debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "sudo sh -c 'pkill ydbd; sleep 5; pkill -9 ydbd; echo \'DONE\''"
+$debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "sudo sh -c 'pkill ydbd; sleep 5; pkill -9 ydbd; echo \"DONE\"'"
 
 if [ $STOP_YDB -eq 1 ]; then
   exit 0

@@ -1,101 +1,107 @@
 # benchhelpers
 
-В этом репозитории вы найдете скрипты для развертывания, запуска и дальнейшей
-оценки производительности баз данных [YDB](https://ydb.tech/), [CockroachDB](https://www.cockroachlabs.com/) и [YugabyteDB](https://www.yugabyte.com/).
+In this repository, you will find scripts for deploying, running, and evaluating the performance of databases [YDB](https://ydb.tech/), [CockroachDB](https://www.cockroachlabs.com/), and [YugabyteDB](https://www.yugabyte.com/).
 
-Эти скрипты использовались при написании статьи [YCSB performance series](https://blog.ydb.tech/ycsb-performance-series-ydb-cockroachdb-and-yugabytedb-f25c077a382b).
+These scripts were used in writing the article [YCSB performance series](https://blog.ydb.tech/ycsb-performance-series-ydb-cockroachdb-and-yugabytedb-f25c077a382b).
 
 ## Requirements
 + `Java13+`
-+ Requirements для выбранной БД: [YDB](./db_installers/ydb/README.md#requirements),
++ Requirements for the selected database: [YDB](./db_installers/ydb/README.md#requirements),
 [CockroachDB](./db_installers/cockroach/README.md#requirements), 
 [YugabyteDB](./db_installers/yugabyte/README.md#requirements)
 
 
 ## Getting Started
 
-Для начала нужно развернуть базы данных на машинах. Подробнее для каждой базы данных:
+First, you need to deploy the databases on the machines. For more details on each database:
 + [YDB](./db_installers/ydb/README.md)
 + [CockroachDB](./db_installers/cockroach/README.md)
 + [YugabyteDB](./db_installers/yugabyte/README.md)
 
-Теперь можно начать запускать бенчмарк на выбранной базе данных. Для лучшей работы
-рекомендуется запускать на каждой машине только одну базу данных.
+Now you can start running the benchmark on the selected database. For best performance,
+it is recommended to run only one database on each machine.
 
-Ниже идет инструкция по запуску YCSB для [YDB](#ydb), [CockroachDB](#cockroachdb), [YugabyteDB](#yugabytedb).
+Below is the instruction for running YCSB for [YDB](#ydb), [CockroachDB](#cockroachdb), [YugabyteDB](#yugabytedb).
 
-Про рабочие нагрузки (workload) YCSB можно прочитать [здесь](https://github.com/brianfrankcooper/YCSB/wiki/Core-Workloads).
+You can read about YCSB workloads [here](https://github.com/brianfrankcooper/YCSB/wiki/Core-Workloads).
 
 ### YDB
 
 ---
 
-Для начала нужно настроить правильный для себя конфиг. Если заглянуть в конфиг [ydb.rc](./ycsb/configs/ydb.rc), то
-можно найти:
-+ `TARGET` - один из кластеров на котором запущена YDB
-+ `TEST_DB` - база данных на котором будет проходить тесты производительности
-+ `STATIC_NODE_GRPC_PORT` - GRPC порт статической ноды
-+ `YCSB_NODES` - список нод на которых будет запускаться YCSB
-+ `YCSB_NODES_COUNT` - если хотите ограничить количество `YCSB_NODES` без изменений списка
-+ `YCSB_TAR_PATH` - путь до пакета YCSB на компьютере, где запускается скрипт
-+ `YCSB_DEPLOY_PATH` - путь, где должна развернуться пакет и вспомогательные файлы на `YCSB_NODES`
+First, you need to configure the config file according to your needs. If you look into the config file [ydb.rc](./ycsb/configs/ydb.rc), you can find:
++ `TARGET` - one of the machines where YDB is running.
++ `TEST_DB` - the database on which the performance tests will be conducted.
++ `STATIC_NODE_GRPC_PORT` - GRPC port of the static node.
++ `YCSB_NODES` - list of nodes on which YCSB will be run.
++ `YCSB_NODES_COUNT` - if you want to limit the number of `YCSB_NODES` without changing the list.
++ `YCSB_TAR_PATH` - path to the YCSB package on the machine where the script will run.
++ `YCSB_DEPLOY_PATH` - path where the package and auxiliary files should be deployed on `YCSB_NODES`.
 
-После настройки `ydb.rc` и `workload.rc` (про него [ниже](#workload)) можно запустить YCSB:
+After configuring `ydb.rc` and `workload.rc` (more about it [below](#workload)), you can start YCSB:
 ```sh
 cd <PATH_TO_BENCHHELPERS>/ycsb
 ./run_workloads.sh --log-dir <PATH_TO_LOG_DIR> configs/workload.rc configs/ydb.rc
 ```
-Также для `run_workloads.sh` есть параметры:
-+ `--name` - для удобства названия файлов с логами будет сопровождаться с `name`
-+ `--threads` - количество потоков для YCSB (default - 64)
-+ `--de-threads` - количество потоков для YCSB при workload D и E (default - 512)
-+ `--ycsb-nodes` - то же самое, что и `YCSB_NODES_COUNT`, но с большим приоритетом
+There are also parameters for `run_workloads.sh`:
++ `--name` - for convenience, the log file names will be prefixed with `name`.
++ `--threads` - number of threads for YCSB (default - 64).
++ `--de-threads` - number of threads for YCSB for workload D and E (default - 512).
++ `--ycsb-nodes` - same as `YCSB_NODES_COUNT`, but with higher priority.
 
 
 ### CockroachDB
 
 ---
 
-Также как и с YDB настроим конфиг [cockroach.rc](./ycsb/configs/cockroach.rc):
+Just like with YDB, let's configure the config file [cockroach.rc](./ycsb/configs/cockroach.rc):
 
-+ `TARGET` - один из кластеров на котором запущена CockroachDB
-+ `YCSB_NODES` - список нод на которых будет запускаться YCSB
-+ `YCSB_NODES_COUNT` - если хотите ограничить количество `YCSB_NODES` без изменений списка 
-+ `COCKROACH_PATH` - путь до папки с CockroachDB на `YCSB_NODES`
-+ `COCKROACH_TAR_PATH` - при отсутствии `COCKROACH`, архив по этому пути будет распаковываться в `COCKROACH_DEPLOY_PATH`
-+ `HA_PROXY_NODE` - один из нодов на котором запущен haproxy
-+ `COCKROACH_INIT_SLEEP_TIME_MINUTES` - иногда экспорт завершается с ошибкой CLI, но продолжается в cockroach, поэтому продолжаем ждать
++ `TARGET` - one of the clusters where CockroachDB is running.
++ `YCSB_NODES` - list of nodes on which YCSB will be run.
++ `YCSB_NODES_COUNT` - if you want to limit the number of `YCSB_NODES` without changing the list .
++ `COCKROACH_PATH` - path to the folder with CockroachDB on `YCSB_NODES`.
++ `COCKROACH_TAR_PATH` - if `COCKROACH_PATH` is not present, the archive at this path will be unpacked in `COCKROACH_DEPLOY_PATH`.
++ `HA_PROXY_NODE` - one of the nodes where haproxy is running.
++ `COCKROACH_INIT_SLEEP_TIME_MINUTES` - sometimes export fails with CLI error, but continues in cockroach, so we continue to wait.
 
-После настройки `cockroach.rc` и `workload.rc` (про него [ниже](#workload)) можно запустить YCSB:
+After configuring `cockroach.rc` and `workload.rc` (more about it [below](#workload)), you can start YCSB:
 ```sh
 cd <PATH_TO_BENCHHELPERS>/ycsb
 ./run_workloads.sh --type cockroach --log-dir <PATH_TO_LOG_DIR> configs/workload.rc configs/cockroach.rc
 ```
-Про дополнительные параметры `run_workloads.sh` можно почитать в [YDB](#ydb).
+You can read about additional parameters for `run_workloads.sh` in [YDB](#ydb).
 
 ### YugabyteDB
 
 ---
 
-Настроим конфиг [yugabyte.rc](./ycsb/configs/yugabyte.rc):
+Let's configure the config file [yugabyte.rc](./ycsb/configs/yugabyte.rc):
 
-+ `TARGET` - один из кластеров на котором запущена YugabyteDB
-+ `YCSB_NODES` - список нод на которых будет запускаться YCSB
-+ `YCSB_NODES_COUNT` - если хотите ограничить количество `YCSB_NODES` без изменений списка 
-+ `YU_YCSB_PATH` - путь до папки с YugabyteDB  на `YCSB_NODES`
-+ `YU_YCSB_TAR_PATH` - при отсутствии `YU_YCSB_PATH`, архив по этому пути будет распаковываться в `YU_YCSB_DEPLOY_PATH`
-+ `YU_PATH` - путь до папки с YugabyteDB в `TARGET`
++ `TARGET` - one of the clusters where YugabyteDB is running.
++ `YCSB_NODES` - list of nodes on which YCSB will be run.
++ `YCSB_NODES_COUNT` - if you want to limit the number of `YCSB_NODES` without changing the list .
++ `YU_YCSB_PATH` - path to the folder with YSCB of YugabyteDB on `YCSB_NODES`.
++ `YU_YCSB_TAR_PATH` - if `YU_YCSB_PATH` is not present, the archive at this path will be unpacked in `YU_YCSB_DEPLOY_PATH`.
++ `YU_PATH` - path to the folder with YugabyteDB on `TARGET`.
 
-После настройки `yugabyte.rc` и `workload.rc` (про него [ниже](#workload)) можно запустить YCSB:
+After configuring yugabyte.rc and workload.rc (more about it [below](#workload)), you can start YCSB:
 ```sh
 cd <PATH_TO_BENCHHELPERS>/ycsb
 ./run_workloads.sh --type yugabyte --log-dir <PATH_TO_LOG_DIR> configs/workload.rc configs/yugabyte.rc
 ```
-Про дополнительные параметры `run_workloads.sh` можно почитать в [YDB](#ydb).
+You can read about additional parameters for run_workloads.sh in [YDB](#ydb).
 
 ### Workload
 
-На странице [Running a Workload](https://github.com/brianfrankcooper/YCSB/wiki/Running-a-Workload)
-есть детальная документация по запуску workload'а YCSB.
+---
 
-Легко понять, какая переменная из [workload.rc](./ycsb/configs/workload.rc) за что отвечает.
+The [workload.rc](./ycsb/configs/workload.rc) file contains the configuration for the YCSB workload. The following variables can be found in this file:
+- `WORKLOADS` - a list of workloads to be executed.
+- `RECORD_COUNT` - the number of records in the database at the start of the workload.
+- `OP_COUNT_TOTAL` - the number of operations to be performed.
+- `DISTRIBUTIONS` - what distribution should be used to select the records to operate on – uniform, zipfian, hotspot, sequential, exponential or latest
+- `YCSB_THREADS` - the number of YCSB client threads.
+- `YCSB_THREADS_DE` - the number of YCSB client threads for workload D and E.
+- `LOAD_YCSB_THREADS` - the number of YCSB client threads when load the data.
+- `KEY_ORDER` - should records be inserted in order by key (“ordered”), or in hashed order (“hashed”).
+- `MAX_PARTS`, `MAX_PART_SIZE_MB`, `LOAD_DATA` - these are settings for developers and the default values are suitable in most cases.
