@@ -2,6 +2,8 @@
 
 This guide explains how to deploy YugabyteDB on your machines.
 
+> Note: This is not a production deployment method. There are scripts that will allow you to run YugabyteDB and test as easily as possible.
+
 ## Requirements
 + Make sure you have SSH access to all other machines from the machine where you are running the script, and the user has sudo privileges.
 + All machines must have synchronized clocks. You can follow the instructions in [Synchronize clocks](https://www.digitalocean.com/community/tutorials/how-to-set-up-time-synchronization-on-ubuntu-20-04).

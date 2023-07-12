@@ -2,6 +2,8 @@
 
 This guide explains how to deploy YDB on your machines.
 
+> Note: This is not a production deployment method. There are scripts that will allow you to run YDB and test as easily as possible.
+
 The deployment algorithm in the scripts is almost identical to the instructions in [Deploying a YDB cluster on virtual or bare-metal servers](https://ydb.tech/en/docs/deploy/manual/deploy-ydb-on-premises) with authentication disabled.
 
 ## Requirements
