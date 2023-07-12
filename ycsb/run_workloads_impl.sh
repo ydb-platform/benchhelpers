@@ -144,7 +144,7 @@ if [ "$TYPE" == "cockroach" ] && [ -z "$COCKROACH_PATH" ]; then
   COCKROACH_PATH=$COCKROACH_DEPLOY_PATH
 fi
 
-if [ "$TYPE" == "yugabyte" ]; then
+if [ "$TYPE" == "yugabyte" ] || [ "$TYPE" == "yugabyteSQL" ]; then
 
   if [ -z "$YU_YCSB_TAR_PATH" ] && [ -z "$YU_YCSB_PATH" ]; then
     echo "Missing path to YCSB. Please, declare a variable YU_YCSB_PATH, or YU_YCSB_TAR_PATH for deploy."
