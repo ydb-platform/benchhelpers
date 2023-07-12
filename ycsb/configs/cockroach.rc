@@ -1,11 +1,10 @@
 # any cluster host to use as endpoint
-TARGET="host1.com"
-TEST_DB="db"
+TARGET="cockroach_host1.com"
 
 # shooting hosts, i.e. YCSB instance runners
-YCSB_HOSTS="host2.com host3.com host4.com"
+YCSB_HOSTS="ycsb_host1.com ycsb_host2.com etc"
 
-YCSB_HOSTS_COUNT="1"
+YCSB_HOSTS_COUNT="<COUNT>"
 
 COCKROACH_PATH="<PATH_TO_COCKROACH>"
 # COCKROACH_TAR_PATH="<PATH_TO_COCKROACH_TAR>"

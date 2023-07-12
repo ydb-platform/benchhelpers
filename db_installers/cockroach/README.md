@@ -2,6 +2,8 @@
 
 This guide explains how to deploy CockroachDB on your machines.
 
+> Note: This is not a production deployment method. There are scripts that will allow you to run CockroachDB and test as easily as possible.
+
 ## Requirements
 + Make sure you have SSH access to all other machines from the machine where you are running the script, and the user has sudo privileges.
 + All machines must have synchronized clocks. You can follow the instructions in [Synchronize clocks](https://www.cockroachlabs.com/docs/v23.1/deploy-cockroachdb-on-premises-insecure#step-1-synchronize-clocks).
@@ -23,7 +25,7 @@ Set up the [cluster_config.py](cluster_config.py) file:
 + `Cores` - the number of cores allocated for CockroachDB.
 + `CacheSizeGB` - the size of cache allocated for CockroachDB.
 + `SqlMemorySizeGB` - the size of memory allocated for SQL CockroachDB.
-+ ~~`INIT_PER_DISK`~~ - CockroachDB explicitly [asks not to do this](https://www.cockroachlabs.com/docs/v23.1/deploy-cockroachdb-on-premises-insecure#before-you-begin:~:text=Run%20each%20node,a%20Node.), but if you are not concerned about data
++ `INIT_PER_DISK` - CockroachDB explicitly [asks not to do this](https://www.cockroachlabs.com/docs/v23.1/deploy-cockroachdb-on-premises-insecure#before-you-begin:~:text=Run%20each%20node,a%20Node.), but if you are not concerned about data
 loss in the event of a machine failure and want CockroachDB to show better performance, you can assign it
 a value of 1. In this case, `LISTEN_PORT` and `HTTP_PORT` will be incremented for each disk, so TCP communication
 should be allowed on each of these ports. Additionally, `Cores`, `CacheSizeGB`, and `SqlMemorySizeGB` will be divided
