@@ -58,7 +58,7 @@ if [ $STOP_YDB -eq 1 ]; then
   exit 0
 fi
 
-echo "Clean and Format disks"
+echo "Format disks"
 for d in "${DISKS[@]}"; do
   $debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "sudo LD_LIBRARY_PATH=$YDB_SETUP_PATH/lib $YDB_SETUP_PATH/bin/ydbd admin bs disk obliterate $d"
 done

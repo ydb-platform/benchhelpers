@@ -32,11 +32,10 @@ among each node on each machine.
 ### Start
 The launch is performed in several stages:
 1. `Stop` - Stop CockroachDB if it is running.
-2. `Clean` - Clean the `Disks`.
-3. `Format` - Format the `Disks` at the `DEPLOY_PATH`/data/<disk_name> path.
-4. `Deploy` - Unpack the CockroachDB package.
-5. `Start CockroachDB` - Start CockroachDB.
-6. `Start HAProxy` - Start HAProxy.
+2. `Format` - Format the `Disks` at the `DEPLOY_PATH`/data/<disk_name> path.
+3. `Deploy` - Unpack the CockroachDB package.
+4. `Start CockroachDB` - Start CockroachDB.
+5. `Start HAProxy` - Start HAProxy.
 
 ```sh
 cd <PATH_TO_SCRIPT>
@@ -47,6 +46,10 @@ cd <PATH_TO_SCRIPT>
     - `<VERSION>` - the version of CockroachDB.
 + `<PATH_TO_CONFIG>` - the path to the configuration file, for example [cluster_config.py](cluster_config.py).
 + `<PATH_TO_HAPROXY_BIN>` - the path to the HAProxy binary. We conducted performance tests with version 2.4.19, so please use that version or a newer one.
+
+For check access to the built-in web interface, open in the browser the `http://<COCKROACH_HOST>:HTTP_PORT` URL, 
+where `<COCKROACH_HOST>` is the FQDN of the server running any CockroachDB node.
+
 
 ### Stop
 ```sh

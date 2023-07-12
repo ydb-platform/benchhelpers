@@ -1,6 +1,5 @@
-# any cluster node to use as endpoint
+# any cluster host to use as endpoint
 TARGET="host1.com"
-TEST_DB="/Root/db"
 STATIC_NODE_GRPC_PORT=2135
 
 # shooting hosts, i.e. YCSB instance runners
