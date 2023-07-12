@@ -50,6 +50,9 @@ There are also parameters for `run_workloads.sh`:
 + `--de-threads` - same as `YCSB_THREADS_DE` from [workload](#workload), but with higher priority.
 + `--ycsb-hosts` - same as `YCSB_HOSTS_COUNT`, but with higher priority.
 
+If you want [UPDATE](https://ydb.tech/en/docs/yql/reference/syntax/update) to be executed during YCSB execution
+instead of [UPSERT](https://ydb.tech/en/docs/yql/reference/syntax/upsert_into), 
+then add the parameter `--type ydbu`.
 
 ### CockroachDB
 
@@ -85,12 +88,15 @@ Let's configure the config file [yugabyte.rc](./ycsb/configs/yugabyte.rc):
 + `YU_YCSB_TAR_PATH` - if `YU_YCSB_PATH` is not present, the archive at this path will be unpacked in `YU_YCSB_DEPLOY_PATH`.
 + `YU_PATH` - path to the folder with YugabyteDB on `TARGET`.
 
-After configuring `yugabyte.rc` and `workload.rc` (more about it [below](#workload)), you can start YCSB:
+After configuring `yugabyte.rc` and `workload.rc` (more about it [below](#workload)), you can start YCSB on [YCQL](https://docs.yugabyte.com/preview/explore/ycql-language/):
 ```sh
 cd <PATH_TO_BENCHHELPERS>/ycsb
 ./run_workloads.sh --type yugabyte --log-dir <PATH_TO_LOG_DIR> configs/workload.rc configs/yugabyte.rc
 ```
 You can read about additional parameters for `run_workloads.sh` in [YDB](#ydb).
+
+If you want to perform a benchmark on [YSQL](https://docs.yugabyte.com/preview/explore/ysql-language-features/),
+then change the `--type` parameter to `yugabyteSQL`.
 
 ### Workload
 
