@@ -3,11 +3,10 @@
 DEPLOY_PATH = "/benchmark/yugabyte"
 DEPLOY_TMP_PATH = "/var/tmp"
 
-
 class Region:
-    def __init__(self, name, nodes):
-        self.Nodes = nodes
+    def __init__(self, name, hosts):
         self.Name = name
+        self.Hosts = hosts
 
 
 # For now regions are ignored

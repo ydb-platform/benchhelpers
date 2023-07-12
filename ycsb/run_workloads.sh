@@ -36,8 +36,8 @@ while [[ $# -gt 0 ]]; do case $1 in
     --de-threads)
         EXTRA_ARGS="$EXTRA_ARGS --de-threads $2"
         shift;;
-    --ycsb-nodes)
-        EXTRA_ARGS="$EXTRA_ARGS --ycsb-nodes $2"
+    --ycsb-hosts)
+        EXTRA_ARGS="$EXTRA_ARGS --ycsb-hosts $2"
         shift;;
     --help|-h)
         usage

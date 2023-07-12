@@ -1,15 +1,15 @@
-# any cluster node to use as endpoint
+# any cluster host to use as endpoint
 TARGET="host1.com"
 TEST_DB="db"
 
-# shooting nodes, i.e. YCSB instance runners
-YCSB_NODES="host2.com host3.com host4.com"
+# shooting hosts, i.e. YCSB instance runners
+YCSB_HOSTS="host2.com host3.com host4.com"
 
-YCSB_NODES_COUNT="1"
+YCSB_HOSTS_COUNT="1"
 
 COCKROACH_PATH="<PATH_TO_COCKROACH>"
 # COCKROACH_TAR_PATH="<PATH_TO_COCKROACH_TAR>"
 # COCKROACH_DEPLOY_PATH="/benchmark/cockroach"
-HA_PROXY_NODE="host5.com"
+HA_PROXY_HOST="host5.com"
 
 COCKROACH_INIT_SLEEP_TIME_MINUTES=5
