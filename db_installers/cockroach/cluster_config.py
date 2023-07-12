@@ -3,14 +3,14 @@
 DEPLOY_PATH = "/benchmark/cockroach"
 DEPLOY_TMP_PATH = "/var/tmp"
 
-HA_PROXY_NODES = ["host4.com", "host5.com"]
+HA_PROXY_HOSTS = ["host4.com", "host5.com"]
 HA_PROXY_SETUP_PATH = "/benchmark/haproxy"
 
 
 class Region:
-    def __init__(self, name, nodes):
-        self.Nodes = nodes
+    def __init__(self, name, hosts):
         self.Name = name
+        self.Hosts = hosts
 
 
 Regions = [

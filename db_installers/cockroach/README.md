@@ -14,8 +14,8 @@ Set up the [cluster_config.py](cluster_config.py) file:
 + `Regions` - a list of your machines where CockroachDB will be deployed.
 + `DEPLOY_PATH` - the path where CockroachDB will be unpacked.
 + `DEPLOY_TMP_PATH` - the path for temporary files.
-+ `HA_PROXY_NODES` - the machines where [HAProxy load balancer](https://www.haproxy.com/) will be deployed.
-+ `HA_PROXY_SETUP_PATH` - the path to the HAProxy binary. If HAProxy is already in the `PATH` on `HA_PROXY_NODES`, this can be left empty.
++ `HA_PROXY_HOSTS` - the machines where [HAProxy load balancer](https://www.haproxy.com/) will be deployed.
++ `HA_PROXY_SETUP_PATH` - the path to the HAProxy binary. If HAProxy is already in the `PATH` on `HA_PROXY_HOSTS`, this can be left empty.
 + `LISTEN_PORT` - the port to be used by other nodes for communication. Your network configuration should allow TCP communication on this port.
 + `HTTP_PORT` - the port for the DB Console. Your network configuration should allow TCP communication on this port.
 + `Disks` - the disks that will store the database.

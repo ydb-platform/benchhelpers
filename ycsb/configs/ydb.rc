@@ -3,13 +3,13 @@ TARGET="host1.com"
 TEST_DB="/Root/db"
 STATIC_NODE_GRPC_PORT=2135
 
-# shooting nodes, i.e. YCSB instance runners
-YCSB_NODES="host2.com host3.com host4.com"
+# shooting hosts, i.e. YCSB instance runners
+YCSB_HOSTS="host2.com host3.com host4.com"
 
-YCSB_NODES_COUNT="3"
+YCSB_HOSTS_COUNT="3"
 
-# YCSB path on YCSB_NODES
-# if ycsb is already exist on YCSB_NODES, you can write instead of what is below:
+# YCSB path on YCSB_HOSTS
+# if ycsb is already exist on YCSB_HOSTS, you can write instead of what is below:
 # YCSB_PATH="<PATH_TO_YCSB>"
 YCSB_TAR_PATH="<PATH_TO_YCSB_TAR>"
 YCSB_DEPLOY_PATH="<PATH_TO_DEPLOY>"

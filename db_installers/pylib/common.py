@@ -8,7 +8,7 @@ import time
 
 
 logger = logging.getLogger(__name__)
-Nodes = []
+Hosts = []
 
 
 class ErrorExit(Exception):
@@ -211,10 +211,10 @@ class PSSHAction(BaseAction):
 
     def _select_hosts(self):
         if self.hosts is not None:
-            # overwrite Nodes
+            # overwrite Hosts
             self.pssh_hosts = self.hosts.split()
         else:
-            self.pssh_hosts = Nodes
+            self.pssh_hosts = Hosts
 
         if len(self.pssh_hosts) == 0:
             self._logger.error("PSSH hosts list is empty. Need specify --config or/and --hosts")

@@ -8,10 +8,10 @@ import pipes
 import sys
 
 if __package__:
-    from ..pylib.common import ErrorExit, SSHAction, PSSHAction, BaseAction, Nodes
+    from ..pylib.common import ErrorExit, SSHAction, PSSHAction, BaseAction, Hosts
 else:
     sys.path.append(os.path.dirname(__file__) + '/..')
-    from pylib.common import ErrorExit, SSHAction, PSSHAction, BaseAction, Nodes
+    from pylib.common import ErrorExit, SSHAction, PSSHAction, BaseAction, Hosts
 
 
 logger = logging.getLogger(__name__)
@@ -74,9 +74,9 @@ class Start(PSSHAction):
         self.task_set = args.task_set
         self.per_disk_instance = args.per_disk_instance
 
-    def start_instance(self, host, store_args, listen_addr, http_addr, join_nodes, task_set, region, cache_size, sql_mem_size):
+    def start_instance(self, host, store_args, listen_addr, http_addr, join_hosts, task_set, region, cache_size, sql_mem_size):
         self._logger.info("Start on " + host + ", addr " + listen_addr)
-        join_nodes_str = ",".join(join_nodes)
+        join_hosts_str = ",".join(join_hosts)
         cmd = "sudo -u {user} sh -c \""
         self._logger.info(task_set)
         if task_set:
@@ -88,7 +88,7 @@ class Start(PSSHAction):
             user=self.sudo_user,
             listen_addr=listen_addr,
             http_addr=http_addr,
-            join=join_nodes_str,
+            join=join_hosts_str,
             cache=cache_size,
             sql_mem=sql_mem_size,
             region=region)
@@ -104,20 +104,20 @@ class Start(PSSHAction):
         action = SSHAction(Args(host, self))
         action.ssh_cmd(cmd)
 
-    def get_join_nodes(self):
-        join_nodes = []
-        for host in Nodes[:3]:
-            join_nodes.append(host + ":" + str(LISTEN_PORT))
-        return join_nodes
+    def get_join_hosts(self):
+        join_hosts = []
+        for host in Hosts[:3]:
+            join_hosts.append(host + ":" + str(LISTEN_PORT))
+        return join_hosts
 
     def run_per_disk(self):
-        join_nodes = self.get_join_nodes()
+        join_hosts = self.get_join_hosts()
 
         cores_per_instance = max(1, Cores // len(Disks))
         cache_per_instance = max(1, CacheSizeGB // len(Disks))
         sql_mem_per_instance = max(1, SqlMemorySizeGB // len(Disks))
         for region in Regions:
-            for host in region.Nodes:
+            for host in region.Hosts:
                 port = LISTEN_PORT
                 http_port = HTTP_PORT
                 start_core = 0
@@ -135,7 +135,7 @@ class Start(PSSHAction):
                         store_args,
                         listen_host,
                         http_listen,
-                        join_nodes,
+                        join_hosts,
                         task_set,
                         region.Name,
                         cache_per_instance + (cache_reminder > 0),
@@ -157,9 +157,9 @@ class Start(PSSHAction):
         for d in Disks:
             store_args += "--store " + disk2mnt(d) + " "
 
-        join_nodes = self.get_join_nodes()
+        join_hosts = self.get_join_hosts()
         for region in Regions:
-            for host in region.Nodes:
+            for host in region.Hosts:
                 http_listen = ":" + str(HTTP_PORT)
                 listen_host = ":" + str(LISTEN_PORT)
                 self.start_instance(
@@ -167,7 +167,7 @@ class Start(PSSHAction):
                     store_args,
                     listen_host,
                     http_listen,
-                    join_nodes,
+                    join_hosts,
                     self.task_set,
                     region.Name,
                     CacheSizeGB,
@@ -191,7 +191,7 @@ class Stop(PSSHAction):
                 self.username = parent.username
                 self.sudo_user = parent.sudo_user
 
-        haproxy_action = PSSHAction(HAProxyArgs(HA_PROXY_NODES, self))
+        haproxy_action = PSSHAction(HAProxyArgs(HA_PROXY_HOSTS, self))
         cmd = "sudo -u {user} sh -c 'pkill haproxy; sleep 1;"
         cmd += "pkill -9 haproxy; echo \"DONE\"'"
         haproxy_action.pssh_run(cmd.format(user=self.sudo_user))
@@ -248,7 +248,7 @@ class ReturnHosts(BaseAction):
         self.hosts = args.hosts
 
     def run(self):
-        list_hosts = Nodes
+        list_hosts = Hosts
         if self.hosts:
             print(f"{self.hosts}")
         print(' '.join(list_hosts))
@@ -278,7 +278,7 @@ class ReturnHaProxyHosts(BaseAction):
         super().__init__(args)
 
     def run(self):
-        print(' '.join(HA_PROXY_NODES))
+        print(' '.join(HA_PROXY_HOSTS))
 
 
 class ReturnHaProxySetupPath(BaseAction):
@@ -295,7 +295,6 @@ class ReturnHaProxySetupPath(BaseAction):
 # control.py -c cluster_config.py deploy
 # control.py -c cluster_config.py start
 # control.py -c cluster_config.py init
-# --dry-run, --first-node-only
 class Main(object):
 
     def __init__(self):
@@ -355,7 +354,7 @@ class Main(object):
             return -1
 
         for region in Regions:
-            Nodes.extend(region.Nodes)
+            Hosts.extend(region.Hosts)
 
         if self.args.deploy:
             if not os.path.isfile(self.args.deploy):

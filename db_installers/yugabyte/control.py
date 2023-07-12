@@ -10,10 +10,10 @@ import pipes
 import sys
 
 if __package__:
-    from ..pylib.common import ErrorExit, SSHAction, PSSHAction, BaseAction, Nodes
+    from ..pylib.common import ErrorExit, SSHAction, PSSHAction, BaseAction, Hosts
 else:
     sys.path.append(os.path.dirname(__file__) + '/..')
-    from pylib.common import ErrorExit, SSHAction, PSSHAction, BaseAction, Nodes
+    from pylib.common import ErrorExit, SSHAction, PSSHAction, BaseAction, Hosts
 
 
 logger = logging.getLogger(__name__)
@@ -59,11 +59,11 @@ class Start(PSSHAction):
         super().__init__(args)
         self.per_disk_instance = args.per_disk_instance
 
-    def start_master(self, host, store_args, listen_addr, webserver_port, master_nodes):
+    def start_master(self, host, store_args, listen_addr, webserver_port, master_hosts):
         self._logger.info("Start master on " + host + ", addr " + listen_addr)
-        master_nodes_str = ",".join(master_nodes)
+        master_hosts_str = ",".join(master_hosts)
         cmd = "sudo -u {user} sh -c \""
-        cmd += "{path}/yugabyte_wrapper {path}/bin/yb-master --rpc_bind_addresses={listen_addr} --master_addresses={master_nodes_str} "
+        cmd += "{path}/yugabyte_wrapper {path}/bin/yb-master --rpc_bind_addresses={listen_addr} --master_addresses={master_hosts_str} "
         cmd += " --db_block_cache_num_shard_bits=7 --webserver_port {webserver_port}"
         cmd += " " + store_args
         cmd += " \""
@@ -72,7 +72,7 @@ class Start(PSSHAction):
             user=self.sudo_user,
             webserver_port=webserver_port,
             listen_addr=listen_addr,
-            master_nodes_str=master_nodes_str)
+            master_hosts_str=master_hosts_str)
         if self.dry_run:
             cmd = "echo '" + cmd + "'"
 
@@ -90,7 +90,7 @@ class Start(PSSHAction):
             host,
             store_args,
             listen_addr,
-            master_nodes,
+            master_hosts,
             psql_port,
             cql_port,
             redis_webserver_port,
@@ -100,11 +100,11 @@ class Start(PSSHAction):
             task_set=None,
             memory_ratio=None):
         self._logger.info("Start server on " + host + ", addr " + listen_addr)
-        master_nodes_str = ",".join(master_nodes)
+        master_hosts_str = ",".join(master_hosts)
         cmd = "sudo -u {user} sh -c \""
         if task_set:
             cmd += "taskset -c " + task_set + " "
-        cmd += "{path}/yugabyte_wrapper {path}/bin/yb-tserver --rpc_bind_addresses={listen_addr} --tserver_master_addrs={master_nodes_str} "
+        cmd += "{path}/yugabyte_wrapper {path}/bin/yb-tserver --rpc_bind_addresses={listen_addr} --tserver_master_addrs={master_hosts_str} "
         cmd += "--pgsql_proxy_webserver_port {psql_webserver_port} --cql_proxy_webserver_port {cql_webserver_port} --webserver_port {webserver_port} --redis_proxy_webserver_port {redis_webserver_port} "
         cmd += store_args
         cmd += " --pgsql_proxy_bind_address {psql_addr}"
@@ -118,7 +118,7 @@ class Start(PSSHAction):
             path=DEPLOY_PATH,
             user=self.sudo_user,
             listen_addr=listen_addr,
-            master_nodes_str=master_nodes_str,
+            master_hosts_str=master_hosts_str,
             psql_addr=LOCAL_IP[host] + ":" + str(psql_port),
             cql_addr=LOCAL_IP[host] + ":" + str(cql_port),
             redis_webserver_port=str(redis_webserver_port),
@@ -137,14 +137,14 @@ class Start(PSSHAction):
         action = SSHAction(Args(host, self))
         action.ssh_cmd(cmd)
 
-    def get_master_nodes(self):
-        return Nodes[:3]
+    def get_master_hosts(self):
+        return Hosts[:3]
 
-    def get_master_nodes_listen(self):
-        join_nodes = []
-        for host in self.get_master_nodes():
-            join_nodes.append(LOCAL_IP[host] + ":" + str(LISTEN_PORT_MASTER))
-        return join_nodes
+    def get_master_hosts_listen(self):
+        join_hosts = []
+        for host in self.get_master_hosts():
+            join_hosts.append(LOCAL_IP[host] + ":" + str(LISTEN_PORT_MASTER))
+        return join_hosts
 
     def run(self):
         super().run()
@@ -153,10 +153,10 @@ class Start(PSSHAction):
         mount_dirs_str = ",".join(mount_dirs)
         store_args = "--fs_data_dirs=" + mount_dirs_str
 
-        master_nodes = self.get_master_nodes_listen()
-        for host in self.get_master_nodes():
+        master_hosts = self.get_master_hosts_listen()
+        for host in self.get_master_hosts():
             listen_host = LOCAL_IP[host] + ":" + str(LISTEN_PORT_MASTER)
-            self.start_master(host, store_args, listen_host, MASTER_WEBSERVER_PORT, master_nodes)
+            self.start_master(host, store_args, listen_host, MASTER_WEBSERVER_PORT, master_hosts)
 
         cores_per_instance = Cores
         memory_ratio_per_instance = 85  # default in yugabyte is 85% for tserver
@@ -164,7 +164,7 @@ class Start(PSSHAction):
             memory_ratio_per_instance = int(85 // len(Disks))
             cores_per_instance = Cores // len(Disks)
 
-        for host in Nodes:
+        for host in Hosts:
             if self.per_disk_instance:
                 start_core = 0
                 current_server_port = LISTEN_PORT_SERVER
@@ -188,7 +188,7 @@ class Start(PSSHAction):
                         host,
                         store_args,
                         listen_host,
-                        master_nodes,
+                        master_hosts,
                         psql_port=current_psql_port,
                         cql_port=current_cql_port,
                         redis_webserver_port=current_redis_webserver_port,
@@ -214,7 +214,7 @@ class Start(PSSHAction):
                     host,
                     store_args,
                     listen_host,
-                    master_nodes,
+                    master_hosts,
                     psql_port=PSQL_PORT,
                     cql_port=CQL_PORT,
                     redis_webserver_port=REDIS_WEBSERVER_PORT,
@@ -284,7 +284,7 @@ class ReturnHosts(BaseAction):
         self.hosts = args.hosts
 
     def run(self):
-        list_hosts = Nodes
+        list_hosts = Hosts
         if self.hosts:
             print(f"{self.hosts}")
         print(' '.join(list_hosts))
@@ -358,7 +358,7 @@ class Main(object):
             return -1
 
         for region in Regions:
-            Nodes.extend(region.Nodes)
+            Hosts.extend(region.Hosts)
 
         if self.args.deploy:
             if not os.path.isfile(self.args.deploy):
