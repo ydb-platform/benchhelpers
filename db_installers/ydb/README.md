@@ -44,7 +44,7 @@ The repository contains [config.yaml](./configs/config.yaml) and [config_dynnode
 ### Start
 The launch is performed in several stages:
 1. `Stop` - Stop YDB if it is running.
-2. `Clean and Format disks` - Format the `Disks` at the `DEPLOY_PATH`/data/<disk_name> path.
+2. `Format disks` - Format the `Disks` at the `DEPLOY_PATH`/data/<disk_name> path.
 3. `Deploy` - Unpack the YDB package.
 4. `Start static nodes` - Start the static nodes.
 5. `Init BS` - Create the database.
@@ -59,6 +59,9 @@ cd <PATH_TO_SCRIPT>
 wget https://binaries.ydb.tech/ydbd-stable-linux-amd64.tar.gz
 ```
 + `<PATH_TO_CONFIG>` - the path to the configuration file, for example [setup_config.sh](setup_config.sh).
+
+For check access to the built-in web interface, open in the browser the `http://<node.ydb.tech>:MON_PORT_BEGIN` URL, 
+where `<node.ydb.tech>` is the FQDN of the server running any static YDB node.
 
 ### Stop
 ```sh

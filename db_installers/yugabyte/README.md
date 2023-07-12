@@ -26,10 +26,9 @@ you can read about these ports on the [Default ports](https://docs.yugabyte.com/
 ### Start
 The launch is performed in several stages:
 1. `Stop` - Stop YugabyteDB if it is running.
-2. `Clean` - Clean the `Disks`.
-3. `Format` - Format the `Disks` at the `DEPLOY_PATH`/data/<disk_name> path.
-4. `Deploy` - Unpack the YugabyteDB package.
-5. `Start` - Start YugabyteDB.
+2. `Format` - Format the `Disks` at the `DEPLOY_PATH`/data/<disk_name> path.
+3. `Deploy` - Unpack the YugabyteDB package.
+4. `Start` - Start YugabyteDB.
 
 ```sh
 cd <PATH_TO_SCRIPT>
@@ -37,6 +36,9 @@ cd <PATH_TO_SCRIPT>
 ```
 + `<PATH_TO_YUGABYTE_PACKAGE>` - the path to the YugabyteDB archive. You can download it from the [Releases](https://docs.yugabyte.com/preview/releases/).
 + `<PATH_TO_CONFIG>` - the path to the configuration file, for example [cluster_config.py](cluster_config.py).
+
+For check access to the built-in web interface, open in the browser the `http://<YUGABYTE_HOST>:<MASTER_WEBSERVER_PORT or SERVER_WEBSERVER_PORT>` URL, 
+where `<YUGABYTE_HOST>` is the FQDN of the server running any YugabyteDB node.
 
 ### Stop
 ```sh
