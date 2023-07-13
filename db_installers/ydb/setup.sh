@@ -99,12 +99,12 @@ if [[ $DYNNODE_COUNT -gt ${#DYNNODE_TASKSET_CPU[@]} ]]; then
 fi
 
 for ind in $(seq 0 $(($DYNNODE_COUNT-1))); do
-  echo "Start dynnodes: $(($ind+1))"
+  echo "Start dynnodes: $((ind+1))"
   $debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "sudo bash -c ' \
       taskset -c ${DYNNODE_TASKSET_CPU[$ind]} nohup \
       sudo LD_LIBRARY_PATH=$YDB_SETUP_PATH/lib $YDB_SETUP_PATH/bin/ydbd server --log-level 3 --grpc-port $((GRPC_PORT++)) --ic-port $((IC_PORT++)) --mon-port $((MON_PORT++)) \
       --yaml-config  $YDB_SETUP_PATH/cfg/config_dynnodes.yaml \
       --tenant /Root/$DATABASE_NAME \
       $NODE_BROKERS \
-      &>$YDB_SETUP_PATH/logs/dyn$(($ind+1)).log &'"
+      &>$YDB_SETUP_PATH/logs/dyn$((ind+1)).log &'"
 done

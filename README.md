@@ -14,6 +14,7 @@ With the help of our scripts, you can greatly facilitate the launch and collecti
 
 ## Requirements
 + Installed `Java13+` on machines where YCSB will be run.
++ Installed `YDB Python SDK`. You can install it with command `pip3 install ydb`.
 + Installed `parallel-ssh` on machine where scripts will be run. We worked with `parallel-ssh` on version `2.3.4`.
 + Requirements for the selected database: [YDB](./db_installers/ydb/README.md#requirements),
 [CockroachDB](./db_installers/cockroach/README.md#requirements), 
