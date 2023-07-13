@@ -13,7 +13,6 @@ unzip_tar() {
   parallel-ssh -t 0 -H "$hosts" "sudo mkdir -p $deploy_path"
   tar_name=$(basename "$tar_path")
   parallel-scp -H "$hosts" "$tar_path" "~"
-  log "sudo tar -xzf $deploy_path/$tar_name -C $deploy_path"
   parallel-ssh -t 0 -H "$hosts" "sudo mv ~/$tar_name $deploy_path; \
                                  sudo tar -xzf $deploy_path/$tar_name --strip-components=1 -C $deploy_path; \
                                  sudo rm -f $deploy_path/$tar_name"
@@ -135,17 +134,17 @@ done
 PATH_TO_SCRIPT=$(dirname "$0")
 
 if [ "$TYPE" == "ydb" ] && [ -z "$YCSB_PATH" ]; then
-  unzip_tar $YCSB_DEPLOY_PATH $YCSB_TAR_PATH $YCSB_HOSTS
+  unzip_tar "$YCSB_DEPLOY_PATH" "$YCSB_TAR_PATH" "$YCSB_HOSTS"
   YCSB_PATH=$YCSB_DEPLOY_PATH
 fi
 
 if [ "$TYPE" == "ydbu" ] && [ -z "$YCSB_PATH" ]; then
-  unzip_tar $YCSB_DEPLOY_PATH $YCSB_TAR_PATH $YCSB_HOSTS
+  unzip_tar "$YCSB_DEPLOY_PATH" "$YCSB_TAR_PATH" "$YCSB_HOSTS"
   YCSB_PATH=$YCSB_DEPLOY_PATH
 fi
 
 if [ "$TYPE" == "cockroach" ] && [ -z "$COCKROACH_PATH" ]; then
-  unzip_tar $COCKROACH_DEPLOY_PATH $COCKROACH_TAR_PATH $YCSB_HOSTS
+  unzip_tar "$COCKROACH_DEPLOY_PATH" "$COCKROACH_TAR_PATH" "$YCSB_HOSTS"
   COCKROACH_PATH=$COCKROACH_DEPLOY_PATH
 fi
 
@@ -168,7 +167,7 @@ if [ "$TYPE" == "yugabyte" ] || [ "$TYPE" == "yugabyteSQL" ]; then
   parallel-ssh -t 0 -H "$YCSB_HOSTS" "sudo mv ~/db.properties $YU_YCSB_DEPLOY_PATH/db.properties"
 
   if [ -n "$YU_YCSB_TAR_PATH" ]; then
-    unzip_tar $YU_YCSB_DEPLOY_PATH $YU_YCSB_TAR_PATH $YCSB_HOSTS
+    unzip_tar "$YU_YCSB_DEPLOY_PATH" "$YU_YCSB_TAR_PATH" "$YCSB_HOSTS"
     YU_YCSB_PATH=$YU_YCSB_DEPLOY_PATH
   fi
 fi
@@ -178,7 +177,7 @@ if [ -n "$THREADS" ]; then
     YCSB_THREADS=$THREADS
 fi
 
-if [ -z $YCSB_THREADS ]; then
+if [ -z "$YCSB_THREADS" ]; then
     YCSB_THREADS=64
 fi
 
@@ -186,7 +185,7 @@ if [ -n "$DE_THREADS" ]; then
     YCSB_THREADS_DE=$DE_THREADS
 fi
 
-if [ -z $YCSB_THREADS_DE ]; then
+if [ -z "$YCSB_THREADS_DE" ]; then
     YCSB_THREADS_DE=512
 fi
 
@@ -196,7 +195,7 @@ fi
 
 if [[ -z "$COCKROACH_INIT_SLEEP_TIME_MINUTES" ]]; then
     # assume 6M rows per minute
-    COCKROACH_INIT_SLEEP_TIME_MINUTES=$(($RECORD_COUNT / 6000000 + 1))
+    COCKROACH_INIT_SLEEP_TIME_MINUTES=$((RECORD_COUNT / 6000000 + 1))
 fi
 
 hosts="$YCSB_HOSTS"
@@ -208,7 +207,7 @@ for host in $hosts; do
 done
 
 # on this host we run "ycsb load"
-load_host=`echo "$hosts" | head -1`
+load_host=$(echo "$hosts" | tr ' ' '\n' | head -1)
 
 ycsb_workloads="$YCSB_PATH/workloads"
 
@@ -260,35 +259,35 @@ if [[ -n "$WORKLOADS" ]]; then
             load_data $LOAD_DATA
         fi
 
-        running_hosts=`echo "$hosts" | head -$YCSB_HOSTS_COUNT | tr '\n' ' '`
-        OP_COUNT=`expr $OP_COUNT_TOTAL / $YCSB_HOSTS_COUNT + 1`
-        run_workloads "$running_hosts" $distribution
+        running_hosts=$(echo "$hosts" | tr ' ' '\n' | head -$YCSB_HOSTS_COUNT | tr '\n' ' ')
+        OP_COUNT=$(expr $OP_COUNT_TOTAL / $YCSB_HOSTS_COUNT + 1)
+        run_workloads "$running_hosts" "$distribution"
     done
 fi
 
 if [[ -n $RUN_WORKLOAD_D ]]; then
-    running_hosts=`echo "$hosts" | head -1 | tr '\n' ' '`
+    running_hosts=$(echo "$hosts" | tr ' ' '\n' | head -1)
     distribution=latest
     if [[ -n "$need_load" ]]; then
-        $debug sleep $SLEEP_TIME
+        $debug sleep "$SLEEP_TIME"
         load_data d
     fi
 
     need_load=1
 
-    $debug sleep $SLEEP_TIME
+    $debug sleep "$SLEEP_TIME"
     OP_COUNT=$OP_COUNT_TOTAL
     run_workload d $YCSB_THREADS_DE "$running_hosts"
 fi
 
 if [[ -n $RUN_WORKLOAD_E ]]; then
-    running_hosts=`echo "$hosts" | head -1 | tr '\n' ' '`
+    running_hosts=$(echo "$hosts" | tr ' ' '\n' | head -1)
     distribution=zipfian
     if [[ -n "$need_load" ]]; then
-        $debug sleep $SLEEP_TIME
+        $debug sleep "$SLEEP_TIME"
         load_data e
     fi
-    $debug sleep $SLEEP_TIME
+    $debug sleep "$SLEEP_TIME"
     OP_COUNT=$OP_COUNT_E
     run_workload e $YCSB_THREADS_DE "$running_hosts"
 fi
