@@ -260,7 +260,7 @@ if [[ -n "$WORKLOADS" ]]; then
     done
 fi
 
-if [[ -n $RUN_WORKLOAD_D ]]; then
+if [[ -n $RUN_WORKLOAD_D ]] && [ "$RUN_WORKLOAD_D" -eq 1 ]; then
     running_hosts=$(echo "$hosts" | tr ' ' '\n' | head -1)
     need_load=1
     distribution=latest
@@ -274,7 +274,7 @@ if [[ -n $RUN_WORKLOAD_D ]]; then
     run_workload d $YCSB_THREADS_DE "$running_hosts"
 fi
 
-if [[ -n $RUN_WORKLOAD_E ]]; then
+if [[ -n $RUN_WORKLOAD_E ]] && [ "$RUN_WORKLOAD_E" -eq 1 ]; then
     running_hosts=$(echo "$hosts" | tr ' ' '\n' | head -1)
     need_load=1
     distribution=zipfian

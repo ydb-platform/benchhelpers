@@ -1,7 +1,9 @@
 # benchhelpers
 
-In this repository you will find scripts that will help with the deployment, launch and performance evaluation of databases
-[YDB](https://ydb.tech/), [CockroachDB](https://www.cockroachlabs.com/), and [YugabyteDB](https://www.yugabyte.com/).
+In this repository, you will find scripts to deploy and evaluate the performance of the 
+[YDB](https://ydb.tech/), [CockroachDB](https://www.cockroachlabs.com/), and [YugabyteDB](https://www.yugabyte.com/) databases.
+Note that our deployment scripts are not suitable for production. 
+
 
 These scripts were used the article [YCSB performance series](https://blog.ydb.tech/ycsb-performance-series-ydb-cockroachdb-and-yugabytedb-f25c077a382b).
 
@@ -10,7 +12,7 @@ YCSB has a problem with the fact that it does not create load efficiently enough
 That is, in order to load machines with databases, one YCSB shooting machine is often not enough. 
 
 ### Decision:
-With the help of our scripts, you can greatly facilitate the launch and collection of YCSB benchmark results.
+With the help of our scripts, you can greatly facilitate the launch on multiple machines and collection of YCSB benchmark results.
 
 ## Requirements
 + Installed `Java13+` on machines where YCSB will be run.
@@ -28,11 +30,10 @@ First, you need to deploy one of the databases on the machines. For more details
 + [CockroachDB](./db_installers/cockroach/README.md)
 + [YugabyteDB](./db_installers/yugabyte/README.md)
 
-Now you can start running the benchmark on the selected database. For best performance,
-it is recommended to run only one database on each server.
+Now you can start running the benchmark on the selected database.
 
 Below is the instruction for running YCSB for [YDB](#ydb), [CockroachDB](#cockroachdb), [YugabyteDB](#yugabytedb),
-but first you need to familiarize yourself with [workload YCSB](#workload).
+but first you need to familiarize yourself with [YCSB workload](#workload).
 
 ### Workload
 
@@ -61,7 +62,7 @@ The [workload.rc](./ycsb/configs/workload.rc) file contains the configuration fo
 Next, you need to configure the YDB config file according to your needs.
 
 Suppose that on `ydb_host1.com` YDB is running.
-We want to shoot at her YCSB from machines `ycsb-host1.com`, `ycsb-host2.com`, etc.
+We want to run YCSB workload against this database from machines `ycsb-host1.com`, `ycsb-host2.com`, etc.
 
 If you look into the config file [ydb.rc](./ycsb/configs/ydb.rc), you can find:
 + `TARGET` - one of the hosts where YDB is running (that is, `ydb_host1.com`).
@@ -75,7 +76,7 @@ If you look into the config file [ydb.rc](./ycsb/configs/ydb.rc), you can find:
 After configuring `ydb.rc` and `workload.rc` (more about it [above](#workload)), you can start YCSB:
 ```sh
 cd <PATH_TO_BENCHHELPERS>/ycsb
-./run_workloads.sh --log-dir <PATH_TO_LOG_DIR> configs/workload.rc configs/ydb.rc
+./run_workloads.sh --name ycsb-ydb-test-run1 --log-dir <PATH_TO_LOG_DIR> configs/workload.rc configs/ydb.rc
 ```
 There are also parameters for `run_workloads.sh`:
 + `--name` - for convenience, the log file names will be suffixed with `<NAME>`.
