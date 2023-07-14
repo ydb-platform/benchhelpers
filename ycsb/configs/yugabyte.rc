@@ -1,0 +1,16 @@
+# any cluster host to use as endpoint
+TARGET="yugabyte_host1.com"
+
+# shooting hosts, i.e. YCSB instance runners
+YCSB_HOSTS="ycsb_host1.com ycsb_host2.com etc"
+
+YCSB_HOSTS_COUNT="<COUNT>"
+
+# YCSB path on YCSB_HOSTS
+# if ycsb is already exist on YCSB_HOSTS, you can write instead of what is below:
+# YU_YCSB_PATH="<PATH_TO_YCSB>"
+YU_YCSB_TAR_PATH="<PATH_TO_YCSB_TAR>"
+YU_YCSB_DEPLOY_PATH="/benchmark/ycsb-yugabyte"
+
+# YUGABYTE path on TARGET
+YU_PATH="<PATH_TO_YUGABYTE>"

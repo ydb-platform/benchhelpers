@@ -1,14 +1,16 @@
-# Config sample for CocroachDB cluster with 3 nodes
+# Config sample for CockroachDB cluster with 3 nodes
 
+DEPLOY_PATH = "/benchmark/cockroach"
+DEPLOY_TMP_PATH = "/var/tmp"
 
-KIND_NVME = 0
-KIND_SSD = 1
+HA_PROXY_HOSTS = ["host4.com", "host5.com"]
+HA_PROXY_SETUP_PATH = "/benchmark/haproxy"
 
 
 class Region:
-    def __init__(self, name, nodes):
-        self.Nodes = nodes
+    def __init__(self, name, hosts):
         self.Name = name
+        self.Hosts = hosts
 
 
 Regions = [
@@ -17,14 +19,16 @@ Regions = [
     Region("us-west-3", ["host3.com", ]),
 ]
 
+LISTEN_PORT = 26257
+HTTP_PORT = 8080
+
 Disks = [
     "/dev/nvme0n1p2",
     "/dev/nvme1n1p2",
     "/dev/nvme2n1p2",
     "/dev/nvme3n1p2",
 ]
-
-Kind = KIND_NVME
+INIT_PER_DISK = 1
 
 # per host
 Cores = 128
