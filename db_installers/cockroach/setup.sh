@@ -1,33 +1,26 @@
 #!/bin/bash
 
-HA_PROXY_BIN="./haproxy"
-
-# i.e. homedir
-YCSB_SETUP_PATH=""
-
-# Don't change, value also used in cockroach_wrapper
-COCKROACH_SETUP_PATH="/place/berkanavt/cockroach"
-
-# TODO: make it configurable
-YCSB_NODES="node1 node2 node3"
-
-# TODO: take from cluster config (i.e. ./control.py -c "$COCKROACH_CONFIG" --list-hosts)
-INIT_NODE=""
-CLUSTER=""
+set -e
 
 usage() {
-    echo "Usage: setup_vla_dev04.sh --package <PATH_TO_COCKROACH_PACKAGE>"
+    echo "Usage: setup.sh --package <PATH_TO_COCKROACH_PACKAGE> --config <PATH_TO_CLUSTER_CONFIG> --ha-bin <PATH_TO_HA_PROXY_BIN>"
 }
 
-while [[ "$#" > 0 ]]; do case $1 in
+if ! command -v parallel-ssh &> /dev/null
+then
+    echo "'parallel-ssh' could not be found in your PATH. You can install it using the command: 'sudo apt install pssh'."
+    exit 1
+fi
+
+while [[ $# -gt 0 ]]; do case $1 in
     --package)
         COCKROACH_TAR=$2
         shift;;
     --config)
         COCKROACH_CONFIG=$2
         shift;;
-    --ha-config)
-        HA_PROXY_CONFIG=$2
+    --ha-bin)
+        HA_PROXY_BIN=$2
         shift;;
     --help|-h)
         usage
@@ -44,55 +37,69 @@ if [[ ! -e "$COCKROACH_CONFIG" ]]; then
     exit 1
 fi
 
-if [[ ! -e "$HA_PROXY_CONFIG" ]]; then
-    echo "No ha proxy config in path: $HA_PROXY_CONFIG"
-    exit 1
-fi
-
-if [[ ! -e "$HA_PROXY_BIN" ]]; then
+if [[ ! -x "$HA_PROXY_BIN" ]]; then
     echo "No ha proxy bin in path: $HA_PROXY_BIN"
     exit 1
 fi
 
-if ! command -v pssh &> /dev/null
-then
-    echo "`pssh` could not be found in your PATH"
+if [ -n "$INIT_PER_DISK" ] || [ "$INIT_PER_DISK" != "0" ]; then
+  START_ARGS="--per-disk-instance"
+fi
+
+PATH_TO_SCRIPT=$(dirname "$0")
+
+COCKROACH_DEPLOY_PATH=$("$PATH_TO_SCRIPT"/control.py -c $COCKROACH_CONFIG --deploy-path)
+COCKROACH_NODES=$("$PATH_TO_SCRIPT"/control.py -c $COCKROACH_CONFIG --list-hosts)
+COCKROACH_PORT=$("$PATH_TO_SCRIPT"/control.py -c $COCKROACH_CONFIG --listen-port)
+HA_PROXY_NODES=$("$PATH_TO_SCRIPT"/control.py -c $COCKROACH_CONFIG --ha-proxy-hosts)
+HA_PROXY_SETUP_PATH=$("$PATH_TO_SCRIPT"/control.py -c $COCKROACH_CONFIG --ha-proxy-setup-path)
+INIT_NODE=$(echo "$COCKROACH_NODES" | tr ' ' '\n' | head -1)
+
+
+if [[ ! -v COCKROACH_NODES ]]; then
+    echo "COCKROACH_NODES is not set in config."
     exit 1
 fi
 
-HA_PROXY_NODES=$YCSB_NODES
 for node in $HA_PROXY_NODES; do
-    HA_PROXY_NODES_WITH_PATH="$HA_PROXY_NODES_WITH_PATH ${node}:$YCSB_SETUP_PATH"
+    HA_PROXY_NODES_WITH_PATH="$HA_PROXY_NODES_WITH_PATH ${node}:$HA_PROXY_SETUP_PATH"
 done
 
-for node in $YCSB_NODES; do
-    YCSB_NODES_WITH_PATH="$YCSB_NODES_WITH_PATH ${node}:$YCSB_SETUP_PATH"
-done
 
 echo "Deploy Cockroach"
 
-pssh scp -p 30 --no-bastion --no-yubikey ./cockroach_wrapper $CLUSTER:
-pssh run -ap30 --no-bastion --no-yubikey "sudo mkdir -p $COCKROACH_SETUP_PATH; sudo mv cockroach_wrapper $COCKROACH_SETUP_PATH" $CLUSTER
-./control.py -c "$COCKROACH_CONFIG" --format
-./control.py -c "$COCKROACH_CONFIG" --deploy "$COCKROACH_TAR"
-./control.py -c "$COCKROACH_CONFIG" --start --per-disk-instance
-./control.py -c "$COCKROACH_CONFIG" --init --hosts "$INIT_NODE"
+parallel-scp -H "$COCKROACH_NODES $HA_PROXY_NODES" -p 30 $PATH_TO_SCRIPT/cockroach_wrapper '~'
+parallel-ssh -H "$COCKROACH_NODES $HA_PROXY_NODES" -p 30 "sudo mkdir -p $COCKROACH_DEPLOY_PATH/logs; sudo mv ~/cockroach_wrapper $COCKROACH_DEPLOY_PATH"
+
+"$PATH_TO_SCRIPT"/control.py -c "$COCKROACH_CONFIG" --stop
+"$PATH_TO_SCRIPT"/control.py -c "$COCKROACH_CONFIG" --format
+"$PATH_TO_SCRIPT"/control.py -c "$COCKROACH_CONFIG" --deploy "$COCKROACH_TAR" --hosts "$COCKROACH_NODES $HA_PROXY_NODES"
+"$PATH_TO_SCRIPT"/control.py -c "$COCKROACH_CONFIG" --start "$START_ARGS"
+"$PATH_TO_SCRIPT"/control.py -c "$COCKROACH_CONFIG" --init --hosts "$INIT_NODE"
 sleep 10s
 
-echo "Deploy Cockroach to shooting nodes"
-pssh scp -p 30 --no-bastion --no-yubikey "$COCKROACH_TAR" $YCSB_NODES_WITH_PATH
-tar_name=`basename $COCKROACH_TAR`
-dir_name=`echo $tar_name | sed 's/.tgz//'`
-pssh run -ap 30 --no-bastion --no-yubikey "rm -rf cockroach; tar xzf $tar_name; mv $dir_name cockroach" $YCSB_NODES
 
 echo "Deploy HAProxy"
 
 # !!! this assumes no other HAProxy on these slices
-pssh run -ap30 --no-bastion --no-yubikey "sudo killall haproxy &>/dev/null" $HA_PROXY_NODES
+if [ -n $HA_PROXY_BIN ]; then
+  parallel-ssh -H "$HA_PROXY_NODES" -p 30 "sudo mkdir -p $HA_PROXY_SETUP_PATH"
+  parallel-scp -H "$HA_PROXY_NODES" -p 30 "$HA_PROXY_BIN" $HA_PROXY_SETUP_PATH
+fi
 
-pssh scp -p 30 --no-bastion --no-yubikey "$HA_PROXY_BIN" $HA_PROXY_NODES_WITH_PATH
-pssh scp -p 30 --no-bastion --no-yubikey "$HA_PROXY_CONFIG" $HA_PROXY_NODES_WITH_PATH
+# generate haproxy.cfg
+parallel-ssh -H "$HA_PROXY_NODES" -p 30 "cd $HA_PROXY_SETUP_PATH; $COCKROACH_DEPLOY_PATH/cockroach gen haproxy --insecure --host=$INIT_NODE --port=$COCKROACH_PORT"
+
+# change maxconn to 250000
+parallel-ssh -H "$HA_PROXY_NODES" -p 30 "echo \"\$(cat $HA_PROXY_SETUP_PATH/haproxy.cfg | sed '/[space]*maxconn/s/4096/250000/' | sed 's/defaults/defaults\n    maxconn\t\t250000/')\" > $HA_PROXY_SETUP_PATH/haproxy.cfg"
+
+
+if [ -n "$HA_PROXY_SETUP_PATH" ]; then
+  HA_PROXY="$HA_PROXY_SETUP_PATH/haproxy"
+else
+  HA_PROXY="haproxy"
+fi
 
 echo "Start HAProxy"
-HA_PROXY_CONFIG_NAME=`basename $HA_PROXY_CONFIG`
-pssh run -ap30 --no-bastion --no-yubikey  "sudo -u root sh -c 'ulimit -n 500000; cd $YCSB_SETUP_PATH; pkill -9 haproxy; ./haproxy -q -D -f $HA_PROXY_CONFIG_NAME'" $HA_PROXY_NODES
+HA_PROXY_CONFIG_NAME="haproxy.cfg"
+parallel-ssh -H "$HA_PROXY_NODES" -p 30 "sudo -u root sh -c 'ulimit -n 500000; cd $HA_PROXY_SETUP_PATH; $HA_PROXY -q -D -f $HA_PROXY_CONFIG_NAME'"
