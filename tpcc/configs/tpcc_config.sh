@@ -12,6 +12,9 @@ COCKROACH_TAR="<PATH>"
 # Path to deploy Cockroach on TPCC_HOSTS
 COCKROACH_DEPLOY_PATH="<PATH>"
 
+# Path to directory with binary "workload" on machine where script will be run
+WORKLOAD_PATH="~"
+
 TPCC_HOSTS="tpcc_host1.com tpcc_host2.com tpcc_host3.com"
 WAREHOUSES=1000
 RAMP=4m

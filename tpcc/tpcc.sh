@@ -97,6 +97,7 @@ $debug parallel-ssh -t 0 -H "$TPCC_HOSTS" "cd $COCKROACH_DEPLOY_PATH; ulimit -n 
                                                                         --duration=$DURATION \
                                                                         --histograms=workload.histogram.ndjson \
                                                                         $COCKROACH_ADDRS"
+$debug sleep 5s
 
 echo "Collect results"
 for index in "${!TPCC_LIST[@]}"
@@ -107,6 +108,8 @@ do
     $debug parallel-ssh -H "${TPCC_LIST[0]}" "sudo mv workload$index.histogram.ndjson $COCKROACH_DEPLOY_PATH"
 done
 
-$debug parallel-ssh -t 0 -P -H "${TPCC_LIST[0]}" "cd $COCKROACH_DEPLOY_PATH; sudo ./cockroach workload debug tpcc-merge-results \
-                                                                              --warehouses=$WAREHOUSES \
-                                                                              workload*.histogram.ndjson"
+$debug parallel-scp -t 0 -H "${TPCC_LIST[0]}" "$WORKLOAD_PATH/workload" "~"
+$debug parallel-ssh -t 0 -P -H "${TPCC_LIST[0]}" "sudo mv ~/workload $COCKROACH_DEPLOY_PATH;  \
+                                                  sudo $COCKROACH_DEPLOY_PATH/workload debug tpcc-merge-results \
+                                                      --warehouses=$((WAREHOUSES*${#TPCC_LIST[@]})) \
+                                                      $COCKROACH_DEPLOY_PATH/workload*.histogram.ndjson"
