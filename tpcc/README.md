@@ -26,7 +26,7 @@ First, you need to configure [tpcc_config.sh](configs/tpcc_config.sh).
 + `WORKLOAD_PATH` - the path to directory with binary file `workload`on the machine where the script will be run.
 You can view instructions for building from source [here](https://wiki.crdb.io/wiki/spaces/CRDB/pages/181338446/Getting+and+building+CockroachDB+from+source)(the page is currently timing out) so you can run `./dev build workload`. 
 + `TPCC_HOSTS` - a list of hosts on which TPC-C will be run.
-+ `WAREHOUSES` - the number of TPC-C warehouses.
++ `WAREHOUSES` - the number of TPC-C warehouses for each instance.
 + `RAMP` - the duration over which to ramp up load.
 + `DURATION` - the duration to run, with a required time unit suffix.
 
