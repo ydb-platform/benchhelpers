@@ -38,9 +38,20 @@ also see how they were configured during the testing of CockroachDB
 [here](https://www.cockroachlabs.com/docs/v23.1/performance-benchmarking-with-tpcc-large#step-3-configure-the-cluster).
 
 ### Start
+The launch is performed in several stages:
+1. Deploy
+2. Configure TPC-C importing
+3. Import the TPC-C dataset (and Drop TPC-C tables)
+4. Run TPC-C
+5. Collect results
+
 
 ```shell
 cd <PATH_TO_SCRIPT>
-./tpcc.sh --config configs/tpcc_config.sh [--cluster-config configs/cluster_config.sh | --without-import]
+./tpcc.sh --config configs/tpcc_config.sh [--cluster-config configs/cluster_config.sh | ... ]
 ```
-`--cluster-config` and `--without-import` are optional.
+All parameters except `--config` are optional.
++ `--cluster-config` - without this parameter, there will be no stage 2.
++ `--without-import` - with this parameter, there will be no stage 3.
++ `--only-import` - with this parameter, there will be no stage 4 and 5.
++ `--collect-result` - with this parameter, there will be only stage 5.

@@ -10,7 +10,31 @@ then
     exit 1
 fi
 
+result() {
+  echo "Collect results"
+  for index in "${!TPCC_LIST[@]}"
+  do
+      $debug parallel-ssh -t 0 -H "${TPCC_LIST[index]}" "sudo mv $COCKROACH_DEPLOY_PATH/workload.histogram.ndjson $COCKROACH_DEPLOY_PATH/workload$index.histogram.ndjson;"
+      $debug scp "${TPCC_LIST[index]}":"$COCKROACH_DEPLOY_PATH"/workload"$index".histogram.ndjson .
+      $debug scp ./workload"$index".histogram.ndjson "${TPCC_LIST[0]}":~
+      $debug parallel-ssh -t 0 -H "${TPCC_LIST[0]}" "sudo mv workload$index.histogram.ndjson $COCKROACH_DEPLOY_PATH"
+  done
+
+  ALL_WAREHOUSES=$((WAREHOUSES*${#TPCC_LIST[@]}))
+  file_name="$(date +%Y%m%d_%H%M)_$ALL_WAREHOUSES.res"
+
+  $debug scp "$WORKLOAD_PATH"/workload "${TPCC_LIST[0]}":~
+  $debug parallel-ssh -t 0 -P -H "${TPCC_LIST[0]}" "sudo mv ~/workload $COCKROACH_DEPLOY_PATH;  \
+                                                    cd $COCKROACH_DEPLOY_PATH;
+                                                    sudo ./workload debug tpcc-merge-results \
+                                                        --warehouses=$ALL_WAREHOUSES \
+                                                        ./workload*.histogram.ndjson | sudo tee $file_name;
+                                                    echo Result on ${TPCC_LIST[0]}:$COCKROACH_DEPLOY_PATH/$file_name"
+}
+
 import_dataset=1
+only_import=0
+collect_result=0
 
 while [[ $# -gt 0 ]]; do case $1 in
     --config)
@@ -21,6 +45,10 @@ while [[ $# -gt 0 ]]; do case $1 in
         shift;;
     --without-import)
         import_dataset=0;;
+    --only-import)
+        only_import=1;;
+    --collect-result)
+        collect_result=1;;
 esac; shift; done
 
 if [[ ! -e "$TPCC_CONFIG" ]]; then
@@ -30,16 +58,19 @@ fi
 
 source "$TPCC_CONFIG"
 
+COCKROACH_HOST=$(echo "$COCKROACH_HOSTS" | tr ' ' '\n' | head -1)
+IFS=', ' read -r -a TPCC_LIST <<< "$TPCC_HOSTS"
+
+if [ "$collect_result" -eq 1 ]; then
+  result
+  exit 0
+fi
 
 echo "Deploy"
 $debug parallel-ssh -H "$TPCC_HOSTS" -t 0 "sudo mkdir -p $COCKROACH_DEPLOY_PATH"
 $debug parallel-scp -H "$TPCC_HOSTS" -t 0 "$COCKROACH_TAR" "~"
 $debug parallel-ssh -H "$TPCC_HOSTS" -t 0 "sudo tar -xzf ~/$(basename "$COCKROACH_TAR") --strip-component=1 -C $COCKROACH_DEPLOY_PATH; \
                                           rm -f $(basename "$COCKROACH_TAR")"
-
-
-COCKROACH_HOST=$(echo "$COCKROACH_HOSTS" | tr ' ' '\n' | head -1)
-IFS=', ' read -r -a TPCC_LIST <<< "$TPCC_HOSTS"
 
 LOAD_DATASET_ARGS="--warehouses=$WAREHOUSES"
 
@@ -85,6 +116,9 @@ if [ $import_dataset -eq 1 ]; then
                                   $LOAD_DATASET_ARGS \
                                   'postgres://root@$COCKROACH_HOST:$COCKROACH_LISTEN_PORT?sslmode=disable'"
   $debug sleep 5s
+  if [ $only_import -eq 1 ]; then
+    exit 0
+  fi
 fi
 
 
@@ -97,19 +131,5 @@ $debug parallel-ssh -t 0 -H "$TPCC_HOSTS" "cd $COCKROACH_DEPLOY_PATH; ulimit -n 
                                                                         --duration=$DURATION \
                                                                         --histograms=workload.histogram.ndjson \
                                                                         $COCKROACH_ADDRS"
-$debug sleep 5s
 
-echo "Collect results"
-for index in "${!TPCC_LIST[@]}"
-do
-    $debug parallel-ssh -H "${TPCC_LIST[index]}" "sudo mv $COCKROACH_DEPLOY_PATH/workload.histogram.ndjson $COCKROACH_DEPLOY_PATH/workload$index.histogram.ndjson;"
-    $debug scp "${TPCC_LIST[index]}":"$COCKROACH_DEPLOY_PATH"/workload"$index".histogram.ndjson .
-    $debug scp ./workload"$index".histogram.ndjson "${TPCC_LIST[0]}":~
-    $debug parallel-ssh -H "${TPCC_LIST[0]}" "sudo mv workload$index.histogram.ndjson $COCKROACH_DEPLOY_PATH"
-done
-
-$debug parallel-scp -t 0 -H "${TPCC_LIST[0]}" "$WORKLOAD_PATH/workload" "~"
-$debug parallel-ssh -t 0 -P -H "${TPCC_LIST[0]}" "sudo mv ~/workload $COCKROACH_DEPLOY_PATH;  \
-                                                  sudo $COCKROACH_DEPLOY_PATH/workload debug tpcc-merge-results \
-                                                      --warehouses=$((WAREHOUSES*${#TPCC_LIST[@]})) \
-                                                      $COCKROACH_DEPLOY_PATH/workload*.histogram.ndjson"
+result
