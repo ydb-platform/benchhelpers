@@ -14,21 +14,19 @@ result() {
   echo "Collect results"
   for index in "${!TPCC_LIST[@]}"
   do
-      $debug parallel-ssh -t 0 -H "${TPCC_LIST[index]}" "sudo mv $COCKROACH_DEPLOY_PATH/workload.histogram.ndjson $COCKROACH_DEPLOY_PATH/workload$index.histogram.ndjson;"
-      $debug scp "${TPCC_LIST[index]}":"$COCKROACH_DEPLOY_PATH"/workload"$index".histogram.ndjson .
-      $debug scp ./workload"$index".histogram.ndjson "${TPCC_LIST[0]}":~
-      $debug parallel-ssh -t 0 -H "${TPCC_LIST[0]}" "sudo mv workload$index.histogram.ndjson $COCKROACH_DEPLOY_PATH"
+      $debug parallel-ssh -t 0 -H "${TPCC_LIST[index]}" "mv $COCKROACH_DEPLOY_PATH/workload.histogram.ndjson $COCKROACH_DEPLOY_PATH/workload$index.histogram.ndjson;"
+      $debug scp "${TPCC_LIST[index]}":"$COCKROACH_DEPLOY_PATH"/workload"$index".histogram.ndjson "${TPCC_LIST[0]}":"$COCKROACH_DEPLOY_PATH"
   done
 
   ALL_WAREHOUSES=$((WAREHOUSES*${#TPCC_LIST[@]}))
   file_name="$(date +%Y%m%d_%H%M)_$ALL_WAREHOUSES.res"
 
   $debug scp "$WORKLOAD_PATH"/workload "${TPCC_LIST[0]}":~
-  $debug parallel-ssh -t 0 -P -H "${TPCC_LIST[0]}" "sudo mv ~/workload $COCKROACH_DEPLOY_PATH;  \
+  $debug parallel-ssh -t 0 -P -H "${TPCC_LIST[0]}" "mv ~/workload $COCKROACH_DEPLOY_PATH;  \
                                                     cd $COCKROACH_DEPLOY_PATH;
-                                                    sudo ./workload debug tpcc-merge-results \
+                                                    ./workload debug tpcc-merge-results \
                                                         --warehouses=$ALL_WAREHOUSES \
-                                                        ./workload*.histogram.ndjson | sudo tee $file_name;
+                                                        ./workload*.histogram.ndjson | tee $file_name;
                                                     echo Result on ${TPCC_LIST[0]}:$COCKROACH_DEPLOY_PATH/$file_name"
 }
 
@@ -67,10 +65,10 @@ if [ "$collect_result" -eq 1 ]; then
 fi
 
 echo "Deploy"
-$debug parallel-ssh -H "$TPCC_HOSTS" -t 0 "sudo mkdir -p $COCKROACH_DEPLOY_PATH"
+$debug parallel-ssh -H "$TPCC_HOSTS" -t 0 "mkdir -p $COCKROACH_DEPLOY_PATH"
 $debug parallel-scp -H "$TPCC_HOSTS" -t 0 "$COCKROACH_TAR" "~"
-$debug parallel-ssh -H "$TPCC_HOSTS" -t 0 "sudo tar -xzf ~/$(basename "$COCKROACH_TAR") --strip-component=1 -C $COCKROACH_DEPLOY_PATH; \
-                                          rm -f $(basename "$COCKROACH_TAR")"
+$debug parallel-ssh -H "$TPCC_HOSTS" -t 0 "tar -xzf ~/$(basename "$COCKROACH_TAR") --strip-component=1 -C $COCKROACH_DEPLOY_PATH; \
+                                           rm -f $(basename "$COCKROACH_TAR")"
 
 LOAD_DATASET_ARGS="--warehouses=$WAREHOUSES"
 
@@ -89,9 +87,9 @@ if [[ -e "$CLUSTER_CONFIG" ]]; then
                     SET CLUSTER SETTING kv.range_merge.queue_enabled = $RANGE_MERGE_QUEUE_ENABLED;
                     ALTER RANGE default CONFIGURE ZONE USING gc.ttlseconds = $GC_TTLSECONDS;"
 
-    $debug parallel-ssh -H "$COCKROACH_HOST" "echo \"$cluster_config\" | sudo tee query.sql; \
-                                              sudo $PATH_TO_COCKROACH/cockroach sql --insecure --file query.sql --host=$COCKROACH_HOST
-                                              sudo rm -f query.sql"
+    $debug parallel-ssh -H "$COCKROACH_HOST" "echo \"$cluster_config\" | tee query.sql; \
+                                              $PATH_TO_COCKROACH/cockroach sql --insecure --file query.sql --host=$COCKROACH_HOST
+                                              rm -f query.sql"
 
     LOAD_DATASET_ARGS="$LOAD_DATASET_ARGS --replicate-static-columns --partition-strategy=leases"
 fi
@@ -125,7 +123,7 @@ fi
 COCKROACH_ADDRS=$(echo "$COCKROACH_HOSTS" | tr ' ' '\n' | sed "s#.*#postgres://root@&:$COCKROACH_LISTEN_PORT?sslmode=disable#" | tr '\n' ' ')
 
 echo "Run TPC-C"
-$debug parallel-ssh -t 0 -H "$TPCC_HOSTS" "cd $COCKROACH_DEPLOY_PATH; ulimit -n 500000 && sudo ./cockroach workload run tpcc \
+$debug parallel-ssh -t 0 -H "$TPCC_HOSTS" "cd $COCKROACH_DEPLOY_PATH; ulimit -n 500000 && ./cockroach workload run tpcc \
                                                                         --warehouses=$WAREHOUSES \
                                                                         --ramp=$RAMP \
                                                                         --duration=$DURATION \
