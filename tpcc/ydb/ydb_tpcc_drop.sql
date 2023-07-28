@@ -1,0 +1,9 @@
+DROP table `warehouse`;
+DROP table `item`;
+DROP table `stock`;
+DROP table `district`;
+DROP table `customer`;
+DROP table `history`;
+DROP table `oorder`;
+DROP table `new_order`;
+DROP table `order_line`;
