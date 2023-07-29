@@ -738,26 +738,60 @@ class WaitIndicesReady:
         ]
 
         while True:
-            result = subprocess.run(command, capture_output=True, text=True)
+            for i in range(10):
+                result = subprocess.run(command, capture_output=True, text=True)
+                if result.returncode != 0:
+                    time.sleep(10)
+
             if result.returncode != 0:
                 print("Error getting index status: {}".format(result.stderr), file=sys.stderr)
                 sys.exit(1)
+
             output = result.stdout
             if output == "":
                 print("Error getting index status: empty output", file=sys.stderr)
                 sys.exit(1)
+
             output = json.loads(output)
             operations = output["operations"]
-            has_not_ready = False
+
+            bad_states = (
+                "STATE_UNSPECIFIED",
+                "STATE_CANCELLATION",
+                "STATE_CANCELLED",
+                "STATE_REJECTION",
+                "STATE_REJECTED",
+            )
+
+            in_progress_states = (
+                "STATE_UNSPECIFIED",
+                "STATE_PREPARING",
+                "STATE_TRANSFERING_DATA",
+                "STATE_APPLYING",
+            )
+
+            all_ready = False
             for op in operations:
-                if op["metadata"]["state"] == "STATE_DONE":
-                    if op["status"] != "SUCCESS":
-                        print("Error creating indices: {}".format(op), file=sys.stderr)
-                        sys.exit(1)
+                if op["metadata"]["state"] in bad_states:
+                    print(f"Error creating indices: {operations}", file=sys.stderr)
+                    sys.exit(1)
+
+                if op["metadata"]["state"] in in_progress_states:
+                    break
+
+                if "ready" in op:
                     if not op["ready"]:
-                        has_not_ready = True
                         break
-            if not has_not_ready:
+
+                if op["metadata"]["state"] == "STATE_DONE":
+                    if "status" in op:
+                        if op["status"] != "SUCCESS":
+                            print("Error creating indices: {}".format(op), file=sys.stderr)
+                            sys.exit(1)
+            else:
+                all_ready = True
+
+            if all_ready:
                 time.sleep(10) # hack, because we have a small issue with reporting OK
                 print("Indices created")
                 break
