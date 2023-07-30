@@ -102,6 +102,9 @@ while [[ "$#" > 0 ]]; do case $1 in
     --with-flames)
         with_flames=1
         ;;
+    --with-perf-stat)
+        with_perf_stat=1
+        ;;
     --log-dir)
         log_dir=$2
         shift;;
@@ -436,6 +439,13 @@ for sample_host in $ydb_hosts; do
     log "Sampling pressure on $sample_host"
     ssh $sample_host "tail /proc/pressure/*"
 done
+
+if [[ -n "$with_perf_stat" ]]; then
+    for perf_host in $ydb_hosts; do
+        log "Running perf stat on $perf_host"
+        ssh $perf_host 'sudo perf stat -a -d -d -d -- sleep 10'
+    done
+fi
 
 for pid in "${pids[@]}"; do
     wait $pid
