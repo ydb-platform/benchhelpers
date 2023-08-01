@@ -8,7 +8,7 @@ usage() {
 
 if ! command -v parallel-ssh &> /dev/null
 then
-    echo "'parallel-ssh' could not be found in your PATH. You can install it using the command: 'pip install parallel-ssh'."
+    echo "'parallel-ssh' could not be found in your PATH. You can install it using the command: 'sudo apt install pssh'."
     exit 1
 fi
 
