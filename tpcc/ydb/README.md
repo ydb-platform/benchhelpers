@@ -9,7 +9,7 @@ The TPC-C setup involves the following components:
 
 Prerequisites to run helper scripts:
 1. Install pssh.
-2. Install the ydb and numpy Python packages using `pip3 install ydb numpy`.
+2. Install the ydb, numpy and requests Python packages using `pip3 install ydb numpy requests`.
 3. [Download](https://ydb.tech/en/docs/downloads/) the latest YDB CLI and place it somewhere in your PATH.
 4. Prepare a file containing a list of TPC-C hosts (separated by new lines) to run the TPC-C client on. Note that if your machine has multiple cores, you can run multiple instances of TPC-C on the same machine. For example:
 
