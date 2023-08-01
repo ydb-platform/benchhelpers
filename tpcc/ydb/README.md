@@ -25,7 +25,9 @@ EOF
 Prerequisites to run TPC-C client:
 1. Install Java-17.
 2. Install YDB's [fork](https://github.com/ydb-platform/benchbase) of benchbase into your home foler on each machine.
-You have two options: build it on your own or use the prebuilt benchbase-ydb.tgz available in this directory. To install the package, follow these steps:
+You have two options: build it on your own or use the prebuilt benchbase-ydb.tgz available in this directory. If you want to use prebuilt package, you should have [git-lfs](https://git-lfs.com/) installed before clonning this repository, or you can just download it using github web interface.
+
+To install the package, execute the following:
 ```
 ./upload_benchbase.sh --package benchbase-ydb.tgz --hosts tpcc.hosts
 ```
