@@ -127,7 +127,7 @@ class YdbConnection:
             self.driver = ydb.Driver(driver_config)
             try:
                 self.driver.wait(timeout=5)
-            except futures.TimeoutError:
+            except concurrent.futures.TimeoutError:
                 print("Connect failed to YDB", file=sys.stderr)
                 print("Last reported errors by discovery:", file=sys.stderr)
                 print(self.driver.discovery_debug_details(), file=sys.stderr)
