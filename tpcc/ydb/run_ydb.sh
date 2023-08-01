@@ -23,6 +23,7 @@ usage() {
     echo "    --config <config_template> --ydb-host <ydb_host> --database <DB> \\"
     echo "    --hosts <hosts_file> \\"
     echo "    [--compaction-threads <compaction_threads>] \\"
+    echo "    [--run-phase-only] \\"
     echo "    [--log-dir <log_dir>] \\"
     echo "    [--time <time> --warmup <warmup>] \\"
     echo "    [--loader-threads <loader_threads>] \\"
@@ -79,6 +80,10 @@ while [[ "$#" > 0 ]]; do case $1 in
         no_load=1
         ;;
     --no-drop-create)
+        no_drop_create=1
+        ;;
+    --run-phase-only)
+        no_load=1
         no_drop_create=1
         ;;
     --hosts)
