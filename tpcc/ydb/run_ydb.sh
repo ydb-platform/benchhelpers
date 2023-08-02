@@ -203,7 +203,7 @@ fi
 
 log "Killing previous tpcc processes"
 
-parallel-ssh -h $unique_hosts -i 'pkill -9 -f tpcc' &>/dev/null
+parallel-ssh -h $unique_hosts -i "pgrep -f -l tpcc | grep -v run_ydb.sh | awk '{print \$1;}' | xargs kill" &>/dev/null
 
 rm -f $unique_hosts
 
