@@ -14,7 +14,7 @@ usage() {
 
 if ! command -v parallel-ssh &> /dev/null
 then
-    echo "'parallel-ssh' could not be found in your PATH. You can install it using the command: 'pip install parallel-ssh'."
+    echo "'parallel-ssh' could not be found in your PATH. You can install it using the command: 'sudo apt install pssh'."
     exit 1
 fi
 
@@ -58,11 +58,6 @@ if [ $STOP_YDB -eq 1 ]; then
   exit 0
 fi
 
-echo "Format disks"
-for d in "${DISKS[@]}"; do
-  $debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "sudo LD_LIBRARY_PATH=$YDB_SETUP_PATH/lib $YDB_SETUP_PATH/bin/ydbd admin bs disk obliterate $d"
-done
-
 echo "Deploy"
 $debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "sudo mkdir -p $YDB_SETUP_PATH/cfg $YDB_SETUP_PATH/logs"
 $debug parallel-scp -H "$HOSTS" -t 0 -p 20 "$YDBD_TAR" "~"
@@ -74,6 +69,11 @@ $debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "sudo mv ~/config.yaml $YDB_SETUP_PAT
 $debug parallel-scp -H "$HOSTS" -t 0 -p 20 $CONFIG_DIR/config_dynnodes.yaml "~"
 $debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "sudo mv ~/config_dynnodes.yaml $YDB_SETUP_PATH/cfg"
 
+echo "Format disks"
+for d in "${DISKS[@]}"; do
+  $debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "sudo LD_LIBRARY_PATH=$YDB_SETUP_PATH/lib $YDB_SETUP_PATH/bin/ydbd admin bs disk obliterate $d"
+done
+
 GRPC_PORT=$GRPC_PORT_BEGIN
 IC_PORT=$IC_PORT_BEGIN
 MON_PORT=$MON_PORT_BEGIN
@@ -84,7 +84,18 @@ echo "Start static nodes"
 $debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "sudo LD_LIBRARY_PATH=$YDB_SETUP_PATH/lib bash -c 'nohup \
     $YDB_SETUP_PATH/bin/ydbd server --log-level 3 --tcp --yaml-config $YDB_SETUP_PATH/cfg/config.yaml \
     --grpc-port $((GRPC_PORT++)) --ic-port $((IC_PORT++)) --mon-port $((MON_PORT++)) --node static &>$YDB_SETUP_PATH/logs/static.log &'"
-$debug sleep 10s
+$debug sleep 1m
+
+IFS=', ' read -r -a HOSTS_LIST <<< "$HOSTS"
+for index in "${!HOSTS_LIST[@]}"
+do
+  $debug ssh "${HOSTS_LIST[index]}" "pgrep ydbd" > /dev/null
+  if [[ "$?" -eq 1 ]]; then
+    echo "ERROR: On ${HOSTS_LIST[index]} the static node did not start with this error:"
+    $debug ssh "${HOSTS_LIST[index]}" "cat $YDB_SETUP_PATH/logs/static.log"
+  fi
+done
+
 
 echo "Init BS"
 $debug parallel-ssh -H "$INIT_HOST" -t 0 -p 20  \
@@ -108,3 +119,14 @@ for ind in $(seq 0 $(($DYNNODE_COUNT-1))); do
       $NODE_BROKERS \
       &>$YDB_SETUP_PATH/logs/dyn$((ind+1)).log &'"
 done
+$debug sleep 30s
+
+for index in "${!HOSTS_LIST[@]}"
+do
+  $debug ssh "${HOSTS_LIST[index]}" "pgrep -f 'ydbd server'" > /dev/null
+  if [[ "$?" -eq 1 ]]; then
+    echo "ERROR: On ${HOSTS_LIST[index]} the dynnodes did not start with this error:"
+    $debug ssh "${HOSTS_LIST[index]}" "cat $YDB_SETUP_PATH/logs/dyn1.log"
+  fi
+done
+

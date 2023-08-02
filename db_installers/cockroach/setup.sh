@@ -95,7 +95,7 @@ parallel-ssh -H "$HA_PROXY_NODES" -p 30 "echo \"\$(cat $HA_PROXY_SETUP_PATH/hapr
 
 
 if [ -n "$HA_PROXY_SETUP_PATH" ]; then
-  HA_PROXY="$HA_PROXY_SETUP_PATH/haproxy"
+  HA_PROXY="./haproxy"
 else
   HA_PROXY="haproxy"
 fi
