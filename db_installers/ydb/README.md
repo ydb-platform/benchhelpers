@@ -46,8 +46,8 @@ The repository contains [config.yaml](./configs/config.yaml) and [config_dynnode
 ### Start
 The launch is performed in several stages:
 1. `Stop` - Stop YDB if it is running.
-2. `Format disks` - Format the `Disks` at the `DEPLOY_PATH`/data/<disk_name> path.
-3. `Deploy` - Unpack the YDB package.
+2. `Deploy` - Unpack the YDB package.
+3. `Format disks` - Format the `Disks` at the `DEPLOY_PATH`/data/<disk_name> path.
 4. `Start static nodes` - Start the static nodes.
 5. `Init BS` - Create the database.
 6. `Start dynnodes` - Start the dynamic nodes.
