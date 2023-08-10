@@ -23,6 +23,7 @@ usage() {
     echo "    --config <config_template> --ydb-host <ydb_host> --database <DB> \\"
     echo "    --hosts <hosts_file> \\"
     echo "    [--compaction-threads <compaction_threads>] \\"
+    echo "    [--skip-compaction] \\"
     echo "    [--run-phase-only] \\"
     echo "    [--log-dir <log_dir>] \\"
     echo "    [--time <time> --warmup <warmup>] \\"
@@ -30,7 +31,7 @@ usage() {
     echo "    [--tpcc-path </path/to/YDB/benchbase>] \\"
     echo "    [--max-sessions $max_sessions] \\"
     echo "    [--no-load] [--no-run] [--no-drop-create] \\"
-    echo "    [--with-flames]"
+    echo "    [--with-flames] [--with-perf-stat] [--with-psi] \\"
 }
 
 log() {
@@ -73,6 +74,9 @@ while [[ "$#" > 0 ]]; do case $1 in
     --compaction-threads)
         compaction_threads=$2
         shift;;
+    --skip-compaction)
+        skip_compaction=1
+        ;;
     --no-run)
         no_run=1
         ;;
@@ -89,6 +93,9 @@ while [[ "$#" > 0 ]]; do case $1 in
     --hosts)
         hosts_file=$2
         shift;;
+    --secure)
+        use_grpcs=1
+        ;;
     --time)
         execute_time_seconds=$2
         shift;;
@@ -109,6 +116,9 @@ while [[ "$#" > 0 ]]; do case $1 in
         ;;
     --with-perf-stat)
         with_perf_stat=1
+        ;;
+    --with-psi)
+        sample_psi=1
         ;;
     --log-dir)
         log_dir=$2
@@ -175,7 +185,12 @@ fi
 host_count=`wc -l $hosts_file | awk '{print $1}'`
 min_presplit_shards=`expr $loader_threads \* $host_count`
 
-endpoint="grpc://$ydb_host:2135"
+if [[ -z "$use_grpcs" ]]; then
+    endpoint="grpc://$ydb_host:2135"
+else
+    endpoint="grpcs://$ydb_host:2135"
+fi
+
 viewer_url="http://$ydb_host:8765"
 
 if [ -z "$database" ]; then
@@ -345,18 +360,20 @@ if [ -z "$no_load" ]; then
     elapsed=$(( SECONDS - alter_start ))
     log "Altered tables in $elapsed seconds"
 
-    compaction_start=$SECONDS
-    log "Compacting tables"
-    for table in oorder district item warehouse customer order_line new_order stock history; do
-        $table_full_compact --viewer-url "$viewer_url" --disable-auth --threads $compaction_threads ${database}/${table} 1>/dev/null
-        if [[ $? -ne 0 ]]; then
-            log "Failed to compact table $table"
-            exit 1
-        fi
-    done
+    if [[ -z "$skip_compaction" ]]; then
+        compaction_start=$SECONDS
+        log "Compacting tables"
+        for table in oorder district item warehouse customer order_line new_order stock history; do
+            $table_full_compact --viewer-url "$viewer_url" --disable-auth --threads $compaction_threads ${database}/${table} 1>/dev/null
+            if [[ $? -ne 0 ]]; then
+                log "Failed to compact table $table"
+                exit 1
+            fi
+        done
 
-    elapsed=$(( SECONDS - compaction_start ))
-    log "Compaction done in $elapsed seconds"
+        elapsed=$(( SECONDS - compaction_start ))
+        log "Compaction done in $elapsed seconds"
+    fi
 
     # When we use bulk upsert, we have to add index after loading the data,
     # otherwise we create the index when create the table
@@ -424,9 +441,9 @@ done
 log "Sleeping while TPCC warms up for $warmup_time_seconds seconds"
 sleep $warmup_time_seconds
 
-ydb_hosts=`curl -s "$viewer_url/counters/hosts?dynamic_only=1" | sed 's/:[0-9]\+$//' | sort -u`
 if [[ -n "$with_flames" ]]; then
     if [[ -e $flame_script ]]; then
+        ydb_hosts=`curl -s "$viewer_url/counters/hosts?dynamic_only=1" | sed 's/:[0-9]\+$//' | sort -u`
         for flame_host in $ydb_hosts; do
             short_host=`echo $flame_host | cut -d'.' -f1`
             ts=`date +%Y%m%d_%H%M_%S`
@@ -440,12 +457,16 @@ if [[ -n "$with_flames" ]]; then
     fi
 fi
 
-for sample_host in $ydb_hosts; do
-    log "Sampling pressure on $sample_host"
-    ssh $sample_host "tail /proc/pressure/*"
-done
+if [[ -n "$sample_psi" ]]; then
+    ydb_hosts=`curl -s "$viewer_url/counters/hosts?dynamic_only=1" | sed 's/:[0-9]\+$//' | sort -u`
+    for sample_host in $ydb_hosts; do
+        log "Sampling pressure on $sample_host"
+        ssh $sample_host "tail /proc/pressure/*"
+    done
+fi
 
 if [[ -n "$with_perf_stat" ]]; then
+    ydb_hosts=`curl -s "$viewer_url/counters/hosts?dynamic_only=1" | sed 's/:[0-9]\+$//' | sort -u`
     for perf_host in $ydb_hosts; do
         log "Running perf stat on $perf_host"
         ssh $perf_host 'sudo perf stat -a -d -d -d -- sleep 10'
