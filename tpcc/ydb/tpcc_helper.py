@@ -114,7 +114,7 @@ class YdbConnection:
                     token = f.readline()
                 credentials = ydb.AuthTokenCredentials(token)
             else:
-                credentials = ydb.AnonymousCredentials()
+                credentials = ydb.credentials_from_env_variables()
 
             self.database = args.database
             self.endpoint = args.endpoint
