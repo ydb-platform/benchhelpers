@@ -5,8 +5,6 @@ The script is a generalization for the Small, Medium, and Large scales in
 [Performance Benchmarking with TPC-C](https://www.cockroachlabs.com/docs/v23.1/performance-benchmarking-with-tpcc-large),
 except for the [Partition the database](https://www.cockroachlabs.com/docs/v23.1/performance-benchmarking-with-tpcc-large#step-5-partition-the-database) step.
 
-It is assumed that you already know about the principles of [TPC-C](https://en.wikipedia.org/wiki/TPC-C).
-
 
 ## Requirements
 + Installed `parallel-ssh` on machine where scripts will be run. We worked with `parallel-ssh` on version 2.3.4.
