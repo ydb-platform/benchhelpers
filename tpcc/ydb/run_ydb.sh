@@ -38,6 +38,28 @@ log() {
     echo "`date` tpcc_ydb: $@"
 }
 
+kill_tpcc() {
+    log "Killing tpcc instances"
+    if [[ -z "$hosts_file" ]]; then
+        log "No hosts file specified, can't kill tpcc instances"
+        return
+    fi
+
+    unique_hosts=`mktemp`
+    sort -u $hosts_file > $unique_hosts
+
+    parallel-ssh -h $unique_hosts -i 'pkill -9 -f "^/bin/bash.*tpcc.sh"; pkill -9 -f "^java.*benchbase.jar -b tpcc"' &>/dev/null
+
+    rm -f $unique_hosts
+}
+
+cleanup() {
+    kill_tpcc
+    exit 1
+}
+
+trap cleanup SIGINT SIGTERM
+
 if ! which parallel-ssh >/dev/null; then
     echo "parallel-ssh not found, you should install pssh"
     exit 1
@@ -205,9 +227,6 @@ if [ -z "$viewer_url" ]; then
     exit 1
 fi
 
-unique_hosts=`mktemp`
-sort -u $hosts_file > $unique_hosts
-
 tpcc_script="$tpcc_path/scripts/tpcc.sh"
 parallel-ssh -h $hosts_file -i 'test -e $tpcc_script || (echo tpcc.sh does not exist && exit 1)'
 if [ $? -ne 0 ]; then
@@ -216,11 +235,7 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-log "Killing previous tpcc processes"
-
-parallel-ssh -h $unique_hosts -i 'pkill -9 -f "tpcc.sh" && pkill -9 -f "benchbase.jar -b tpcc"' &>/dev/null
-
-rm -f $unique_hosts
+kill_tpcc
 
 if [ -z "$no_drop_create" ]; then
     log "Drop existing tables if exists and create new ones"
