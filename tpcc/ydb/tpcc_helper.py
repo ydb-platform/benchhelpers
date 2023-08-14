@@ -1296,7 +1296,7 @@ def main():
                                         required=True, help="Warmup time in seconds")
 
     generate_config_parser.add_argument("--max-sessions", dest="max_sessions",
-                                        required=True, help="Max sessions")
+                                        required=True, help="Max sessions per TPC-C instance")
 
     generate_config_parser.set_defaults(func=GenerateConfig().run)
 
@@ -1328,8 +1328,6 @@ def main():
     aggregate_parser = subparsers.add_parser('aggregate')
     aggregate_parser.add_argument('results_dir', help="Directory with results")
     aggregate_parser.set_defaults(func=Aggregator().run)
-    # add free args file list to aggregate_parser
-
 
     args = parser.parse_args()
 
