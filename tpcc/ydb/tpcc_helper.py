@@ -1161,7 +1161,7 @@ Result: {self.name}
             print(f"Delta between earliest and latest measurements start: {start_delta} seconds")
 
         transactions_dict = collections.defaultdict(
-            lambda: Aggregator.Histogram([1, 5, 10, 50, 100, 500, 1000, 2000, 3000, 5000, 10000]))
+            lambda: Aggregator.Histogram([1, 5, 10, 50, 100, 500, 1000, 2000, 3000, 4000, 4500, 5000, 6000, 10000]))
 
         transactions_stats_dict = collections.defaultdict(lambda: collections.defaultdict(int))
 
