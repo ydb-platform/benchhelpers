@@ -70,7 +70,7 @@ if ! which ydb >/dev/null; then
     exit 1
 fi
 
-for module in ydb numpy; do
+for module in ydb numpy requests; do
     if ! python3 -c "import $module" 2>/dev/null; then
         echo "Python3 module $module not found, you should install it, execute: pip3 install $module)"
         exit 1
