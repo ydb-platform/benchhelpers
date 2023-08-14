@@ -357,7 +357,7 @@ if [ -z "$no_load" ]; then
         fi
     done
 
-    elapsed=$(( SECONDS - start ))
+    elapsed=$(( SECONDS - load_start ))
     log "Loading data done in $elapsed seconds"
 
     log "Altering tables"
