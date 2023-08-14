@@ -1110,7 +1110,7 @@ Result: {self.name}
 
     def run(self, args):
         self.scale_re = re.compile(r"^Scale Factor:\s*(\d+(\.\d+)?)$")
-        self.start_measure_re = re.compile(r"^\[INFO\] (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) \[main\].*Warmup complete, starting measurements.$")
+        self.start_measure_re = re.compile(r"^\[INFO\s*\] (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) \[main\].*Warmup complete, starting measurements.$")
         self.results_line_re = re.compile(r"^================RESULTS================")
         self.results_entry = re.compile(r".*\|\s*(\d+(\.\d+)?)%?\s*$")
         self.rate_re = re.compile(r"^Rate limited.*= (\d+(\.\d+)?) requests/sec \(throughput\), (\d+(\.\d+)?) requests/sec \(goodput\)$")
@@ -1128,9 +1128,13 @@ Result: {self.name}
                 if name.endswith(".run.log"):
                     file = os.path.join(full_path, name)
                     with open(file, "r") as f:
-                        r = self.process_run_file(args, f)
-                        r.name = hostname + "." + name[:-len(".run.log")]
-                        run_results.append(r)
+                        try:
+                            r = self.process_run_file(args, f)
+                            r.name = hostname + "." + name[:-len(".run.log")]
+                            run_results.append(r)
+                        except Exception as e:
+                            print(f"Error processing file {file}: {e}", file=sys.stderr)
+                            raise e
 
         sorted(run_results, key=lambda r: r.name)
 
@@ -1227,31 +1231,31 @@ Result: {self.name}
         line = file.readline()
         m = self.results_entry.match(line)
         if not m:
-            raise Exception("Invalid results line: {}".format(line))
+            raise Exception("Invalid results line1: {}".format(line))
         result.time_seconds = float(m.group(1))
 
         line = file.readline()
         m = self.results_entry.match(line)
         if not m:
-            raise Exception("Invalid results line: {}".format(line))
+            raise Exception("Invalid results line2: {}".format(line))
         result.new_orders = int(m.group(1))
 
         line = file.readline()
         m = self.results_entry.match(line)
         if not m:
-            raise Exception("Invalid results line: {}".format(line))
+            raise Exception("Invalid results line3: {}".format(line))
         result.tpmc = float(m.group(1))
 
         line = file.readline()
         m = self.results_entry.match(line)
         if not m:
-            raise Exception("Invalid results line: {}".format(line))
+            raise Exception("Invalid results line4: {}".format(line))
         result.efficiency = float(m.group(1))
 
         line = file.readline()
         m = self.rate_re.match(line)
         if not m:
-            raise Exception("Invalid results line: {}".format(line))
+            raise Exception("Invalid results line5: {}".format(line))
         result.throughput = float(m.group(1))
         result.goodput = float(m.group(3))
 
