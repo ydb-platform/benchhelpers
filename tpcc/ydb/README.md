@@ -51,4 +51,4 @@ mkdir -p $HOME/tpcc_logs
 
 Note, that warmup and time are in seconds. By default the benchmark uses just 16 loader threads, if your machines have enough cores (and YDB cluster has enough cores), you can increase the number of threads using the `--loader-threads` flag. In our runs we usually use 128 threads per machine (1 thread per core) and 8 machines to run the benchmark (YDB cluster has 384 cores in total).
 
-If you have already executed the benchmark, you can use the `--run-phase-only` flag to reuse existing data and skip the loading phase. This will save you time on data generation.
+If you have already executed the benchmark, you can use the `--run-phase-only` flag to reuse existing data and skip the loading phase. This will save you time on data generation. Also just to load the data and skip benchmark execution, use the `--no-run` flag.
