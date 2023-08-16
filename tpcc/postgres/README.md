@@ -47,6 +47,7 @@ mkdir -p $HOME/tpcc_logs
     --max-connections 1000
 ```
 
-Note, that warmup and time are in seconds. By default the benchmark uses just 16 loader threads.
+Note, that warmup and time are in seconds. By default the benchmark uses just 16 loader threads. The `--max-connections` flag controls the total number of connections to the database, i.e. if you run TPC-C on `n` machines, each machine will have `max-connections / n` connections to the database.
+The `--java-memory` flag controls the amount of memory allocated to the Java process running the TPC-C client. Keep in mind, that if you start multiple instances of TPC-C on the same machine, you need to adjust the `--java-memory` flag accordingly.
 
 If you have already executed the benchmark, you can use the `--run-phase-only` flag to reuse existing data and skip the loading phase. This will save you time on data generation. Also just to load the data and skip benchmark execution, use the `--no-run` flag.
