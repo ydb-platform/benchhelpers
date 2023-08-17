@@ -283,11 +283,11 @@ if [ -z "$no_load" ]; then
     # also above we changed min partitions, so we need to wait a bit
 
     if [[ $warehouses -ge 15000 ]]; then
-        log "Sleeping 20m after loading the data"
-        sleep 20m
+        log "Sleeping 60m after loading the data"
+        sleep 60m
     else
-        log "Sleeping 5m after loading the data"
-        sleep 5m
+        log "Sleeping 30m after loading the data"
+        sleep 30m
     fi
 fi
 
