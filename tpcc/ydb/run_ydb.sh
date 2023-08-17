@@ -145,6 +145,9 @@ while [[ "$#" > 0 ]]; do case $1 in
     --log-dir)
         log_dir=$2
         shift;;
+    --virtual-threads)
+        virtual_threads=1
+        ;;
     --help|-h)
         usage
         exit;;
@@ -340,6 +343,10 @@ if [ -z "$no_load" ]; then
             get-load-args \
             --node-num $host_num`
 
+        if [[ -n "$virtual_threads" ]]; then
+            args="$args --virtual-threads"
+        fi
+
         log "Running tpcc initial load on $host (host_num=$host_num) with args: $args"
 
         ssh $host "cd $tpcc_path && ./scripts/tpcc.sh --memory $java_memory -c $config $args" \
@@ -444,6 +451,10 @@ for host in `cat $hosts_file`; do
         --shard-count $min_presplit_shards \
         get-start-args \
         --node-num $host_num`
+
+    if [[ -n "$virtual_threads" ]]; then
+        args="$args --virtual-threads"
+    fi
 
     ssh $host "cd $tpcc_path && rm -rf "results_${host_num}" && ./scripts/tpcc.sh --memory $java_memory -d results_${host_num} -c $config $args" \
         > $results_dir/$host/$host_num.run.log 2>&1 &
