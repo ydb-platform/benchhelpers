@@ -22,4 +22,8 @@ for wh in $whlist; do
     echo "Logging into $log_file"
 
     ./run_postgres.sh --warehouses $wh ${args[@]} 2>&1 | tee $log_file
+
+    # we need this to make sure that the next run will start with a clean state
+    # as well as have easily separable graphs
+    sleep 10m
 done
