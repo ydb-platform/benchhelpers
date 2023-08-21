@@ -59,15 +59,13 @@ if [ $STOP_YDB -eq 1 ]; then
 fi
 
 echo "Deploy"
-$debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "sudo mkdir -p $YDB_SETUP_PATH/cfg $YDB_SETUP_PATH/logs"
-$debug parallel-scp -H "$HOSTS" -t 0 -p 20 "$YDBD_TAR" "~"
-$debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "sudo tar -xzf ~/$(basename "$YDBD_TAR") --strip-component=1 -C $YDB_SETUP_PATH; \
-                                            rm -f $(basename "$YDBD_TAR")"
+$debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "mkdir -p $YDB_SETUP_PATH/cfg $YDB_SETUP_PATH/logs"
+$debug parallel-scp -H "$HOSTS" -t 0 -p 20 "$YDBD_TAR" "$YDB_SETUP_PATH"
+$debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "tar -xzf $YDB_SETUP_PATH/$(basename "$YDBD_TAR") --strip-component=1 -C $YDB_SETUP_PATH; \
+                                            rm -f $YDB_SETUP_PATH/$(basename "$YDBD_TAR")"
 
-$debug parallel-scp -H "$HOSTS" -t 0 -p 20 $CONFIG_DIR/config.yaml "~"
-$debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "sudo mv ~/config.yaml $YDB_SETUP_PATH/cfg"
-$debug parallel-scp -H "$HOSTS" -t 0 -p 20 $CONFIG_DIR/config_dynnodes.yaml "~"
-$debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "sudo mv ~/config_dynnodes.yaml $YDB_SETUP_PATH/cfg"
+$debug parallel-scp -H "$HOSTS" -t 0 -p 20 "$CONFIG_DIR"/config.yaml "$YDB_SETUP_PATH/cfg"
+$debug parallel-scp -H "$HOSTS" -t 0 -p 20 $CONFIG_DIR/config_dynnodes.yaml "$YDB_SETUP_PATH/cfg"
 
 echo "Format disks"
 for d in "${DISKS[@]}"; do

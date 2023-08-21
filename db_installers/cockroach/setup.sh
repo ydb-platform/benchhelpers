@@ -68,8 +68,8 @@ done
 
 echo "Deploy Cockroach"
 
-parallel-scp -H "$COCKROACH_NODES $HA_PROXY_NODES" -p 30 $PATH_TO_SCRIPT/cockroach_wrapper '~'
-parallel-ssh -H "$COCKROACH_NODES $HA_PROXY_NODES" -p 30 "sudo mkdir -p $COCKROACH_DEPLOY_PATH/logs; sudo mv ~/cockroach_wrapper $COCKROACH_DEPLOY_PATH"
+parallel-ssh -H "$COCKROACH_NODES $HA_PROXY_NODES" -p 30 "mkdir -p $COCKROACH_DEPLOY_PATH/logs"
+parallel-scp -H "$COCKROACH_NODES $HA_PROXY_NODES" -p 30 "$PATH_TO_SCRIPT"/cockroach_wrapper "$COCKROACH_DEPLOY_PATH"
 
 "$PATH_TO_SCRIPT"/control.py -c "$COCKROACH_CONFIG" --stop
 "$PATH_TO_SCRIPT"/control.py -c "$COCKROACH_CONFIG" --format
@@ -82,8 +82,8 @@ sleep 10s
 echo "Deploy HAProxy"
 
 # !!! this assumes no other HAProxy on these slices
-if [ -n $HA_PROXY_BIN ]; then
-  parallel-ssh -H "$HA_PROXY_NODES" -p 30 "sudo mkdir -p $HA_PROXY_SETUP_PATH"
+if [ -n "$HA_PROXY_BIN" ]; then
+  parallel-ssh -H "$HA_PROXY_NODES" -p 30 "mkdir -p $HA_PROXY_SETUP_PATH"
   parallel-scp -H "$HA_PROXY_NODES" -p 30 "$HA_PROXY_BIN" $HA_PROXY_SETUP_PATH
 fi
 
