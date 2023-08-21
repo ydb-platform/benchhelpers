@@ -45,8 +45,8 @@ if [[ ! -v YUGABYTE_HOSTS ]]; then
     exit 1
 fi
 
-parallel-scp -H "$YUGABYTE_HOSTS" -p 30 "$PATH_TO_SCRIPT/yugabyte_wrapper" "~"
-parallel-ssh -H "$YUGABYTE_HOSTS" -p 30 "sudo rm -rf $YUGABYTE_DEPLOY_PATH; sudo mkdir -p $YUGABYTE_DEPLOY_PATH; sudo mv ~/yugabyte_wrapper $YUGABYTE_DEPLOY_PATH"
+parallel-ssh -H "$YUGABYTE_HOSTS" -p 30 "sudo rm -rf $YUGABYTE_DEPLOY_PATH; mkdir -p $YUGABYTE_DEPLOY_PATH"
+parallel-scp -H "$YUGABYTE_HOSTS" -p 30 "$PATH_TO_SCRIPT/yugabyte_wrapper" "$YUGABYTE_DEPLOY_PATH"
 
 echo "Deploy yugabyte"
 "$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --stop
