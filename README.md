@@ -7,8 +7,8 @@ Note that our deployment scripts are not suitable for production.
 These scripts were used the article [YCSB performance series](https://blog.ydb.tech/ycsb-performance-series-ydb-cockroachdb-and-yugabytedb-f25c077a382b).
 
 ### Premise:
-Benchmarks has a problem with the fact that it does not create load efficiently enough. 
-That is, in order to load machines with databases, one benchmark shooting machine is often not enough. 
+Many benchmarks have a problem with the fact that they don't create load efficiently enough. 
+That is, in order to load machines with databases, one machine with a benchmark shooting machine is often not enough. 
 
 ### Decision:
 With the help of our scripts, you can greatly facilitate the launch on multiple machines and collection of benchmark results.
