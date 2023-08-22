@@ -299,6 +299,15 @@ class ReturnDeployPath(BaseAction):
         print(f"{DEPLOY_PATH}")
 
 
+class ReturnDeployTmpPath(BaseAction):
+
+    def __init__(self, args):
+        super().__init__(args)
+
+    def run(self):
+        print(DEPLOY_TMP_PATH)
+
+
 # [ control.py -c cluster_config.py stop ]
 # control.py -c cluster_config.py format
 # control.py -c cluster_config.py deploy
@@ -334,6 +343,7 @@ class Main(object):
         self.add_cmd("deploy", Deploy, "deploy release to cluster", has_arg=True)
         self.add_cmd("list-hosts", ReturnHosts, "return list of hosts")
         self.add_cmd("deploy-path", ReturnDeployPath, "return deploy path")
+        self.add_cmd("deploy-tmp-path", ReturnDeployTmpPath, "return deploy tmp path")
 
         # general options
         self.parser.add_argument("-c", "--config", type=str, help="Yugabyte Cluster Config")

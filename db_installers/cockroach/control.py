@@ -272,6 +272,15 @@ class ReturnDeployPath(BaseAction):
         print(DEPLOY_PATH)
 
 
+class ReturnDeployTmpPath(BaseAction):
+
+    def __init__(self, args):
+        super().__init__(args)
+
+    def run(self):
+        print(DEPLOY_TMP_PATH)
+
+
 class ReturnHaProxyHosts(BaseAction):
 
     def __init__(self, args):
@@ -329,6 +338,7 @@ class Main(object):
         self.add_cmd("ha-proxy-hosts", ReturnHaProxyHosts, "return list of ha-proxy hosts")
         self.add_cmd("ha-proxy-setup-path", ReturnHaProxySetupPath, "return list of ha-proxy hosts")
         self.add_cmd("deploy-path", ReturnDeployPath, "return deploy path")
+        self.add_cmd("deploy-tmp-path", ReturnDeployTmpPath, "return deploy tmp path")
 
         # general options
         self.parser.add_argument("-c", "--config", type=str, help="Cockroach Cluster Config")
