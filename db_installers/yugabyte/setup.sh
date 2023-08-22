@@ -47,7 +47,7 @@ if [[ ! -v YUGABYTE_HOSTS ]]; then
 fi
 
 parallel-scp -H "$YUGABYTE_HOSTS" -p 30 "$PATH_TO_SCRIPT/yugabyte_wrapper" "$DEPLOY_TMP_PATH"
-parallel-ssh -H "$YUGABYTE_HOSTS" -p 30 "sudo mkdir -p $YUGABYTE_DEPLOY_PATH;
+parallel-ssh -H "$YUGABYTE_HOSTS" -p 30 "sudo rm -rf $YUGABYTE_DEPLOY_PATH; sudo mkdir -p $YUGABYTE_DEPLOY_PATH;
                                          sudo mv $DEPLOY_TMP_PATH/yugabyte_wrapper $YUGABYTE_DEPLOY_PATH"
 
 echo "Deploy yugabyte"
