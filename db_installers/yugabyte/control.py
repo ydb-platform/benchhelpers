@@ -119,8 +119,8 @@ class Start(PSSHAction):
             user=self.sudo_user,
             listen_addr=listen_addr,
             master_hosts_str=master_hosts_str,
-            psql_addr=LOCAL_IP[host] + ":" + str(psql_port),
-            cql_addr=LOCAL_IP[host] + ":" + str(cql_port),
+            psql_addr=LOCAL_IP.get(host, host) + ":" + str(psql_port),
+            cql_addr=LOCAL_IP.get(host, host) + ":" + str(cql_port),
             redis_webserver_port=str(redis_webserver_port),
             webserver_port=str(webserver_port),
             cql_webserver_port=str(cql_webserver_port),
@@ -143,7 +143,7 @@ class Start(PSSHAction):
     def get_master_hosts_listen(self):
         join_hosts = []
         for host in self.get_master_hosts():
-            join_hosts.append(LOCAL_IP[host] + ":" + str(LISTEN_PORT_MASTER))
+            join_hosts.append(LOCAL_IP.get(host, host) + ":" + str(LISTEN_PORT_MASTER))
         return join_hosts
 
     def run(self):
@@ -155,7 +155,7 @@ class Start(PSSHAction):
 
         master_hosts = self.get_master_hosts_listen()
         for host in self.get_master_hosts():
-            listen_host = LOCAL_IP[host] + ":" + str(LISTEN_PORT_MASTER)
+            listen_host = LOCAL_IP.get(host, host) + ":" + str(LISTEN_PORT_MASTER)
             self.start_master(host, store_args, listen_host, MASTER_WEBSERVER_PORT, master_hosts)
 
         cores_per_instance = Cores
@@ -178,7 +178,7 @@ class Start(PSSHAction):
                 cores_reminder = Cores % len(Disks)
 
                 for dir in mount_dirs:
-                    listen_host = LOCAL_IP[host] + ":" + str(current_server_port)
+                    listen_host = LOCAL_IP.get(host, host) + ":" + str(current_server_port)
                     store_args = "--fs_data_dirs=" + dir
 
                     end_core = start_core + cores_per_instance - 1 + (cores_reminder > 0)
@@ -209,7 +209,7 @@ class Start(PSSHAction):
                     memory_ratio_reminder -= (memory_ratio_reminder > 0)
                     cores_reminder -= (cores_reminder > 0)
             else:
-                listen_host = LOCAL_IP[host] + ":" + str(LISTEN_PORT_SERVER)
+                listen_host = LOCAL_IP.get(host, host) + ":" + str(LISTEN_PORT_SERVER)
                 self.start_server(
                     host,
                     store_args,
