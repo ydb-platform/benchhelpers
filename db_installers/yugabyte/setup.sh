@@ -37,6 +37,7 @@ fi
 
 PATH_TO_SCRIPT=$(dirname "$0")
 
+DEPLOY_TMP_PATH=$("$PATH_TO_SCRIPT"/control.py -c $COCKROACH_CONFIG --deploy-tmp-path)
 YUGABYTE_DEPLOY_PATH=$("$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --deploy-path)
 YUGABYTE_HOSTS=$("$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --list-hosts)
 
@@ -45,8 +46,9 @@ if [[ ! -v YUGABYTE_HOSTS ]]; then
     exit 1
 fi
 
-parallel-ssh -H "$YUGABYTE_HOSTS" -p 30 "sudo rm -rf $YUGABYTE_DEPLOY_PATH; mkdir -p $YUGABYTE_DEPLOY_PATH"
-parallel-scp -H "$YUGABYTE_HOSTS" -p 30 "$PATH_TO_SCRIPT/yugabyte_wrapper" "$YUGABYTE_DEPLOY_PATH"
+parallel-scp -H "$YUGABYTE_HOSTS" -p 30 "$PATH_TO_SCRIPT/yugabyte_wrapper" "$DEPLOY_TMP_PATH"
+parallel-ssh -H "$YUGABYTE_HOSTS" -p 30 "sudo mkdir -p $YUGABYTE_DEPLOY_PATH;
+                                         sudo mv $DEPLOY_TMP_PATH/yugabyte_wrapper $YUGABYTE_DEPLOY_PATH"
 
 echo "Deploy yugabyte"
 "$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --stop

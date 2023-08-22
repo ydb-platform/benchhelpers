@@ -48,6 +48,7 @@ fi
 
 PATH_TO_SCRIPT=$(dirname "$0")
 
+DEPLOY_TMP_PATH=$("$PATH_TO_SCRIPT"/control.py -c $COCKROACH_CONFIG --deploy-tmp-path)
 COCKROACH_DEPLOY_PATH=$("$PATH_TO_SCRIPT"/control.py -c $COCKROACH_CONFIG --deploy-path)
 COCKROACH_NODES=$("$PATH_TO_SCRIPT"/control.py -c $COCKROACH_CONFIG --list-hosts)
 COCKROACH_PORT=$("$PATH_TO_SCRIPT"/control.py -c $COCKROACH_CONFIG --listen-port)
@@ -68,12 +69,15 @@ done
 
 echo "Deploy Cockroach"
 
-parallel-ssh -H "$COCKROACH_NODES $HA_PROXY_NODES" -p 30 "mkdir -p $COCKROACH_DEPLOY_PATH/logs"
-parallel-scp -H "$COCKROACH_NODES $HA_PROXY_NODES" -p 30 "$PATH_TO_SCRIPT"/cockroach_wrapper "$COCKROACH_DEPLOY_PATH"
+NODES=$(echo "$COCKROACH_NODES $HA_PROXY_NODES" | tr ' ' '\n' | sort -u)
+
+parallel-scp -H "$NODES" -p 30 "$PATH_TO_SCRIPT"/cockroach_wrapper "$DEPLOY_TMP_PATH"
+parallel-ssh -H "$NODES" -p 30 "sudo mkdir -p $COCKROACH_DEPLOY_PATH/logs;
+                                                sudo mv $DEPLOY_TMP_PATH/cockroach_wrapper $COCKROACH_DEPLOY_PATH"
 
 "$PATH_TO_SCRIPT"/control.py -c "$COCKROACH_CONFIG" --stop
 "$PATH_TO_SCRIPT"/control.py -c "$COCKROACH_CONFIG" --format
-"$PATH_TO_SCRIPT"/control.py -c "$COCKROACH_CONFIG" --deploy "$COCKROACH_TAR" --hosts "$COCKROACH_NODES $HA_PROXY_NODES"
+"$PATH_TO_SCRIPT"/control.py -c "$COCKROACH_CONFIG" --deploy "$COCKROACH_TAR" --hosts "$NODES"
 "$PATH_TO_SCRIPT"/control.py -c "$COCKROACH_CONFIG" --start "$START_ARGS"
 "$PATH_TO_SCRIPT"/control.py -c "$COCKROACH_CONFIG" --init --hosts "$INIT_NODE"
 sleep 10s
@@ -81,17 +85,19 @@ sleep 10s
 
 echo "Deploy HAProxy"
 
+parallel-ssh -H "$HA_PROXY_NODES" -p 30 "sudo mkdir -p $HA_PROXY_SETUP_PATH"
+
 # !!! this assumes no other HAProxy on these slices
-if [ -n "$HA_PROXY_BIN" ]; then
-  parallel-ssh -H "$HA_PROXY_NODES" -p 30 "mkdir -p $HA_PROXY_SETUP_PATH"
-  parallel-scp -H "$HA_PROXY_NODES" -p 30 "$HA_PROXY_BIN" $HA_PROXY_SETUP_PATH
+if [ -e "$HA_PROXY_BIN" ]; then
+  parallel-scp -H "$HA_PROXY_NODES" -p 30 "$HA_PROXY_BIN" "$DEPLOY_TMP_PATH";
+  parallel-ssh -H "$HA_PROXY_NODES" -p 30 "sudo mv $DEPLOY_TMP_PATH/$(basename $HA_PROXY_BIN) $HA_PROXY_SETUP_PATH"
 fi
 
 # generate haproxy.cfg
-parallel-ssh -H "$HA_PROXY_NODES" -p 30 "cd $HA_PROXY_SETUP_PATH; $COCKROACH_DEPLOY_PATH/cockroach gen haproxy --insecure --host=$INIT_NODE --port=$COCKROACH_PORT"
+parallel-ssh -H "$HA_PROXY_NODES" -p 30 "cd $HA_PROXY_SETUP_PATH; sudo $COCKROACH_DEPLOY_PATH/cockroach gen haproxy --insecure --host=$INIT_NODE --port=$COCKROACH_PORT"
 
 # change maxconn to 250000
-parallel-ssh -H "$HA_PROXY_NODES" -p 30 "echo \"\$(cat $HA_PROXY_SETUP_PATH/haproxy.cfg | sed '/[space]*maxconn/s/4096/250000/' | sed 's/defaults/defaults\n    maxconn\t\t250000/')\" > $HA_PROXY_SETUP_PATH/haproxy.cfg"
+parallel-ssh -H "$HA_PROXY_NODES" -p 30 "echo \"\$(cat $HA_PROXY_SETUP_PATH/haproxy.cfg | sed '/[space]*maxconn/s/4096/250000/' | sed 's/defaults/defaults\n    maxconn\t\t250000/')\" | sudo tee $HA_PROXY_SETUP_PATH/haproxy.cfg"
 
 
 if [ -n "$HA_PROXY_SETUP_PATH" ]; then
