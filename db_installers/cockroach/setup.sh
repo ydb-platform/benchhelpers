@@ -109,3 +109,14 @@ fi
 echo "Start HAProxy"
 HA_PROXY_CONFIG_NAME="haproxy.cfg"
 parallel-ssh -H "$HA_PROXY_NODES" -p 30 "sudo -u root sh -c 'ulimit -n 500000; cd $HA_PROXY_SETUP_PATH; $HA_PROXY -q -D -f $HA_PROXY_CONFIG_NAME'"
+sleep 5s
+
+IFS=', ' read -r -a HOSTS_LIST <<< "$HA_PROXY_NODES"
+
+for index in "${!HOSTS_LIST[@]}"
+do
+  $debug ssh "${HOSTS_LIST[index]}" "pgrep -f 'haproxy'" > /dev/null
+  if [[ "$?" -eq 1 ]]; then
+    echo "ERROR: haproxy crashed on ${HOSTS_LIST[index]}"
+  fi
+done
