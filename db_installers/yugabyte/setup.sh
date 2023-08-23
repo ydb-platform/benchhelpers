@@ -56,3 +56,17 @@ echo "Deploy yugabyte"
 "$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --deploy "$YUGABYTE_TAR"
 "$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --start #--per-disk-instance
 sleep 10s
+
+IFS=', ' read -r -a HOSTS_LIST <<< "$YUGABYTE_HOSTS"
+
+for index in "${!HOSTS_LIST[@]}"
+do
+  $debug ssh "${HOSTS_LIST[index]}" "pgrep -f 'yb-master'" > /dev/null
+  if [[ "$?" -eq 1 ]]; then
+    echo "ERROR: yb-master crashed on ${HOSTS_LIST[index]}"
+  fi
+  $debug ssh "${HOSTS_LIST[index]}" "pgrep -f 'yb-tserver'" > /dev/null
+  if [[ "$?" -eq 1 ]]; then
+    echo "ERROR: yb-tserver crashed on ${HOSTS_LIST[index]}"
+  fi
+done
