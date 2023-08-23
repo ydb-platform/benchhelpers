@@ -37,6 +37,7 @@ fi
 
 PATH_TO_SCRIPT=$(dirname "$0")
 
+DEPLOY_TMP_PATH=$("$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --deploy-tmp-path)
 YUGABYTE_DEPLOY_PATH=$("$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --deploy-path)
 YUGABYTE_HOSTS=$("$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --list-hosts)
 
@@ -45,8 +46,9 @@ if [[ ! -v YUGABYTE_HOSTS ]]; then
     exit 1
 fi
 
-parallel-scp -H "$YUGABYTE_HOSTS" -p 30 "$PATH_TO_SCRIPT/yugabyte_wrapper" "~"
-parallel-ssh -H "$YUGABYTE_HOSTS" -p 30 "sudo rm -rf $YUGABYTE_DEPLOY_PATH; sudo mkdir -p $YUGABYTE_DEPLOY_PATH; sudo mv ~/yugabyte_wrapper $YUGABYTE_DEPLOY_PATH"
+parallel-scp -H "$YUGABYTE_HOSTS" -p 30 "$PATH_TO_SCRIPT/yugabyte_wrapper" "$DEPLOY_TMP_PATH"
+parallel-ssh -H "$YUGABYTE_HOSTS" -p 30 "sudo rm -rf $YUGABYTE_DEPLOY_PATH; sudo mkdir -p $YUGABYTE_DEPLOY_PATH;
+                                         sudo mv $DEPLOY_TMP_PATH/yugabyte_wrapper $YUGABYTE_DEPLOY_PATH"
 
 echo "Deploy yugabyte"
 "$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --stop
@@ -54,3 +56,17 @@ echo "Deploy yugabyte"
 "$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --deploy "$YUGABYTE_TAR"
 "$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --start #--per-disk-instance
 sleep 10s
+
+IFS=', ' read -r -a HOSTS_LIST <<< "$YUGABYTE_HOSTS"
+
+for index in "${!HOSTS_LIST[@]}"
+do
+  $debug ssh "${HOSTS_LIST[index]}" "pgrep -f 'yb-master'" > /dev/null
+  if [[ "$?" -eq 1 ]]; then
+    echo "ERROR: yb-master crashed on ${HOSTS_LIST[index]}"
+  fi
+  $debug ssh "${HOSTS_LIST[index]}" "pgrep -f 'yb-tserver'" > /dev/null
+  if [[ "$?" -eq 1 ]]; then
+    echo "ERROR: yb-tserver crashed on ${HOSTS_LIST[index]}"
+  fi
+done
