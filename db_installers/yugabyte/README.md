@@ -15,6 +15,7 @@ This guide explains how to deploy YugabyteDB on your machines.
 Set up the [cluster_config.py](cluster_config.py) file:
 + `Regions` - a list of your machines where YugabyteDB will be deployed.
 + `LOCAL_IP` - a dictionary where the key is the external IP of machine and the value is the local IP.
+It is used if the machines can see each other only by local IP. Otherwise leave the dictionary empty.
 + `DEPLOY_PATH` - the path where YugabyteDB will be unpacked.
 + `DEPLOY_TMP_PATH` - the path for temporary files.
 + `LISTEN_PORT_MASTER`, `LISTEN_PORT_SERVER`, `PSQL_PORT`,
