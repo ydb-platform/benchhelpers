@@ -8,11 +8,11 @@ These scripts were used the article [YCSB performance series](https://blog.ydb.t
 
 ### Premise:
 Many benchmarks have a problem with the fact that they don't create load efficiently enough. 
-That is, in order to load machines with databases, one machine with a benchmark shooting machine is often not enough. 
+That is, in order to load machines with databases, one machine with a benchmark is often not enough. 
 
 ### Decision:
-With the help of our scripts, you can greatly facilitate the launch on multiple machines and collection of benchmark results.
 
+With the help of our scripts, you can simplify running benchmarks on multiple machines and the collection of results.
 
 ### Benchmarks that are available now:
 1. [YCSB](ycsb/README.md) (YDB, CockroachDB, YugabyteDB)
