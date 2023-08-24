@@ -10,6 +10,10 @@
     <!-- Scale factor is the number of warehouses in TPCC -->
     <scalefactor>{warehouse}</scalefactor>
 
+    <!-- The workload -->
+    <monitoringPort>{mport}</monitoringPort>
+    <monitoringName>{mname}</monitoringName>
+
     <terminals>{terminals}</terminals>
     <loaderThreads>{loader_threads}</loaderThreads>
     <batchsize>10000</batchsize>
