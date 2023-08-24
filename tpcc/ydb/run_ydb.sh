@@ -392,7 +392,7 @@ if [ -z "$no_load" ]; then
         compaction_start=$SECONDS
         log "Compacting tables"
         for table in oorder district item warehouse customer order_line new_order stock history; do
-            $table_full_compact --viewer-url "$viewer_url" --disable-auth --threads $compaction_threads ${database}/${table} 1>/dev/null
+            $table_full_compact --all --viewer-url "$viewer_url" --disable-auth --threads $compaction_threads ${database}/${table} 1>/dev/null
             if [[ $? -ne 0 ]]; then
                 log "Failed to compact table $table"
                 exit 1

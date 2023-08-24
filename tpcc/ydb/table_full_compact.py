@@ -77,6 +77,7 @@ def main():
     parser.add_argument('--threads', type=int, default=10)
     parser.add_argument('--viewer-url')
     parser.add_argument('--disable-auth', action='store_true')
+    parser.add_argument('--all', action='store_true')
     parser.add_argument('table')
     args = parser.parse_args()
 
@@ -110,7 +111,7 @@ def main():
 
     def process_task(task):
         index, count, tablet_id = task
-        if not extract_loaned_parts(tablet_internals(tablet_id)):
+        if not args.all and not extract_loaned_parts(tablet_internals(tablet_id)):
             print(f'[{time.ctime()}] [{index}/{count}] Skip {tablet_id}')
             return
 
