@@ -202,6 +202,12 @@ if [ ! -r "$hosts_file" ]; then
     exit 1
 fi
 
+# we need this hack to not force
+# user accept manually cluster hosts
+for host in `cat "$hosts_file" | sort -u`; do
+    ssh -o StrictHostKeyChecking=no $host &>/dev/null &
+done
+
 this_dir=`dirname $0`
 this_path=`readlink -f $this_dir`
 tpcc_helper="$this_path/tpcc_postgres_helper.py"

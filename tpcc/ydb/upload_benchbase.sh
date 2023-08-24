@@ -57,6 +57,12 @@ fi
 unique_hosts=`mktemp`
 sort -u $hosts > $unique_hosts
 
+# we need this hack to not force
+# user accept manually cluster hosts
+for host in `cat "$unique_hosts"`; do
+    ssh -o StrictHostKeyChecking=no $host &>/dev/null &
+done
+
 /usr/bin/parallel-scp -h $unique_hosts $package $HOME
 if [ $? -ne 0 ]; then
     echo "Failed to upload package $package to hosts $hosts"
