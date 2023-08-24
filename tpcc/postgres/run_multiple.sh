@@ -2,12 +2,16 @@
 
 log_dir="$HOME/tpcc_logs/postgres"
 whlist="1000 2000 3000 4000"
+sleep_minutes=10
 
 args=()
 
 while [[ "$#" > 0 ]]; do case $1 in
     --whlist)
         whlist=$2
+        shift;;
+    --sleep-minutes)
+        sleep_minutes=$2
         shift;;
     *)
         args+=("$1")
@@ -25,5 +29,5 @@ for wh in $whlist; do
 
     # we need this to make sure that the next run will start with a clean state
     # as well as have easily separable graphs
-    sleep 10m
+    sleep ${sleep_minutes}m
 done
