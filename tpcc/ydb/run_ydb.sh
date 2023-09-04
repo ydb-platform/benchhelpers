@@ -39,7 +39,7 @@ log() {
 }
 
 kill_tpcc() {
-    log "Killing tpcc instances"
+    log "Killing tpcc instances and clean previous results"
     if [[ -z "$hosts_file" ]]; then
         log "No hosts file specified, can't kill tpcc instances"
         return
@@ -49,6 +49,7 @@ kill_tpcc() {
     sort -u $hosts_file > $unique_hosts
 
     parallel-ssh -h $unique_hosts -i 'pkill -9 -f "^/bin/bash.*tpcc.sh"; pkill -9 -f "^java.*benchbase.jar -b tpcc"' &>/dev/null
+    parallel-ssh -h $unique_hosts -i "cd $tpcc_path && rm -rf results_*" &>/dev/null
 
     rm -f $unique_hosts
 }
