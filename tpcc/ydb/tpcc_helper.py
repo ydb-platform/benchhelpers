@@ -1041,6 +1041,9 @@ class Aggregator:
             i = bisect.bisect_right(self.bucketlist, value)
             self.buckets[i] += 1
 
+        def add_bucket(self, bucket_index, value):
+            self.buckets[bucket_index] += value
+
         def count(self, value):
             i = bisect.bisect_right(self.bucketlist, value)
             return self.buckets[i]
@@ -1067,6 +1070,9 @@ class Aggregator:
                 else:
                     repr_str += f"{self.bucketlist[i-1]}-{self.bucketlist[i]}: {self.buckets[i]}, "
             return repr_str
+
+        def __len__(self):
+            return self.total_count()
 
     class TransactionStats:
         def __init__(self):
@@ -1171,7 +1177,13 @@ Result: {self.name}
                 if name.startswith("results"):
                     rdir = os.path.join(full_path, name)
                     for fname in os.listdir(rdir):
-                        if fname.endswith(".raw.csv"):
+                        if fname.endswith(".raw.json"):
+                            # new version of benchbase
+                            file = os.path.join(rdir, fname)
+                            with open(file, "r") as f:
+                                self.process_raw_json(f, transactions_dict, transactions_stats_dict, total_result.measure_start_ts)
+                        elif fname.endswith(".raw.csv"):
+                            # previous version of benchbase
                             file = os.path.join(rdir, fname)
                             with open(file, "r") as f:
                                 self.process_raw_csv(f, transactions_dict, transactions_stats_dict, total_result.measure_start_ts)
@@ -1182,12 +1194,35 @@ Result: {self.name}
         print(total_result)
 
         for transaction_name, stats in transactions_stats_dict.items():
-            print(f"{transaction_name}: OK: {stats['OK']}, FAILED: {stats['FAILED']}")
+            ok_count = stats['OK']
+            failed_count = stats['FAILED']
+            total_requests = stats['OK'] + stats['FAILED']
+            failed_percent_str = ""
+            if failed_count:
+                failed_percent = round(failed_count * 100 / total_requests, 2)
+                failed_percent_str = f" ({failed_percent}%)"
+
+            print(f"{transaction_name}: OK: {ok_count}, FAILED: {failed_count}{failed_percent_str}")
 
         for transaction_name, histogram in transactions_dict.items():
             print(f"{transaction_name}:")
             for percentile in [50, 90, 95, 99, 99.9]:
                 print(f"  {percentile}%: {histogram.percentile(percentile)} ms")
+
+    def process_raw_json(self, file, transactions_dict, transactions_stats_dict, start_ts):
+        data = json.loads(file.read())
+        for transaction_name, transaction_data in data.items():
+            if transaction_name == "Invalid":
+                continue
+            transactions_stats_dict[transaction_name]["OK"] += transaction_data["SuccessCount"]
+            transactions_stats_dict[transaction_name]["FAILED"] += transaction_data["FailureCount"]
+
+            if len(transactions_dict[transaction_name]) == 0:
+                buckets = transaction_data["LatencySuccessHistogramMs"]["bucketlist"]
+                transactions_dict[transaction_name] = Aggregator.Histogram(buckets)
+
+            for bucket_index, bucket_count in enumerate(transaction_data["LatencySuccessHistogramMs"]["buckets"]):
+                transactions_dict[transaction_name].add_bucket(bucket_index, bucket_count)
 
     def process_raw_csv(self, file, transactions_dict, transactions_stats_dict, start_ts):
         file.readline() # skip header
