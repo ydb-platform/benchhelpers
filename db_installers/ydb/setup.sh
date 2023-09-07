@@ -9,7 +9,7 @@ log() {
 }
 
 usage() {
-    echo "Usage: setup.sh [--ydbd-tar <PATH_TO_YDBD_TAR> --config <PATH_TO_SETUP_CONFIG>]"
+    echo "Usage: setup.sh --ydbd <PATH_TO_YDBD_TAR> --config <PATH_TO_SETUP_CONFIG> [--stop]"
 }
 
 if ! command -v parallel-ssh &> /dev/null
@@ -18,17 +18,17 @@ then
     exit 1
 fi
 
-STOP_YDB=0
+stop_ydb=0
 
 while [[ $# -gt 0 ]]; do case $1 in
     --ydbd)
-        YDBD_TAR=$2
+        ydbd_tar=$2
         shift;;
     --config|-c)
-        SETUP_CONFIG=$2
+        setup_config=$2
         shift;;
     --stop)
-        STOP_YDB=1;;
+        stop_ydb=1;;
     --help|-h)
         usage
         exit;;
@@ -37,69 +37,132 @@ while [[ $# -gt 0 ]]; do case $1 in
         exit;;
 esac; shift; done
 
-if [[ ! -e "$YDBD_TAR" ]] && [ $STOP_YDB -eq 0 ]; then
-    log "YDBD $YDBD_TAR is not exist"
+if [[ -z "$ydbd_tar" ]]; then
+    echo "ERROR: YDBD tar is not specified"
+    usage
     exit 1
 fi
 
-if [[ ! -e "$SETUP_CONFIG" ]]; then
-  log "Config file $SETUP_CONFIG is not exist"
+if [[ -z "$setup_config" ]]; then
+    echo "ERROR: Setup config is not specified"
+    usage
+    exit 1
+fi
+
+if [[ ! -e "$ydbd_tar" && $stop_ydb -eq 0 ]]; then
+    log "YDBD $ydbd_tar doesn't exist"
+    exit 1
+fi
+
+if [[ ! -e "$setup_config" ]]; then
+  log "Config file $setup_config doesn't exist"
   exit 1
 fi
 
-source $SETUP_CONFIG
+source $setup_config
 
-INIT_HOST=$(echo "$HOSTS" | tr ' ' '\n' | head -1)
+if [[ -z $YDB_SETUP_PATH ]]; then
+  log "YDB_SETUP_PATH is not specified in $setup_config"
+  exit 1
+fi
 
-echo "Stop"
-$debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "sudo sh -c 'pkill ydbd; sleep 5; pkill -9 ydbd; echo \"DONE\"'"
+if [[ "$YDB_SETUP_PATH" != /* ]]; then
+  log "YDB_SETUP_PATH must be absolute path"
+  exit 1
+fi
 
-if [ $STOP_YDB -eq 1 ]; then
+if [[ "$YDB_SETUP_PATH" == "/" ]]; then
+  log "YDB_SETUP_PATH can't be root"
+  exit 1
+fi
+
+eval "HOSTS_FILE=$HOSTS_FILE"
+eval "CONFIG_DIR=$CONFIG_DIR"
+
+if [[ ! -e "$HOSTS_FILE" ]]; then
+  log "Hosts file $HOSTS_FILE doesn't exist"
+  exit 1
+fi
+
+if [[ ! -e "$CONFIG_DIR" ]]; then
+  log "Config dir $CONFIG_DIR doesn't exist"
+  exit 1
+fi
+
+if [[ ! -e "$CONFIG_DIR/config.yaml" ]]; then
+  log "Config file $CONFIG_DIR/config.yaml doesn't exist"
+  exit 1
+fi
+
+if [[ ! -e "$CONFIG_DIR/config_dynnodes.yaml" ]]; then
+  log "Config file $CONFIG_DIR/config_dynnodes.yaml doesn't exist"
+  exit 1
+fi
+
+init_host=$(cat "$HOSTS_FILE" | head -1)
+
+log "Stop YDB if it is running"
+
+$debug parallel-ssh -h "$HOSTS_FILE" -t 0 -p 20 "sudo sh -c 'pkill ydbd; sleep 5; pkill -9 ydbd'" &>/dev/null || true
+
+if [ $stop_ydb -eq 1 ]; then
   exit 0
 fi
 
-echo "Deploy"
-$debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "mkdir -p $YDB_SETUP_PATH/cfg $YDB_SETUP_PATH/logs"
-$debug parallel-scp -H "$HOSTS" -t 0 -p 20 "$YDBD_TAR" "$YDB_SETUP_PATH"
-$debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "tar -xzf $YDB_SETUP_PATH/$(basename "$YDBD_TAR") --strip-component=1 -C $YDB_SETUP_PATH; \
-                                            rm -f $YDB_SETUP_PATH/$(basename "$YDBD_TAR")"
+log "Deploy"
 
-$debug parallel-scp -H "$HOSTS" -t 0 -p 20 "$CONFIG_DIR"/config.yaml "$YDB_SETUP_PATH/cfg"
-$debug parallel-scp -H "$HOSTS" -t 0 -p 20 $CONFIG_DIR/config_dynnodes.yaml "$YDB_SETUP_PATH/cfg"
+$debug parallel-ssh -i -h "$HOSTS_FILE" -t 0 -p 20 "\
+  sudo rm -rf $YDB_SETUP_PATH;   \
+  sudo mkdir -p $YDB_SETUP_PATH; \
+  sudo chown $USER $YDB_SETUP_PATH; \
+  mkdir $YDB_SETUP_PATH/cfg $YDB_SETUP_PATH/logs"
 
-echo "Format disks"
+tar_name=$(basename "$ydbd_tar")
+
+$debug parallel-scp -h "$HOSTS_FILE" -t 0 -p 20 "$ydbd_tar" "$YDB_SETUP_PATH"
+$debug parallel-ssh -i -h "$HOSTS_FILE" -t 0 -p 20 "\
+  tar -xzf $YDB_SETUP_PATH/$tar_name --strip-component=1 -C $YDB_SETUP_PATH; \
+  rm -f $YDB_SETUP_PATH/$tar_name"
+
+$debug parallel-scp -h "$HOSTS_FILE" -t 0 -p 20 "$CONFIG_DIR"/config.yaml "$YDB_SETUP_PATH/cfg"
+$debug parallel-scp -h "$HOSTS_FILE" -t 0 -p 20 "$CONFIG_DIR"/config_dynnodes.yaml "$YDB_SETUP_PATH/cfg"
+
+log "Format disks"
+
 for d in "${DISKS[@]}"; do
-  $debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "sudo LD_LIBRARY_PATH=$YDB_SETUP_PATH/lib $YDB_SETUP_PATH/bin/ydbd admin bs disk obliterate $d"
+  $debug parallel-ssh -i -h "$HOSTS_FILE" -t 0 -p 20 "sudo LD_LIBRARY_PATH=$YDB_SETUP_PATH/lib $YDB_SETUP_PATH/bin/ydbd admin bs disk obliterate $d"
 done
 
 GRPC_PORT=$GRPC_PORT_BEGIN
 IC_PORT=$IC_PORT_BEGIN
 MON_PORT=$MON_PORT_BEGIN
 
-NODE_BROKERS=$(echo "$HOSTS" | tr ' ' '\n' | sed "s/.*/--node-broker &:$GRPC_PORT/" | tr '\n' ' ')
+NODE_BROKERS=$(cat "$HOSTS_FILE" | sed "s/.*/--node-broker &:$GRPC_PORT/" | tr '\n' ' ')
 
-echo "Start static nodes"
-$debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "sudo LD_LIBRARY_PATH=$YDB_SETUP_PATH/lib bash -c 'nohup \
+log "Start static nodes"
+
+$debug parallel-ssh -h "$HOSTS_FILE" -t 0 -p 20 "sudo LD_LIBRARY_PATH=$YDB_SETUP_PATH/lib bash -c ' \
+    taskset -c $STATIC_TASKSET_CPU nohup \
     $YDB_SETUP_PATH/bin/ydbd server --log-level 3 --tcp --yaml-config $YDB_SETUP_PATH/cfg/config.yaml \
     --grpc-port $((GRPC_PORT++)) --ic-port $((IC_PORT++)) --mon-port $((MON_PORT++)) --node static &>$YDB_SETUP_PATH/logs/static.log &'"
 $debug sleep 1m
 
-IFS=', ' read -r -a HOSTS_LIST <<< "$HOSTS"
-for index in "${!HOSTS_LIST[@]}"
-do
-  $debug ssh "${HOSTS_LIST[index]}" "pgrep ydbd" > /dev/null
+for host in `cat $HOSTS_FILE`; do
+  $debug ssh $host "pgrep ydbd" > /dev/null
   if [[ "$?" -eq 1 ]]; then
-    echo "ERROR: On ${HOSTS_LIST[index]} the static node did not start with this error:"
-    $debug ssh "${HOSTS_LIST[index]}" "cat $YDB_SETUP_PATH/logs/static.log"
+    echo "ERROR: On $host the static node did not start"
+    exit 1
   fi
 done
 
+log "Init BS"
 
-echo "Init BS"
-$debug parallel-ssh -H "$INIT_HOST" -t 0 -p 20  \
+$debug ssh "$init_host" \
     "sudo LD_LIBRARY_PATH=$YDB_SETUP_PATH/lib $YDB_SETUP_PATH/bin/ydbd admin blobstorage config init --yaml-file $YDB_SETUP_PATH/cfg/config.yaml"
 
-$debug parallel-ssh -H "$INIT_HOST" -t 0 -p 20  \
+log "Create storage pools"
+
+$debug ssh "$init_host" \
     "sudo LD_LIBRARY_PATH=$YDB_SETUP_PATH/lib $YDB_SETUP_PATH/bin/ydbd admin database /Root/$DATABASE_NAME create $STORAGE_POOLS"
 
 if [[ $DYNNODE_COUNT -gt ${#DYNNODE_TASKSET_CPU[@]} ]]; then
@@ -108,8 +171,8 @@ if [[ $DYNNODE_COUNT -gt ${#DYNNODE_TASKSET_CPU[@]} ]]; then
 fi
 
 for ind in $(seq 0 $(($DYNNODE_COUNT-1))); do
-  echo "Start dynnodes: $((ind+1))"
-  $debug parallel-ssh -H "$HOSTS" -t 0 -p 20 "sudo bash -c ' \
+  log "Start dynnodes: $((ind+1))"
+  $debug parallel-ssh -h "$HOSTS_FILE" -t 0 -p 20 "sudo bash -c ' \
       taskset -c ${DYNNODE_TASKSET_CPU[$ind]} nohup \
       sudo LD_LIBRARY_PATH=$YDB_SETUP_PATH/lib $YDB_SETUP_PATH/bin/ydbd server --log-level 3 --grpc-port $((GRPC_PORT++)) --ic-port $((IC_PORT++)) --mon-port $((MON_PORT++)) \
       --yaml-config  $YDB_SETUP_PATH/cfg/config_dynnodes.yaml \
@@ -119,12 +182,12 @@ for ind in $(seq 0 $(($DYNNODE_COUNT-1))); do
 done
 $debug sleep 30s
 
-for index in "${!HOSTS_LIST[@]}"
-do
-  $debug ssh "${HOSTS_LIST[index]}" "pgrep -f 'ydbd server'" > /dev/null
-  if [[ "$?" -eq 1 ]]; then
-    echo "ERROR: On ${HOSTS_LIST[index]} the dynnodes did not start with this error:"
-    $debug ssh "${HOSTS_LIST[index]}" "cat $YDB_SETUP_PATH/logs/dyn1.log"
-  fi
-done
-
+if [[ -z "$debug" ]]; then
+  expected_count=$((DYNNODE_COUNT+1))
+  for host in `cat $HOSTS_FILE`; do
+    ydbd_count=`ssh $host "pgrep ydbd | wc -l" 2> /dev/null`
+    if [[ $ydbd_count -ne $expected_count ]]; then
+      echo "ERROR: not all ydbd processes are running on ${HOSTS_LIST[index]}: $ydbd_count out of $expected_count"
+    fi
+  done
+fi

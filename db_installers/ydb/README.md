@@ -2,7 +2,7 @@
 
 This guide explains how to deploy YDB on your machines.
 
-> Note: This is not a production deployment method. There are scripts that will allow you to run YDB and test as easily as possible.
+> Note: This is not a production deployment method. These are scripts that will allow you to run YDB and test as easily as possible.
 
 The deployment algorithm in the scripts is almost identical to the instructions in [Deploying a YDB cluster on virtual or bare-metal servers](https://ydb.tech/en/docs/deploy/manual/deploy-ydb-on-premises) with authentication disabled.
 
@@ -16,11 +16,11 @@ The deployment algorithm in the scripts is almost identical to the instructions 
 
 ### Configuration
 Set up the [setup_config.sh](setup_config.sh) file:
-+ `HOSTS` - a list of your machines where YDB will be deployed.
++ `HOSTS_FILE` - a path to the file with a list of your machines where YDB will be deployed
 + `Disks` - the disks that will store the database.
 > Note: the `Disks` will be formatted when the script is run.
 + `CONFIG_DIR` - the path to the directory with the `config.yaml` and `config_dynnodes.yaml` files (details below).
-+ `YDB_SETUP_PATH` - the path where YDB will be installed.
++ `YDB_SETUP_PATH` - the path where YDB will be installed. Be careful, the directory will be sudo-deleted when the script is run.
 + `GRPC_PORT_BEGIN` - the GRPC port for client-cluster interaction.
 + `IC_PORT_BEGIN` - the Interconnect port for intra-cluster node interaction.
 + `MON_PORT_BEGIN` - the port for HTTP interface of YDB Embedded UI.
@@ -29,6 +29,7 @@ Set up the [setup_config.sh](setup_config.sh) file:
 > + `GRPC_PORT_BEGIN...GRPC_PORT_BEGIN+DYNNODE_COUNT`
 > + `IC_PORT_BEGIN...IC_PORT_BEGIN+DYNNODE_COUNT`
 > + `MON_PORT_BEGIN...MON_PORT_BEGIN+DYNNODE_COUNT`
++ `STATIC_TASKSET_CPU` - CPU cores for the static node.
 + `DYNNODE_COUNT` - the number of dynamic nodes for each machine.
 + `DYNNODE_TASKSET_CPU` - the distribution of cores among dynamic nodes.
 + `DATABASE_NAME` - the name of the database.
@@ -62,7 +63,7 @@ wget https://binaries.ydb.tech/ydbd-stable-linux-amd64.tar.gz
 ```
 + `<PATH_TO_CONFIG>` - the path to the configuration file, for example [setup_config.sh](setup_config.sh).
 
-For check access to the built-in web interface, open in the browser the `http://<node.ydb.tech>:MON_PORT_BEGIN` URL, 
+For check access to the built-in web interface, open in the browser the `http://<node.ydb.tech>:MON_PORT_BEGIN` URL,
 where `<node.ydb.tech>` is the FQDN of the server running any static YDB node.
 
 ### Stop
