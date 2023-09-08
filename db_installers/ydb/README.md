@@ -16,7 +16,7 @@ The deployment algorithm in the scripts is almost identical to the instructions 
 
 ### Configuration
 Set up the [setup_config.sh](setup_config.sh) file:
-+ `HOSTS_FILE` - a path to the file with a list of your machines where YDB will be deployed
++ `HOSTS_FILE` - a path to the file with a list of your machines where YDB will be deployed. Hosts are separated by newline.
 + `Disks` - the disks that will store the database.
 > Note: the `Disks` will be formatted when the script is run.
 + `CONFIG_DIR` - the path to the directory with the `config.yaml` and `config_dynnodes.yaml` files (details below).
@@ -43,6 +43,8 @@ see the [quick guide](https://ydb.tech/en/docs/deploy/manual/deploy-ydb-on-premi
 is used for creating dynamic nodes.
 
 The repository contains [config.yaml](./configs/config.yaml) and [config_dynnodes.yaml](./configs/config_dynnodes.yaml) files for `mirror-3dc-3nodes`.
+
+You might want to use `generate_hosts_section.py` to generate the `hosts` section of the configuration file based on your HOSTS_FILE.
 
 ### Start
 The launch is performed in several stages:
