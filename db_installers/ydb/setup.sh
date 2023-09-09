@@ -9,7 +9,7 @@ log() {
 }
 
 usage() {
-    echo "Usage: setup.sh --ydbd <PATH_TO_YDBD_TAR> --config <PATH_TO_SETUP_CONFIG> [--stop]"
+    echo "Usage: setup.sh --ydbd <PATH_TO_YDBD_TAR> --ydbd-url <YDB_TAR_URL> --config <PATH_TO_SETUP_CONFIG> [--stop]"
 }
 
 if ! command -v parallel-ssh &> /dev/null
@@ -24,6 +24,9 @@ while [[ $# -gt 0 ]]; do case $1 in
     --ydbd)
         ydbd_tar=$2
         shift;;
+    --ydbd-url)
+        ydbd_url=$2
+        shift;;
     --config|-c)
         setup_config=$2
         shift;;
@@ -37,8 +40,8 @@ while [[ $# -gt 0 ]]; do case $1 in
         exit;;
 esac; shift; done
 
-if [[ -z "$ydbd_tar" ]]; then
-    echo "ERROR: YDBD tar is not specified"
+if [[ -z "$ydbd_tar" && -z "$ydbd_url" && -z $stop_ydb ]]; then
+    echo "ERROR: you must specify either option: --ydbd, --ydbd-url, --stop"
     usage
     exit 1
 fi
@@ -46,11 +49,6 @@ fi
 if [[ -z "$setup_config" ]]; then
     echo "ERROR: Setup config is not specified"
     usage
-    exit 1
-fi
-
-if [[ ! -e "$ydbd_tar" && $stop_ydb -eq 0 ]]; then
-    log "YDBD $ydbd_tar doesn't exist"
     exit 1
 fi
 
@@ -117,9 +115,18 @@ $debug parallel-ssh -i -h "$HOSTS_FILE" -t 0 -p 20 "\
   sudo chown $USER $YDB_SETUP_PATH; \
   mkdir $YDB_SETUP_PATH/cfg $YDB_SETUP_PATH/logs"
 
-tar_name=$(basename "$ydbd_tar")
+if [[ -n "$ydbd_tar" ]]; then
+  tar_name=$(basename "$ydbd_tar")
+  $debug parallel-scp -h "$HOSTS_FILE" -t 0 -p 20 "$ydbd_tar" "$YDB_SETUP_PATH"
+elif [[ -n "$ydbd_url" ]]; then
+  tar_name=$(basename $ydbd_url)
+  $debug parallel-ssh -h "$HOSTS_FILE" -t 0 -p 20 "wget -q $ydbd_url -O $YDB_SETUP_PATH/$tar_name"
+else
+  echo "ERROR: ydbd tar or url is not specified"
+  usage
+  exit 1
+fi
 
-$debug parallel-scp -h "$HOSTS_FILE" -t 0 -p 20 "$ydbd_tar" "$YDB_SETUP_PATH"
 $debug parallel-ssh -i -h "$HOSTS_FILE" -t 0 -p 20 "\
   tar -xzf $YDB_SETUP_PATH/$tar_name --strip-component=1 -C $YDB_SETUP_PATH; \
   rm -f $YDB_SETUP_PATH/$tar_name"
