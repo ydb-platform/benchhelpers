@@ -1,11 +1,8 @@
-#!/bin/bash
-
 HOSTS_FILE="<PATH_TO_HOSTS_FILE>"
 
-DISKS=(/dev/nvme0n1p2
-       /dev/nvme1n1p2
-       /dev/nvme2n1p2
-       /dev/nvme3n1p2)
+DISKS=(/dev/disk/by-partlabel/ydb_disk_ssd_01
+       /dev/disk/by-partlabel/ydb_disk_ssd_02
+       /dev/disk/by-partlabel/ydb_disk_ssd_03)
 
 CONFIG_DIR="<PATH_TO_CONFIG>"
 YDB_SETUP_PATH="/opt/ydb"
@@ -21,5 +18,4 @@ DYNNODE_TASKSET_CPU=(6-10 11-15 16-20)
 
 DATABASE_NAME="db"
 
-# <pool type>:<pool size>
-STORAGE_POOLS="ssd:1"
+STORAGE_POOLS="ssd:11"

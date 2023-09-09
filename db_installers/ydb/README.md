@@ -42,7 +42,7 @@ see the [quick guide](https://ydb.tech/en/docs/deploy/manual/deploy-ydb-on-premi
 `config_dynnodes.yaml` is configured in a similar way, but
 is used for creating dynamic nodes.
 
-The repository contains [config.yaml](./configs/config.yaml) and [config_dynnodes.yaml](./configs/config_dynnodes.yaml) files for `mirror-3dc-3nodes`.
+The repository contains [config.yaml](./examples/ydb-3-nodes/configs/config.yaml) and [config_dynnodes.yaml](./examples/ydb-3-nodes/configs/config_dynnodes.yaml) files for `mirror-3dc-3nodes` (requires 3 machines with 3 disks each).
 
 You might want to use `generate_hosts_section.py` to generate the `hosts` section of the configuration file based on your HOSTS_FILE.
 
