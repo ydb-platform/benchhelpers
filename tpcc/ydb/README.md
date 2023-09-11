@@ -22,14 +22,19 @@ machine2.com
 EOF
 ```
 
+5. To generate (if needed) and save your SSH keys:
+```
+../../common/copy_ssh_keys.sh --hosts tpcc.hosts
+```
+
 Prerequisites to run TPC-C client:
-1. Install Java-17.
+1. Install Java-20. You can use `../../common/install_java20.sh --hosts tpcc.hosts`
 2. Install YDB's [fork](https://github.com/ydb-platform/benchbase) of benchbase into your home folder on each machine.
 You have two options: build it on your own or use the prebuilt package.
 
-To install the package, execute the following:
+To install the package, execute the following (note, that if you don't specify the package, the script will download the latest from the internet):
 ```
-./upload_benchbase.sh --package benchbase-ydb.tgz --hosts tpcc.hosts
+./upload_benchbase.sh --hosts tpcc.hosts [--package benchbase-ydb.tgz]
 ```
 
 [Here](https://github.com/ydb-platform/ydb-jdbc-driver/#authentication-modes) you can find description of the authentication. Usually you will either use anonymous authentication in case of self deployed YDB, or provide a service account key file using the `saFile=file:` jdbc url parameter in [tpcc_config_template.xml](https://github.com/ydb-platform/benchhelpers/blob/108cb4ca3efc89dee7866b4bb8fca1a59ad265a8/tpcc/ydb/tpcc_config_template.xml#L7), when run managed YDB. Also, these scripts use `ydb` CLI and python script using `ydb` SDK. In case of managed YDB and service account key, you must export `YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS` and `SA_KEY_FILE` before running the scripts.
