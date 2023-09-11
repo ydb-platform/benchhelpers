@@ -6,11 +6,6 @@ The TPC-C setup involves the following components:
 1. Helper scripts located in this directory. Execute them on any random machine.
 2. TPC-C clients, which can be executed on the same machine as the helper scripts. However, for a reasonable YDB cluster, it is recommended to have multiple machines running the TPC-C clients. Please, check hardware [requirements](https://github.com/ydb-platform/benchbase#hardware-requirements) for TPC-C clients.
 3. A running YDB cluster. While it can be on the same machines where the TPC-C client is executed, we strongly advise having separate machines for the YDB cluster.
-
-Prerequisites to run helper scripts:
-1. Install pssh.
-2. Install the ydb, numpy and requests Python packages using `pip3 install ydb numpy requests`.
-3. [Download](https://ydb.tech/en/docs/downloads/) the latest YDB CLI and place it somewhere in your PATH.
 4. Prepare a file containing a list of TPC-C hosts (separated by new lines) to run the TPC-C client on. Note that if your machine has multiple cores, you can run multiple instances of TPC-C on the same machine. For example:
 
 ```
@@ -22,9 +17,22 @@ machine2.com
 EOF
 ```
 
+For a regular installation to install all the dependencies and TPC-C, you can use the following command:
+```
+./setup_tpcc_nodes.sh --hosts tpcc.hosts
+```
+
+Until the end of this section we provide a detailed description of the prerequisites and how to install them manually.
+
+Prerequisites to run helper scripts:
+1. Install pssh.
+2. Install the ydb, numpy and requests Python packages using `pip3 install ydb numpy requests`.
+3. [Download](https://ydb.tech/en/docs/downloads/) the latest YDB CLI and place it somewhere in your PATH.
+
 5. To generate (if needed) and save your SSH keys:
 ```
 ../../common/copy_ssh_keys.sh --hosts tpcc.hosts
+exec -l $SHELL
 ```
 
 Prerequisites to run TPC-C client:

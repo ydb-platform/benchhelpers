@@ -116,7 +116,7 @@ if [ $? -ne 0 ]; then
 fi
 
 echo "Adding Java 20 symlink to the /usr/local/bin"
-parallel-ssh -i -h $unique_hosts "sudo ln -s \$HOME/$java_dir/bin/java /usr/local/bin/java"
+parallel-ssh -i -h $unique_hosts "sudo ln -sf \$HOME/$java_dir/bin/java /usr/local/bin/java"
 if [ $? -ne 0 ]; then
     echo "Failed to add Java 20 symlink to the /usr/local/bin"
     exit 1
