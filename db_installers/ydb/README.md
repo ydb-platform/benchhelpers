@@ -14,6 +14,19 @@ The deployment algorithm in the scripts is almost identical to the instructions 
 
 ## Getting Started
 
+### Quick example of mirror-3-dc deployment
+
+Suppose you have `n` machines, each with 1 disk, 16 CPU cores, and 32 GB of RAM (e.g. AWS' c5d.4xlarge instances). `n >= 9` and `n` is divisible by 3. We suppose that all machines can be accessed via SSH. You can deploy your cluster as follows:
+1. Create a file `ydb.hosts` with a list of your machines where YDB will be deployed. Hosts are separated by newline.
+2. Find what device name is assigned to the disk you're going to use for YDB.
+3. Execute the following command:
+```
+pip3 install PyYAML
+./db_installers/ydb/setup_mirror_3_dc.sh --hosts ydb.hosts --disk <DISK_NAME>
+```
+
+Below is an instruction for more complex cases.
+
 ### Configuration
 Set up the [setup_config.sh](setup_config.sh) file:
 + `HOSTS_FILE` - a path to the file with a list of your machines where YDB will be deployed. Hosts are separated by newline.
