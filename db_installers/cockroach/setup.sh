@@ -37,11 +37,6 @@ if [[ ! -e "$COCKROACH_CONFIG" ]]; then
     exit 1
 fi
 
-if [[ ! -x "$HA_PROXY_BIN" ]]; then
-    echo "No ha proxy bin in path: $HA_PROXY_BIN"
-    exit 1
-fi
-
 if [ -n "$INIT_PER_DISK" ] || [ "$INIT_PER_DISK" != "0" ]; then
   START_ARGS="--per-disk-instance"
 fi
@@ -82,41 +77,49 @@ parallel-ssh -H "$NODES" -p 30 "sudo mkdir -p $COCKROACH_DEPLOY_PATH/logs;
 "$PATH_TO_SCRIPT"/control.py -c "$COCKROACH_CONFIG" --init --hosts "$INIT_NODE"
 sleep 10s
 
+if [[ -n "$HA_PROXY_BIN" ]]; then
+    echo "Deploy HAProxy"
 
-echo "Deploy HAProxy"
+    if [[ ! -x "$HA_PROXY_BIN" ]]; then
+        echo "No ha proxy bin in path: $HA_PROXY_BIN"
+        exit 1
+    fi
 
-parallel-ssh -H "$HA_PROXY_NODES" -p 30 "sudo mkdir -p $HA_PROXY_SETUP_PATH"
+    parallel-ssh -H "$HA_PROXY_NODES" -p 30 "sudo mkdir -p $HA_PROXY_SETUP_PATH"
 
-# !!! this assumes no other HAProxy on these slices
-if [ -e "$HA_PROXY_BIN" ]; then
-  parallel-scp -H "$HA_PROXY_NODES" -p 30 "$HA_PROXY_BIN" "$DEPLOY_TMP_PATH";
-  parallel-ssh -H "$HA_PROXY_NODES" -p 30 "sudo mv $DEPLOY_TMP_PATH/$(basename $HA_PROXY_BIN) $HA_PROXY_SETUP_PATH"
+    # !!! this assumes no other HAProxy on these slices
+    if [ -e "$HA_PROXY_BIN" ]; then
+      parallel-scp -H "$HA_PROXY_NODES" -p 30 "$HA_PROXY_BIN" "$DEPLOY_TMP_PATH";
+      parallel-ssh -H "$HA_PROXY_NODES" -p 30 "sudo mv $DEPLOY_TMP_PATH/$(basename $HA_PROXY_BIN) $HA_PROXY_SETUP_PATH"
+    fi
+
+    # generate haproxy.cfg
+    parallel-ssh -H "$HA_PROXY_NODES" -p 30 "cd $HA_PROXY_SETUP_PATH; sudo $COCKROACH_DEPLOY_PATH/cockroach gen haproxy --insecure --host=$INIT_NODE --port=$COCKROACH_PORT"
+
+    # change maxconn to 250000
+    parallel-ssh -H "$HA_PROXY_NODES" -p 30 "echo \"\$(cat $HA_PROXY_SETUP_PATH/haproxy.cfg | sed '/[space]*maxconn/s/4096/250000/' | sed 's/defaults/defaults\n    maxconn\t\t250000/')\" | sudo tee $HA_PROXY_SETUP_PATH/haproxy.cfg"
+
+
+    if [ -n "$HA_PROXY_SETUP_PATH" ]; then
+      HA_PROXY="./haproxy"
+    else
+      HA_PROXY="haproxy"
+    fi
+
+    echo "Start HAProxy"
+    HA_PROXY_CONFIG_NAME="haproxy.cfg"
+    parallel-ssh -H "$HA_PROXY_NODES" -p 30 "sudo -u root sh -c 'ulimit -n 500000; cd $HA_PROXY_SETUP_PATH; $HA_PROXY -q -D -f $HA_PROXY_CONFIG_NAME'"
+    sleep 5s
+
+    IFS=', ' read -r -a HOSTS_LIST <<< "$HA_PROXY_NODES"
+
+    for index in "${!HOSTS_LIST[@]}"
+    do
+      $debug ssh "${HOSTS_LIST[index]}" "pgrep -f 'haproxy'" > /dev/null
+      if [[ "$?" -eq 1 ]]; then
+        echo "ERROR: haproxy crashed on ${HOSTS_LIST[index]}"
+      fi
+    done
 fi
 
-# generate haproxy.cfg
-parallel-ssh -H "$HA_PROXY_NODES" -p 30 "cd $HA_PROXY_SETUP_PATH; sudo $COCKROACH_DEPLOY_PATH/cockroach gen haproxy --insecure --host=$INIT_NODE --port=$COCKROACH_PORT"
-
-# change maxconn to 250000
-parallel-ssh -H "$HA_PROXY_NODES" -p 30 "echo \"\$(cat $HA_PROXY_SETUP_PATH/haproxy.cfg | sed '/[space]*maxconn/s/4096/250000/' | sed 's/defaults/defaults\n    maxconn\t\t250000/')\" | sudo tee $HA_PROXY_SETUP_PATH/haproxy.cfg"
-
-
-if [ -n "$HA_PROXY_SETUP_PATH" ]; then
-  HA_PROXY="./haproxy"
-else
-  HA_PROXY="haproxy"
-fi
-
-echo "Start HAProxy"
-HA_PROXY_CONFIG_NAME="haproxy.cfg"
-parallel-ssh -H "$HA_PROXY_NODES" -p 30 "sudo -u root sh -c 'ulimit -n 500000; cd $HA_PROXY_SETUP_PATH; $HA_PROXY -q -D -f $HA_PROXY_CONFIG_NAME'"
-sleep 5s
-
-IFS=', ' read -r -a HOSTS_LIST <<< "$HA_PROXY_NODES"
-
-for index in "${!HOSTS_LIST[@]}"
-do
-  $debug ssh "${HOSTS_LIST[index]}" "pgrep -f 'haproxy'" > /dev/null
-  if [[ "$?" -eq 1 ]]; then
-    echo "ERROR: haproxy crashed on ${HOSTS_LIST[index]}"
-  fi
-done
+echo "Cockroach setup complete"
