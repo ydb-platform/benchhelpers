@@ -10,6 +10,7 @@ compaction_threads=10
 java_memory="2G"
 log_dir="$HOME/tpcc_logs/ydb"
 tpcc_path="$HOME/benchbase-ydb"
+ydb_port=2135
 
 # in total, i.e. for all TPC-C instances. We will calculate per instance value below
 max_sessions=1000
@@ -22,6 +23,7 @@ usage() {
     echo "    --warehouses <N> \\"
     echo "    --config <config_template> --ydb-host <ydb_host> --database <DB> \\"
     echo "    --hosts <hosts_file> \\"
+    echo "    [--ydb-port $ydb_port] \\"
     echo "    [--compaction-threads <compaction_threads>] \\"
     echo "    [--skip-compaction] \\"
     echo "    [--run-phase-only] \\"
@@ -90,6 +92,9 @@ while [[ "$#" > 0 ]]; do case $1 in
         shift;;
     --ydb-host)
         ydb_host=$2
+        shift;;
+    --ydb-port)
+        ydb_port=$2
         shift;;
     --database)
         database=$2
@@ -218,9 +223,9 @@ host_count=`wc -l $hosts_file | awk '{print $1}'`
 min_presplit_shards=`expr $loader_threads \* $host_count`
 
 if [[ -z "$use_grpcs" ]]; then
-    endpoint="grpc://$ydb_host:2135"
+    endpoint="grpc://$ydb_host:$ydb_port"
 else
-    endpoint="grpcs://$ydb_host:2135"
+    endpoint="grpcs://$ydb_host:$ydb_port"
 fi
 
 viewer_url="http://$ydb_host:8765"

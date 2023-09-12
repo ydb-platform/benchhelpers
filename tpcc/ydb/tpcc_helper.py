@@ -106,6 +106,7 @@ class YdbConnection:
     def __init__(self, args):
         try:
             credentials = None
+            userName = os.getenv("YDB_USER")
             if args.token:
                 if not os.path.isfile(args.token):
                     print("Token file {} not found".format(args.token), file=sys.stderr)
@@ -113,6 +114,13 @@ class YdbConnection:
                 with open(args.token, 'r') as f:
                     token = f.readline()
                 credentials = ydb.AuthTokenCredentials(token)
+            elif userName is not None:
+                temp_config = ydb.DriverConfig(
+                    args.endpoint, args.database,
+                    root_certificates=ydb.load_ydb_root_certificate(),
+                )
+                temp_pass = os.getenv("YDB_PASSWORD")
+                credentials = ydb.StaticCredentials(temp_config, user=userName, password=temp_pass)
             else:
                 credentials = ydb.credentials_from_env_variables()
 
