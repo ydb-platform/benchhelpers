@@ -7,6 +7,7 @@ execute_time_seconds=60
 warmup_time_seconds=60
 loader_threads=16
 compaction_threads=10
+compaction_auth=disabled
 java_memory="2G"
 log_dir="$HOME/tpcc_logs/ydb"
 tpcc_path="$HOME/benchbase-ydb"
@@ -25,6 +26,7 @@ usage() {
     echo "    --hosts <hosts_file> \\"
     echo "    [--ydb-port $ydb_port] \\"
     echo "    [--compaction-threads <compaction_threads>] \\"
+    echo "    [--compaction-auth <Disabled,OAuth,Login>] \\"
     echo "    [--skip-compaction] \\"
     echo "    [--run-phase-only] \\"
     echo "    [--log-dir <log_dir>] \\"
@@ -101,6 +103,9 @@ while [[ "$#" > 0 ]]; do case $1 in
         shift;;
     --compaction-threads)
         compaction_threads=$2
+        shift;;
+    --compaction-auth)
+        compaction_auth=$2
         shift;;
     --skip-compaction)
         skip_compaction=1
@@ -398,7 +403,7 @@ if [ -z "$no_load" ]; then
         compaction_start=$SECONDS
         log "Compacting tables"
         for table in oorder district item warehouse customer order_line new_order stock history; do
-            $table_full_compact --all --viewer-url "$viewer_url" --disable-auth --threads $compaction_threads ${database}/${table} 1>/dev/null
+            $table_full_compact --all --viewer-url "$viewer_url" --auth $compaction_auth --threads $compaction_threads ${database}/${table} 1>/dev/null
             if [[ $? -ne 0 ]]; then
                 log "Failed to compact table $table"
                 exit 1
