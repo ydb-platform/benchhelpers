@@ -25,6 +25,12 @@ pip3 install PyYAML
 ./db_installers/ydb/setup_mirror_3_dc.sh --hosts ydb.hosts --disk <DISK_NAME>
 ```
 
+If you want to use prometheus and grafana, you can run the following command:
+```
+./generate_prometheus.py --hosts ydb.hosts > prometheus.yml
+```
+Then follow [the instructions](https://ydb.tech/en/docs/administration/monitoring#prometheus-grafana) to setup prometheus, grafana and import dashboards.
+
 Below is an instruction for more complex cases.
 
 ### Configuration

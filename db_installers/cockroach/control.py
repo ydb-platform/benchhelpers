@@ -191,10 +191,11 @@ class Stop(PSSHAction):
                 self.username = parent.username
                 self.sudo_user = parent.sudo_user
 
-        haproxy_action = PSSHAction(HAProxyArgs(HA_PROXY_HOSTS, self))
-        cmd = "sudo -u {user} sh -c 'pkill haproxy; sleep 1;"
-        cmd += "pkill -9 haproxy; echo \"DONE\"'"
-        haproxy_action.pssh_run(cmd.format(user=self.sudo_user))
+        if HA_PROXY_HOSTS:
+            haproxy_action = PSSHAction(HAProxyArgs(HA_PROXY_HOSTS, self))
+            cmd = "sudo -u {user} sh -c 'pkill haproxy; sleep 1;"
+            cmd += "pkill -9 haproxy; echo \"DONE\"'"
+            haproxy_action.pssh_run(cmd.format(user=self.sudo_user))
 
         cmd = "sudo -u {user} sh -c 'pkill cockroach; sleep 1;"
         cmd += "pkill -9 cockroach; echo \"DONE\"'"
@@ -287,7 +288,9 @@ class ReturnHaProxyHosts(BaseAction):
         super().__init__(args)
 
     def run(self):
-        print(' '.join(HA_PROXY_HOSTS))
+        if HA_PROXY_HOSTS:
+            print(' '.join(HA_PROXY_HOSTS))
+        return ""
 
 
 class ReturnHaProxySetupPath(BaseAction):
