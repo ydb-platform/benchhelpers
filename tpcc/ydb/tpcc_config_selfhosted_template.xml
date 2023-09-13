@@ -4,7 +4,7 @@
     <!-- Connection details -->
     <type>YDB</type>
     <driver>tech.ydb.jdbc.YdbDriver</driver>
-    <url>jdbc:ydb:grpcs://{ydb_host}:2136{db_path}?sessionTimeout=300s&amp;sessionPoolSizeMax={max_sessions}&amp;secureConnectionCertificate=ca.crt</url>
+    <url>jdbc:ydb:grpcs://{ydb_host}:2136{db_path}?sessionTimeout=300s&amp;sessionPoolSizeMax={max_sessions}&amp;secureConnectionCertificate=file:ca.crt</url>
     <isolation>TRANSACTION_SERIALIZABLE</isolation>
     <username>tpcc1</username>
     <password>Passw0rd</password>
