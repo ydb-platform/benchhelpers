@@ -76,14 +76,14 @@ def main():
     parser = ArgumentParser()
     parser.add_argument('--threads', type=int, default=10)
     parser.add_argument('--viewer-url')
-    parser.add_argument('--disable-auth', action='store_true')
+    parser.add_argument('--auth', dest="auth_mode", default='OAuth')
     parser.add_argument('--all', action='store_true')
     parser.add_argument('table')
     args = parser.parse_args()
 
     global VIEWER_HEADERS
 
-    if args.disable_auth:
+    if args.auth_mode=='' or args.auth_mode.lower()=='disabled':
         VIEWER_HEADERS = {}
     else:
         token_path = os.path.expanduser("~/.ydb/token")
@@ -93,7 +93,7 @@ def main():
 
         token = open(token_path).read().strip()
         VIEWER_HEADERS = {
-            'Authorization': 'OAuth ' + token,
+            'Authorization': str(args.auth_mode) + ' ' + token,
         }
 
     # TODO: eliminate global variable
