@@ -20,6 +20,7 @@ EOF
 For a regular installation to install all the dependencies and TPC-C, you can use the following command:
 ```
 ./setup_tpcc_nodes.sh --hosts tpcc.hosts
+exec -l $SHELL
 ```
 
 Until the end of this section we provide a detailed description of the prerequisites and how to install them manually.
