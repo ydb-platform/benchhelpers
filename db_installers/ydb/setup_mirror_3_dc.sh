@@ -75,6 +75,9 @@ common_dir="$script_dir/../../common"
 
 "$common_dir"/copy_ssh_keys.sh --hosts "$hosts"
 
+echo "Killing YDB if it is running"
+parallel-ssh -h "$hosts" "sudo pkill -9 ydbd"
+
 "$common_dir"/partition_disk.sh --hosts "$hosts" --disk "$disk"
 
 "$common_dir"/enable_transparent_hugepages.sh --hosts "$hosts"
