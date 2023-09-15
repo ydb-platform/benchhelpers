@@ -215,11 +215,7 @@ def write_ydb_yaml(sections, path):
             f.write("\n")
 
 
-def write_setup_config(disk, disk_type, hosts_num, storage_cores, compute_cores, hosts_file, output_dir):
-    last_storage_core = storage_cores - 1
-    start_compute_core = storage_cores
-    last_compute_core = start_compute_core + compute_cores - 1
-
+def write_setup_config(disk, disk_type, hosts_num, storage_cores_taskset, compute_cores_taskset, hosts_file, output_dir):
     pool_kind = disk_type.lower()
 
     vdisks_per_disk = 4
@@ -241,10 +237,10 @@ GRPC_PORT_BEGIN=2135
 IC_PORT_BEGIN=19001
 MON_PORT_BEGIN=8765
 
-STATIC_TASKSET_CPU="0-{last_storage_core}"
+STATIC_TASKSET_CPU="{storage_cores_taskset}"
 
 DYNNODE_COUNT=1
-DYNNODE_TASKSET_CPU=({start_compute_core}-{last_compute_core})
+DYNNODE_TASKSET_CPU=("{compute_cores_taskset}")
 
 DATABASE_NAME="db"
 
@@ -262,8 +258,10 @@ def main():
     parser.add_argument("--disk", help="Path to the disk on the VMs where YDB data will be stored", required=True)
     parser.add_argument("--disk-type", help="Type of disk on the VMs where YDB data will be stored", default="SSD")
     parser.add_argument("--output-dir", help="Directory where the generated YAML files will be stored", default="mydb/cluster_configs")
-    parser.add_argument("--storage-cores", help="Number of storage cores", default=5)
-    parser.add_argument("--compute-cores", help="Number of compute (dynnode) cores", default=9)
+    parser.add_argument("--storage-cores", help="Number of storage cores in pool", default=6)
+    parser.add_argument("--compute-cores", help="Number of compute (dynnode) cores in pool", default=9)
+    parser.add_argument("--storage-cores-taskset", help="Storage node taskset", default="0-5")
+    parser.add_argument("--compute-cores-taskset", help="Compute node taskset", default="6-15")
 
     args = parser.parse_args()
 
@@ -315,8 +313,8 @@ def main():
         args.disk,
         args.disk_type,
         host_count,
-        args.storage_cores,
-        args.compute_cores,
+        args.storage_cores_taskset,
+        args.compute_cores_taskset,
         args.hosts,
         output_dir)
 
