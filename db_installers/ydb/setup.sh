@@ -239,6 +239,7 @@ if [[ -z "$debug" ]]; then
     ydbd_count=`ssh $host "pgrep ydbd | wc -l" 2> /dev/null`
     if [[ $ydbd_count -ne $expected_count ]]; then
       echo "ERROR: not all ydbd processes are running on ${HOSTS_LIST[index]}: $ydbd_count out of $expected_count"
+      exit 1
     fi
   done
 fi
