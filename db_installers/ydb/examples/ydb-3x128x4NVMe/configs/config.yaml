@@ -1,0 +1,150 @@
+static_erasure: mirror-3-dc
+
+host_configs:
+- drive:
+  - path: /dev/disk/by-partlabel/nvme_01
+    type: SSD
+  - path: /dev/disk/by-partlabel/nvme_02
+    type: SSD
+  - path: /dev/disk/by-partlabel/nvme_03
+    type: SSD
+  - path: /dev/disk/by-partlabel/nvme_04
+    type: SSD
+  host_config_id: 1
+
+hosts:
+  - host: host-fqdn-001
+    host_config_id: 1
+    walle_location:
+      body: 1
+      data_center: 'zone-a'
+      rack: '1'
+
+  - host: host-fqdn-002
+    host_config_id: 1
+    walle_location:
+      body: 2
+      data_center: 'zone-b'
+      rack: '2'
+
+  - host: host-fqdn-003
+    host_config_id: 1
+    walle_location:
+      body: 3
+      data_center: 'zone-c'
+      rack: '3'
+
+domains_config:
+  domain:
+  - name: Root
+    storage_pool_types:
+    - kind: ssd
+      pool_config:
+        box_id: 1
+        erasure_species: mirror-3-dc
+        kind: ssd
+        geometry:
+          realm_level_begin: 10
+          realm_level_end: 20
+          domain_level_begin: 10
+          domain_level_end: 256
+        pdisk_filter:
+        - property:
+          - type: SSD
+        vdisk_kind: Default
+  security_config:
+    enforce_user_token_requirement: false
+  state_storage:
+  - ring:
+      node: [1, 2, 3]
+      nto_select: 3
+    ssid: 1
+
+blob_storage_config:
+  service_set:
+    groups:
+    - erasure_species: mirror-3-dc
+      rings:
+
+      - fail_domains:
+        - vdisk_locations:
+          - node_id: "host-fqdn-001"
+            pdisk_category: SSD
+            path: /dev/disk/by-partlabel/nvme_01
+        - vdisk_locations:
+          - node_id: "host-fqdn-001"
+            pdisk_category: SSD
+            path: /dev/disk/by-partlabel/nvme_02
+        - vdisk_locations:
+          - node_id: "host-fqdn-001"
+            pdisk_category: SSD
+            path: /dev/disk/by-partlabel/nvme_03
+
+      - fail_domains:
+        - vdisk_locations:
+          - node_id: "host-fqdn-002"
+            pdisk_category: SSD
+            path: /dev/disk/by-partlabel/nvme_01
+        - vdisk_locations:
+          - node_id: "host-fqdn-002"
+            pdisk_category: SSD
+            path: /dev/disk/by-partlabel/nvme_02
+        - vdisk_locations:
+          - node_id: "host-fqdn-002"
+            pdisk_category: SSD
+            path: /dev/disk/by-partlabel/nvme_03
+
+      - fail_domains:
+        - vdisk_locations:
+          - node_id: "host-fqdn-003"
+            pdisk_category: SSD
+            path: /dev/disk/by-partlabel/nvme_01
+        - vdisk_locations:
+          - node_id: "host-fqdn-003"
+            pdisk_category: SSD
+            path: /dev/disk/by-partlabel/nvme_02
+        - vdisk_locations:
+          - node_id: "host-fqdn-003"
+            pdisk_category: SSD
+            path: /dev/disk/by-partlabel/nvme_03
+
+channel_profile_config:
+  profile:
+  - channel:
+    - erasure_species: mirror-3-dc
+      pdisk_category: 0
+      storage_pool_kind: ssd
+    - erasure_species: mirror-3-dc
+      pdisk_category: 0
+      storage_pool_kind: ssd
+    - erasure_species: mirror-3-dc
+      pdisk_category: 0
+      storage_pool_kind: ssd
+    profile_id: 0
+
+actor_system_config:
+  executor:
+  - {name: System, spin_threshold: '10', threads: 20, max_threads: 30, type: BASIC}
+  - {name: User, spin_threshold: '1', threads: 1, max_threads: 1, type: BASIC}
+  - {name: Batch, spin_threshold: '1', threads: 4, max_threads: 7, type: BASIC}
+  - {name: IO, threads: 1, type: IO}
+  - {name: IC, spin_threshold: '10', threads: 7, max_threads: 30, time_per_mailbox_micro_secs: 100, max_avg_ping_deviation: 500, type: BASIC}
+  scheduler: {progress_threshold: '10000', resolution: '64', spin_threshold: '0'}
+  sys_executor: 0
+  user_executor: 1
+  batch_executor: 2
+  io_executor: 3
+  service_executor:
+  - {executor_id: 4, service_name: Interconnect}
+
+table_service_config:
+  sql_version: 1
+  enable_kqp_scan_query_source_read: true
+  enable_kqp_data_query_source_read: true
+  enable_kqp_data_query_stream_lookup: true
+  enable_kqp_scan_query_stream_lookup: true
+  enable_kqp_immediate_effects: true
+  enable_sequential_reads: true
+
+shared_cache_config:
+  memory_limit: 70000000000

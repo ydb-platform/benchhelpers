@@ -1,0 +1,22 @@
+HOSTS_FILE="<PATH_TO_HOSTS_FILE>"
+
+DISKS=(/dev/disk/by-partlabel/kikimr_nvme_01
+       /dev/disk/by-partlabel/kikimr_nvme_02
+       /dev/disk/by-partlabel/kikimr_nvme_03
+       /dev/disk/by-partlabel/kikimr_nvme_04)
+
+CONFIG_DIR="<PATH_TO_CONFIG>"
+YDB_SETUP_PATH="/opt/ydb"
+
+GRPC_PORT_BEGIN=2135
+IC_PORT_BEGIN=19001
+MON_PORT_BEGIN=8765
+
+STATIC_TASKSET_CPU="0-15,64-79"
+
+DYNNODE_COUNT=6
+DYNNODE_TASKSET_CPU=(16-23,80-87 24-31,88-95 32-39,96-103 40-47,104-111 48-55,112-119 56-63,120-127)
+
+DATABASE_NAME="db"
+
+STORAGE_POOLS="ssd:15"
