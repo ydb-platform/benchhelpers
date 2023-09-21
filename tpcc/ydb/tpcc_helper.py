@@ -1116,7 +1116,7 @@ Result: {self.name}
   Start measure: {self.measure_start_ts}
   Warehouses: {self.warehouses}
   New orders: {self.new_orders}
-  TPM-C: {self.tpmc}
+  tpmC: {self.tpmc}
   Efficiency: {self.efficiency}
   Throughput: {self.throughput}
   Goodput: {self.goodput}
@@ -1216,6 +1216,8 @@ Result: {self.name}
             print(f"{transaction_name}:")
             for percentile in [50, 90, 95, 99, 99.9]:
                 print(f"  {percentile}%: {histogram.percentile(percentile)} ms")
+
+        print("\n*These results are not officially recognized TPC results and are not comparable with other TPC-C test results published on the TPC website")
 
     def process_raw_json(self, file, transactions_dict, transactions_stats_dict, start_ts):
         data = json.loads(file.read())
