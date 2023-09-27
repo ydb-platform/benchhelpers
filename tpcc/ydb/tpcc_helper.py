@@ -37,7 +37,7 @@ HEAVY_TABLES = (
     "stock",
 )
 
-MIN_PARTITIONS = 50
+DEFAULT_MIN_PARTITIONS = 50
 
 # some random big value, probably can just unset to get default one
 MAX_PARTITIONS = 500000
@@ -214,7 +214,6 @@ class GetStartArgs:
 
         s = "--create=false --load=false --execute=true --start-from-id {start_from} ".format(
             start_from=host_config.start_warehouse,
-            wh_per_shard=host_config.warehouses_per_shard,
         )
         print(s)
 
@@ -259,7 +258,7 @@ class UpdateMinPartitions:
         # 1 WH is about 0.1 GiB, most of which are 6 tables
         # Thus 1 table in 1 WH is very approximately 10 MiB
         # If we want 1 part to be 1 GiB, then it should be at least 100 WH
-        self.min_partitions = max(MIN_PARTITIONS, args.warehouse_count // 100)
+        self.min_partitions = max(args.shard_count, args.warehouse_count // 100)
 
         for t in HEAVY_TABLES:
             self.update_min_max_partitions(t)
@@ -392,8 +391,6 @@ class CreateTables:
         else:
             self.ydb_connection = ydb_connection
 
-        args.shard_count = min(args.shard_count, args.warehouse_count)
-
         drop_tables = DropTables()
         drop_tables.run(args, ydb_connection=self.ydb_connection)
 
@@ -418,8 +415,8 @@ class CreateTables:
             split_keys_str = ",PARTITION_AT_KEYS = (" + ",".join(split_keys) + ")"
 
         split_keys_warehouse = []
-        if args.warehouse_count >= MIN_PARTITIONS:
-            split_wh = args.warehouse_count // MIN_PARTITIONS
+        if args.warehouse_count >= args.shard_count:
+            split_wh = args.warehouse_count // args.shard_count
             cur_wh = split_wh
 
             while cur_wh < args.warehouse_count:
@@ -427,7 +424,7 @@ class CreateTables:
                 cur_wh += split_wh
 
         warehause_part_args = ""
-        min_warehouse_parts = MIN_PARTITIONS
+        min_warehouse_parts = args.shard_count
         if split_keys_warehouse:
             warehause_part_args = ",PARTITION_AT_KEYS = (" + ",".join(split_keys_warehouse) + ")"
             min_warehouse_parts = max(min_warehouse_parts, len(split_keys_warehouse) + 1)
@@ -455,7 +452,7 @@ class CreateTables:
         self.create_table(sql)
 
         split_keys_item = []
-        split_item = ITEMS_NUM // MIN_PARTITIONS
+        split_item = ITEMS_NUM // args.shard_count
         cur_item  = split_item
         while cur_item < ITEMS_NUM:
             split_keys_item.append(str(cur_item))
@@ -477,7 +474,7 @@ class CreateTables:
             )
             WITH (
                 AUTO_PARTITIONING_BY_LOAD = DISABLED,
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {MIN_PARTITIONS}
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {args.shard_count}
                 {item_part_args}
             );
         """
@@ -532,7 +529,7 @@ class CreateTables:
             )
             WITH (
                 AUTO_PARTITIONING_BY_LOAD = DISABLED,
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {MIN_PARTITIONS}
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {args.shard_count}
                 {warehause_part_args}
             );
         """
@@ -1320,7 +1317,7 @@ def main():
                         help="Number of TPCC nodes")
 
     parser.add_argument("--shard-count", dest="shard_count",
-                        type=int, default=MIN_PARTITIONS,
+                        type=int, default=DEFAULT_MIN_PARTITIONS,
                         help="Initial shard count")
 
     subparsers = parser.add_subparsers(dest='action', help="Action to perform")
@@ -1379,6 +1376,8 @@ def main():
     aggregate_parser.set_defaults(func=Aggregator().run)
 
     args = parser.parse_args()
+
+    args.shard_count = min(args.shard_count, args.warehouse_count)
 
     args.func(args)
 
