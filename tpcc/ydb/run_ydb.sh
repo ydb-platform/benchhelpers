@@ -26,6 +26,8 @@ usage() {
     echo "    --config <config_template> --ydb-host <ydb_host> --database <DB> \\"
     echo "    --hosts <hosts_file> \\"
     echo "    [--ydb-port $ydb_port] \\"
+    echo "    [--secure] \\"
+    echo "    [--viewer-url http://ydb-host:8765] \\"
     echo "    [--compaction-threads <compaction_threads>] \\"
     echo "    [--compaction-auth <Disabled,OAuth,Login>] \\"
     echo "    [--skip-compaction] \\"
@@ -100,11 +102,17 @@ while [[ "$#" > 0 ]]; do case $1 in
     --ydb-port)
         ydb_port=$2
         shift;;
+    --secure)
+        use_grpcs=1
+        ;;
     --database)
         database=$2
         shift;;
     --min-shards)
         min_shards=$2
+        shift;;
+    --viewer-url)
+        viewer_url=$2
         shift;;
     --compaction-threads)
         compaction_threads=$2
@@ -131,9 +139,6 @@ while [[ "$#" > 0 ]]; do case $1 in
     --hosts)
         hosts_file=$2
         shift;;
-    --secure)
-        use_grpcs=1
-        ;;
     --time)
         execute_time_seconds=$2
         shift;;
@@ -241,12 +246,14 @@ else
     endpoint="grpcs://$ydb_host:$ydb_port"
 fi
 
-viewer_url="http://$ydb_host:8765"
-
 if [ -z "$database" ]; then
     echo "Please specify the database"
     usage
     exit 1
+fi
+
+if [[ -z "$viewer_url" ]]; then
+    viewer_url="http://$ydb_host:8765"
 fi
 
 if [ -z "$viewer_url" ]; then
