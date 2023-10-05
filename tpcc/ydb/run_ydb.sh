@@ -14,6 +14,9 @@ log_dir="$HOME/tpcc_logs/ydb"
 tpcc_path="$HOME/benchbase-ydb"
 ydb_port=2135
 
+# Re-defined below, if not configured via command line
+viewer_url=""
+
 # in total, i.e. for all TPC-C instances. We will calculate per instance value below
 max_sessions=1000
 
