@@ -198,6 +198,10 @@ if [[ -z "$COCKROACH_INIT_SLEEP_TIME_MINUTES" ]]; then
     COCKROACH_INIT_SLEEP_TIME_MINUTES=$((RECORD_COUNT / 6000000 + 1))
 fi
 
+if [[ -z "$STATIC_NODE_GRPC_PORT" ]]; then
+    STATIC_NODE_GRPC_PORT=2135
+fi
+
 hosts="$YCSB_HOSTS"
 
 # we need this hack  to not force
@@ -208,6 +212,7 @@ done
 
 # on this host we run "ycsb load"
 load_host=$(echo "$hosts" | tr ' ' '\n' | head -1)
+log "Load host: $load_host"
 
 if [ -z "$LOAD_YCSB_THREADS" ]; then
     LOAD_YCSB_THREADS=$YCSB_THREADS
@@ -222,13 +227,13 @@ fi
 if [ "$TYPE" = "ydb" ]; then
     # note that we should use ycsb.sh, because it will source user's profile/bashrc
     # which possibly contain Java setup
-    cmd_init_template='YDB_ANONYMOUS_CREDENTIALS=1 $YCSB_PATH/bin/ycsb.sh load ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:${STATIC_NODE_GRPC_PORT}/Root/${DATABASE_NAME} -p dropOnInit=true -p splitByLoad=true -p recordcount=$RECORD_COUNT -p import=true -p insertorder=$KEY_ORDER -p maxparts=$MAX_PARTS -p maxpartsizeMB=$MAX_PART_SIZE_MB'
-    cmd_run_template='YDB_ANONYMOUS_CREDENTIALS=1 $YCSB_PATH/bin/ycsb.sh run ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:${STATIC_NODE_GRPC_PORT}/Root/${DATABASE_NAME} -threads $threads -p insertorder=$KEY_ORDER -p recordcount=$RECORD_COUNT -p operationcount=$OP_COUNT -p requestdistribution=$distribution -p maxexecutiontime=$MAX_EXECUTION_TIME_SECONDS'
+    cmd_init_template='YDB_ANONYMOUS_CREDENTIALS=1 $YCSB_PATH/bin/ycsb.sh load ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:${STATIC_NODE_GRPC_PORT}${DATABASE_PATH} -p dropOnInit=true -p splitByLoad=true -p recordcount=$RECORD_COUNT -p import=true -p insertorder=$KEY_ORDER -p maxparts=$MAX_PARTS -p maxpartsizeMB=$MAX_PART_SIZE_MB'
+    cmd_run_template='YDB_ANONYMOUS_CREDENTIALS=1 $YCSB_PATH/bin/ycsb.sh run ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:${STATIC_NODE_GRPC_PORT}${DATABASE_PATH} -threads $threads -p insertorder=$KEY_ORDER -p recordcount=$RECORD_COUNT -p operationcount=$OP_COUNT -p requestdistribution=$distribution -p maxexecutiontime=$MAX_EXECUTION_TIME_SECONDS'
 elif [ "$TYPE" = "ydbu" ]; then
     # note that we should use ycsb.sh, because it will source user's profile/bashrc
     # which possibly contain Java setup
-    cmd_init_template='YDB_ANONYMOUS_CREDENTIALS=1 $YCSB_PATH/bin/ycsb.sh load ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:${STATIC_NODE_GRPC_PORT}/Root/${DATABASE_NAME} -p dropOnInit=true -p splitByLoad=true -p recordcount=$RECORD_COUNT -p import=true -p insertorder=$KEY_ORDER -p maxparts=$MAX_PARTS -p maxpartsizeMB=$MAX_PART_SIZE_MB'
-    cmd_run_template='YDB_ANONYMOUS_CREDENTIALS=1 $YCSB_PATH/bin/ycsb.sh run ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:${STATIC_NODE_GRPC_PORT}/Root/${DATABASE_NAME} -threads $threads -p insertorder=$KEY_ORDER -p recordcount=$RECORD_COUNT -p operationcount=$OP_COUNT -p requestdistribution=$distribution -p maxexecutiontime=$MAX_EXECUTION_TIME_SECONDS -p forceUpdate=true'
+    cmd_init_template='YDB_ANONYMOUS_CREDENTIALS=1 $YCSB_PATH/bin/ycsb.sh load ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:${STATIC_NODE_GRPC_PORT}${DATABASE_PATH} -p dropOnInit=true -p splitByLoad=true -p recordcount=$RECORD_COUNT -p import=true -p insertorder=$KEY_ORDER -p maxparts=$MAX_PARTS -p maxpartsizeMB=$MAX_PART_SIZE_MB'
+    cmd_run_template='YDB_ANONYMOUS_CREDENTIALS=1 $YCSB_PATH/bin/ycsb.sh run ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:${STATIC_NODE_GRPC_PORT}${DATABASE_PATH} -threads $threads -p insertorder=$KEY_ORDER -p recordcount=$RECORD_COUNT -p operationcount=$OP_COUNT -p requestdistribution=$distribution -p maxexecutiontime=$MAX_EXECUTION_TIME_SECONDS -p forceUpdate=true'
 elif [ "$TYPE" = "cockroach" ]; then
     cmd_init_template='$COCKROACH_PATH/cockroach workload init ycsb --data-loader=IMPORT --drop --insert-count $RECORD_COUNT --insert-hash=$INSERT_HASH "postgresql://root@$HA_PROXY_HOST:26257?sslmode=disable" --concurrency $LOAD_YCSB_THREADS --workload $what'
     cmd_run_template='sh -c \"2\>\&1 $COCKROACH_PATH/cockroach workload run ycsb --workload $what --request-distribution $distribution --insert-count $RECORD_COUNT --max-ops $OP_COUNT --insert-hash=$INSERT_HASH --display-every 10001s "postgresql://root@$HA_PROXY_HOST:26257?sslmode=disable" --concurrency $threads --duration ${MAX_EXECUTION_TIME_SECONDS}s \"'

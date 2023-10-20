@@ -47,6 +47,9 @@ while [[ $# -gt 0 ]]; do case $1 in
         ;;
 esac; shift; done
 
+this_path=`realpath $0`
+this_dir=`dirname $this_path`
+
 if [[ `echo $source_files | wc -w` != "2" ]]; then
     echo "Wrong arguments, missing source files: $@"
     usage
@@ -74,8 +77,7 @@ log_path="$LOG_DIR/${dt}_${name}"
 
 echo "Raw log file: ${log_path}"
 
-./run_workloads_impl.sh --type $TYPE $EXTRA_ARGS $source_files &> "$log_path"
-
-./multinode_aggegate_result.py --type $TYPE $log_path | tee ${log_path}.res
+$this_dir/run_workloads_impl.sh --type $TYPE $EXTRA_ARGS $source_files &> "$log_path"
+$this_dir/multinode_aggegate_result.py --type $TYPE $log_path | tee ${log_path}.res
 
 echo "Result: ${log_path}.res"

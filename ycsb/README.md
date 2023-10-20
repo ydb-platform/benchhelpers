@@ -5,7 +5,7 @@
 + Installed `YDB Python SDK`. You can install it with command `pip3 install ydb`.
 + Installed `parallel-ssh` on machine where scripts will be run. We worked with `parallel-ssh` on version `2.3.4`.
 + Requirements for the selected database: [YDB](./db_installers/ydb/README.md#requirements),
-[CockroachDB](./db_installers/cockroach/README.md#requirements), 
+[CockroachDB](./db_installers/cockroach/README.md#requirements),
 [YugabyteDB](./db_installers/yugabyte/README.md#requirements)
 
 
@@ -52,8 +52,8 @@ We want to run YCSB workload against this database from machines `ycsb-host1.com
 
 If you look into the config file [ydb.rc](./ycsb/configs/ydb.rc), you can find:
 + `TARGET` - one of the hosts where YDB is running (that is, `ydb_host1.com`).
-+ `DATABASE_NAME` - the database on which the performance tests will be conducted.
-+ `STATIC_NODE_GRPC_PORT` - GRPC port of the static node.
++ `DATABASE_PATH` - the path to the database on which the performance tests will be conducted.
++ `STATIC_NODE_GRPC_PORT` - GRPC port of the static node, by default 2135.
 + `YCSB_HOSTS` - list of hosts on which YCSB will be run (this is, `ycsb-host1.com`, `ycsb-host2.com`, etc).
 + `YCSB_HOSTS_COUNT` - if you want to limit the number of `YCSB_HOSTS` without changing the list.
 + `YCSB_PATH` - path to the folder with YCSB on `YCSB_HOSTS`.

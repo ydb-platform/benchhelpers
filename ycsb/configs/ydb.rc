@@ -1,6 +1,6 @@
 # any cluster host to use as endpoint
 TARGET="ydb_host1.com"
-DATABASE_NAME="db"
+DATABASE_PATH="db"
 STATIC_NODE_GRPC_PORT=2135
 
 # shooting hosts, i.e. YCSB instance runners
