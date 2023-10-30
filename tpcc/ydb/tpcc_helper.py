@@ -317,9 +317,12 @@ class UpdateMinPartitions:
             self.ydb_connection.get_endpoint(),
             "--database",
             self.ydb_connection.get_database(),
-            "scripting",
-            "yql",
-            "-s",
+            "table",
+            "query",
+            "execute",
+            "-t",
+            "scheme",
+            "-q",
             sql,
         ]
 
