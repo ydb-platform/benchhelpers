@@ -32,7 +32,7 @@ load_data() {
         $debug parallel-ssh -t 0 -H "$TARGET" -p 1 "$YU_PATH/bin/ysqlsh -f $YU_PATH/yugabyte_sql.sql -h $TARGET"
     fi
 
-    start_ts=`date +%s`
+    start_ts=$SECONDS
     cmd=`eval echo "$cmd_init_template"`
     log "Loading data: $cmd"
     $debug ssh $load_host "$cmd"
@@ -42,7 +42,7 @@ load_data() {
         # sometimes export finishes with CLI error, but continues in cockroach
         # we need to wait
         if [[ $status -ne 0 ]]; then
-            ts=`date +%s`
+            ts=$SECONDS
             delta="$(($COCKROACH_INIT_SLEEP_TIME_MINUTES-($ts-$start_ts)/60))"
             log "Sleeping more minutes: $delta"
             $debug sleep ${delta}m
@@ -52,7 +52,16 @@ load_data() {
         $debug ssh $load_host "$COCKROACH_PATH/cockroach sql --insecure --host $HA_PROXY_HOST --execute 'ALTER TABLE ycsb.usertable CONFIGURE ZONE USING gc.ttlseconds = 600;'"
     fi
 
-    log "Finished loading data"
+    ts=$SECONDS
+    load_time="$(($ts-$start_ts))"
+    if [[ $load_time -gt 600 ]]; then
+        minutes="$(($load_time/60))"
+        load_time="$minutes minutes"
+    else
+        load_time="$load_time seconds"
+    fi
+
+    log "Finished loading data in $load_time"
 }
 
 run_workload () {
@@ -227,7 +236,7 @@ fi
 if [ "$TYPE" = "ydb" ]; then
     # note that we should use ycsb.sh, because it will source user's profile/bashrc
     # which possibly contain Java setup
-    cmd_init_template='YDB_ANONYMOUS_CREDENTIALS=1 $YCSB_PATH/bin/ycsb.sh load ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:${STATIC_NODE_GRPC_PORT}${DATABASE_PATH} -p dropOnInit=true -p splitByLoad=true -p recordcount=$RECORD_COUNT -p import=true -p insertorder=$KEY_ORDER -p maxparts=$MAX_PARTS -p maxpartsizeMB=$MAX_PART_SIZE_MB'
+    cmd_init_template='YDB_ANONYMOUS_CREDENTIALS=1 $YCSB_PATH/bin/ycsb.sh load ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:${STATIC_NODE_GRPC_PORT}${DATABASE_PATH} -threads $LOAD_YCSB_THREADS -p dropOnInit=true -p splitByLoad=true -p recordcount=$RECORD_COUNT -p import=true -p insertorder=$KEY_ORDER -p maxparts=$MAX_PARTS -p maxpartsizeMB=$MAX_PART_SIZE_MB'
     cmd_run_template='YDB_ANONYMOUS_CREDENTIALS=1 $YCSB_PATH/bin/ycsb.sh run ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:${STATIC_NODE_GRPC_PORT}${DATABASE_PATH} -threads $threads -p insertorder=$KEY_ORDER -p recordcount=$RECORD_COUNT -p operationcount=$OP_COUNT -p requestdistribution=$distribution -p maxexecutiontime=$MAX_EXECUTION_TIME_SECONDS'
 elif [ "$TYPE" = "ydbu" ]; then
     # note that we should use ycsb.sh, because it will source user's profile/bashrc
