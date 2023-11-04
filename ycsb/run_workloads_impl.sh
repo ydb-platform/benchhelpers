@@ -50,6 +50,11 @@ load_data() {
 
         log "Setting MVCC"
         $debug ssh $load_host "$COCKROACH_PATH/cockroach sql --insecure --host $HA_PROXY_HOST --execute 'ALTER TABLE ycsb.usertable CONFIGURE ZONE USING gc.ttlseconds = 600;'"
+    else
+        if [[ $status -ne 0 ]]; then
+            log "Loading data failed"
+            exit 1
+        fi
     fi
 
     ts=$SECONDS
