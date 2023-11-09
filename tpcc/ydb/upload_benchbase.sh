@@ -1,6 +1,6 @@
 #!/bin/bash
 
-benchbase_url='https://storage.yandexcloud.net/ydb-benchmark-builds/benchbase-ydb.tgz'
+default_benchbase_url='https://storage.yandexcloud.net/ydb-benchmark-builds/benchbase-ydb.tgz'
 
 usage() {
     echo "upload_benchbase.sh --hosts <hosts_file> [--package <benchbase-ydb>] [--package-url <url>]"
@@ -57,6 +57,10 @@ if [[ -n "$package" && -n "$benchbase_url" ]]; then
     echo "You can't specify both package and package-url"
     usage
     exit 1
+fi
+
+if [[ -z "$package" && -z "$benchbase_url" ]]; then
+    benchbase_url=$default_benchbase_url
 fi
 
 if [ ! -f "$hosts" ]; then

@@ -28,7 +28,7 @@ Prerequisites to run TPC-C client:
 
 To install the package, execute the following:
 ```
-./upload_benchbase.sh --package benchbase-postgres.tgz --hosts tpcc.hosts
+benchhelpers/tpcc/ydb/upload_benchbase.sh --package benchbase-postgres.tgz --hosts tpcc.hosts
 ```
 
 ## Running the benchmark
