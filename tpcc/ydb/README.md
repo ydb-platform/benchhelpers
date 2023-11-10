@@ -29,15 +29,14 @@ Prerequisites to run helper scripts:
 1. Install pssh.
 2. Install the ydb, numpy and requests Python packages using `pip3 install ydb numpy requests`.
 3. [Download](https://ydb.tech/en/docs/downloads/) the latest YDB CLI and place it somewhere in your PATH.
-
-5. To generate (if needed) and save your SSH keys:
+4. To generate (if needed) and save your SSH keys:
 ```
 ../../common/copy_ssh_keys.sh --hosts tpcc.hosts
 exec -l $SHELL
 ```
 
 Prerequisites to run TPC-C client:
-1. Install Java-20. You can use `../../common/install_java20.sh --hosts tpcc.hosts`
+1. Install Java 21. You can use `../../common/install_java21.sh --hosts tpcc.hosts`
 2. Install YDB's [fork](https://github.com/ydb-platform/benchbase) of benchbase into your home folder on each machine.
 You have two options: build it on your own or use the prebuilt package.
 

@@ -1,12 +1,12 @@
 #!/bin/bash
-# Install Java 20 on a set of hosts
+# Install Java 21 on a set of hosts
 
-java_x86_url=https://download.oracle.com/java/20/latest/jdk-20_linux-x64_bin.tar.gz
-java_arm_url=https://download.oracle.com/java/20/latest/jdk-20_linux-aarch64_bin.tar.gz
+java_x86_url=https://download.oracle.com/java/21/latest/jdk-21_linux-x64_bin.tar.gz
+java_arm_url=https://download.oracle.com/java/21/latest/jdk-21_linux-aarch64_bin.tar.gz
 
 
 usage() {
-    echo "install_java20.sh --hosts <hosts_file> [--package <java-20.tar.gz>] [--package-url <url>]"
+    echo "install_java21.sh --hosts <hosts_file> [--package <java-21.tar.gz>] [--package-url <url>]"
 }
 
 unique_hosts=
@@ -86,10 +86,10 @@ else
     else
         arch=`ssh $some_host uname -m`
         if [ "$arch" == "x86_64" ]; then
-            echo "Downloading x86_64 Java 20"
+            echo "Downloading x86_64 Java 21"
             url=$java_x86_url
         elif [ "$arch" == "aarch64" ]; then
-            echo "Downloading aarch64 Java 20"
+            echo "Downloading aarch64 Java 21"
             url=$java_arm_url
         else
             echo "Unsupported architecture $arch"
@@ -115,9 +115,9 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-echo "Adding Java 20 symlink to the /usr/local/bin"
+echo "Adding Java 21 symlink to the /usr/local/bin"
 parallel-ssh -i -h $unique_hosts "sudo ln -sf \$HOME/$java_dir/bin/java /usr/local/bin/java"
 if [ $? -ne 0 ]; then
-    echo "Failed to add Java 20 symlink to the /usr/local/bin"
+    echo "Failed to add Java 21 symlink to the /usr/local/bin"
     exit 1
 fi

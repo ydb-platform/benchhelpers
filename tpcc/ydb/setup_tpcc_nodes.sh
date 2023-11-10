@@ -68,9 +68,9 @@ fi
 
 "$common_dir"/copy_ssh_keys.sh --hosts "$hosts" &>/dev/null
 
-"$common_dir"/install_java20.sh --hosts "$hosts"
+"$common_dir"/install_java21.sh --hosts "$hosts"
 if [[ $? -ne 0 ]]; then
-    echo "Failed to install Java 20"
+    echo "Failed to install Java 21"
     exit 1
 fi
 
