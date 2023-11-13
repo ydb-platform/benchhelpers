@@ -4,13 +4,10 @@
 
 The TPC-C setup involves the following components:
 1. Helper scripts located in this directory. Execute them on any random machine.
-2. TPC-C client, which can be executed on the same machine as the helper scripts. However, for a reasonable PostgreSQL cluster, it is recommended to have multiple machines running the TPC-C client.
+2. TPC-C clients, which can be executed on the same machine as the helper scripts. However, for a reasonable PostgreSQL cluster, it is recommended to have multiple machines running the TPC-C client. Please, check hardware [requirements](https://github.com/ydb-platform/tpcc#hardware-requirements) for TPC-C clients.
 3. A running PostgreSQL cluster. While it can be on the same machines where the TPC-C client is executed, we strongly advise having separate machines for the PostgreSQL cluster.
+4. Prepared file containing a list of TPC-C hosts (separated by new lines) to run the TPC-C client on. Note that if your machine has multiple cores, you can run multiple instances of TPC-C on the same machine. For example:
 
-Prerequisites to run helper scripts:
-1. Install pssh.
-2. Install the ydb, numpy and requests Python packages using `pip3 install ydb numpy requests`.
-3. Prepare a file containing a list of TPC-C hosts (separated by new lines) to run the TPC-C client on. Note that if your machine has multiple cores, you can run multiple instances of TPC-C on the same machine. For example:
 ```
 cat << EOF > tpcc.hosts
 machine1.com
@@ -20,11 +17,23 @@ machine2.com
 EOF
 ```
 
+Until the end of this section we provide a detailed description of the prerequisites and how to install them manually.
+
+Prerequisites to run helper scripts:
+1. Install pssh.
+2. Install the ydb, numpy and requests Python packages using `pip3 install ydb numpy requests`.
+3. To generate (if needed) and save your SSH keys:
+```
+../../common/copy_ssh_keys.sh --hosts tpcc.hosts
+exec -l $SHELL
+```
 4. Copy the tpcc_config_template.xml file to tpcc_config.xml and edit url, user, password.
 
 Prerequisites to run TPC-C client:
-1. Install Java 21. You can use `../../common/install_java21.sh --hosts tpcc.hosts`.
-2. Install YDB's [fork](https://github.com/ydb-platform/benchbase) (`vanilla` branch) of benchbase into your home folder on each machine.
+1. Install Java 21. You can use `../../common/install_java21.sh --hosts tpcc.hosts`
+2. Install YDB's [fork](https://github.com/ydb-platform/tpcc) (`vanilla` branch) of benchbase into your home folder on each machine.
+You have two options: build it on your own or use the prebuilt package. Here you can find prebuilt [benchbase-postgres.tgz](https://storage.yandexcloud.net/ydb-benchmark-builds/benchbase-postgres.tgz).
+
 
 To install the package, execute the following:
 ```

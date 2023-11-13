@@ -4,9 +4,9 @@
 
 The TPC-C setup involves the following components:
 1. Helper scripts located in this directory. Execute them on any random machine.
-2. TPC-C clients, which can be executed on the same machine as the helper scripts. However, for a reasonable YDB cluster, it is recommended to have multiple machines running the TPC-C clients. Please, check hardware [requirements](https://github.com/ydb-platform/benchbase#hardware-requirements) for TPC-C clients.
+2. TPC-C clients, which can be executed on the same machine as the helper scripts. However, for a reasonable YDB cluster, it is recommended to have multiple machines running the TPC-C clients. Please, check hardware [requirements](https://github.com/ydb-platform/tpcc#hardware-requirements) for TPC-C clients.
 3. A running YDB cluster. While it can be on the same machines where the TPC-C client is executed, we strongly advise having separate machines for the YDB cluster.
-4. Prepare a file containing a list of TPC-C hosts (separated by new lines) to run the TPC-C client on. Note that if your machine has multiple cores, you can run multiple instances of TPC-C on the same machine. For example:
+4. Prepared file containing a list of TPC-C hosts (separated by new lines) to run the TPC-C client on. Note that if your machine has multiple cores, you can run multiple instances of TPC-C on the same machine. For example:
 
 ```
 cat << EOF > tpcc.hosts
@@ -37,8 +37,8 @@ exec -l $SHELL
 
 Prerequisites to run TPC-C client:
 1. Install Java 21. You can use `../../common/install_java21.sh --hosts tpcc.hosts`
-2. Install YDB's [fork](https://github.com/ydb-platform/benchbase) of benchbase into your home folder on each machine.
-You have two options: build it on your own or use the prebuilt package.
+2. Install YDB's [fork](https://github.com/ydb-platform/tpcc) of benchbase into your home folder on each machine.
+You have two options: build it on your own or use the prebuilt package. Here you can find prebuilt [benchbase-postgres.tgz](https://storage.yandexcloud.net/ydb-benchmark-builds/benchbase-ydb.tgz).
 
 To install the package, execute the following (note, that if you don't specify the package, the script will download the latest from the internet):
 ```
@@ -61,7 +61,7 @@ mkdir -p $HOME/tpcc_logs
     --warehouses 1000                               \
     --warmup 1200                                   \
     --time 3600                                     \
-    --java-memory <ACCORDING_HARDWARE_REQIRIMENTS>  \
+    --java-memory <ACCORDING_HARDWARE_REQUIREMENTS> \
     --log-dir $HOME/tpcc_logs
 ```
 
