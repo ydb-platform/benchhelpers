@@ -38,7 +38,10 @@ PER_WAREHOUSE_MB = {
 }
 
 DEFAULT_MIN_PARTITIONS = 50
-DEFAULT_SHARD_SIZE_MB = 2048
+
+# when shard is 2 GB then it is forcely splitted, so we need to place
+# split keys at the boundaries, when there is some space left
+DEFAULT_SHARD_SIZE_MB = 1500
 
 
 class HostConfig:
@@ -261,7 +264,7 @@ class CreateTables:
                 PRIMARY KEY (W_ID)
             )
             WITH (
-                AUTO_PARTITIONING_BY_LOAD = ENABLED,
+                AUTO_PARTITIONING_BY_LOAD = DISABLED,
                 AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {DEFAULT_MIN_PARTITIONS}
             );
         """
@@ -278,7 +281,7 @@ class CreateTables:
                 PRIMARY KEY (I_ID)
             )
             WITH (
-                AUTO_PARTITIONING_BY_LOAD = ENABLED,
+                AUTO_PARTITIONING_BY_LOAD = DISABLED,
                 AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {DEFAULT_MIN_PARTITIONS}
             );
         """
@@ -308,7 +311,7 @@ class CreateTables:
                 PRIMARY KEY (S_W_ID, S_I_ID)
             )
             WITH (
-                AUTO_PARTITIONING_BY_LOAD = ENABLED,
+                AUTO_PARTITIONING_BY_LOAD = DISABLED,
                 AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {stock_shard_count}
                 {stock_split_keys}
             );
@@ -332,7 +335,7 @@ class CreateTables:
                 PRIMARY KEY (D_W_ID, D_ID)
             )
             WITH (
-                AUTO_PARTITIONING_BY_LOAD = ENABLED,
+                AUTO_PARTITIONING_BY_LOAD = DISABLED,
                 AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {DEFAULT_MIN_PARTITIONS}
             );
         """
@@ -367,7 +370,7 @@ class CreateTables:
                 PRIMARY KEY (C_W_ID, C_D_ID, C_ID)
             )
             WITH (
-                AUTO_PARTITIONING_BY_LOAD = ENABLED,
+                AUTO_PARTITIONING_BY_LOAD = DISABLED,
                 AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {custromer_shard_count}
                 {customer_split_keys}
             );
@@ -391,7 +394,7 @@ class CreateTables:
                 PRIMARY KEY (H_C_W_ID, H_C_NANO_TS)
             )
             WITH (
-                AUTO_PARTITIONING_BY_LOAD = ENABLED,
+                AUTO_PARTITIONING_BY_LOAD = DISABLED,
                 AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {history_shard_count}
                 {history_split_keys}
             );
@@ -414,7 +417,7 @@ class CreateTables:
                 PRIMARY KEY (O_W_ID, O_D_ID, O_ID)
             )
             WITH (
-                AUTO_PARTITIONING_BY_LOAD = ENABLED,
+                AUTO_PARTITIONING_BY_LOAD = DISABLED,
                 AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {oorder_shard_count}
                 {oorder_split_keys}
             );
@@ -431,7 +434,7 @@ class CreateTables:
                 PRIMARY KEY (NO_W_ID, NO_D_ID, NO_O_ID)
             )
             WITH (
-                AUTO_PARTITIONING_BY_LOAD = ENABLED,
+                AUTO_PARTITIONING_BY_LOAD = DISABLED,
                 AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {DEFAULT_MIN_PARTITIONS}
             );
         """
@@ -455,7 +458,7 @@ class CreateTables:
                 PRIMARY KEY (OL_W_ID, OL_D_ID, OL_O_ID, OL_NUMBER)
             )
             WITH (
-                AUTO_PARTITIONING_BY_LOAD = ENABLED,
+                AUTO_PARTITIONING_BY_LOAD = DISABLED,
                 AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {order_line_shard_count}
                 {order_line_split_keys}
             );
@@ -489,6 +492,41 @@ class CreateTables:
             split_keys_str = ",PARTITION_AT_KEYS = (" + ",".join(split_keys) + ")"
             min_partitions = max(DEFAULT_MIN_PARTITIONS, len(split_keys) + 1)
             return split_keys_str, min_partitions,
+
+
+class EnableSplitByLoad:
+    def run(self, args, ydb_connection=None):
+        if not ydb_connection:
+            self.ydb_connection = YdbConnection(args)
+        else:
+            self.ydb_connection = ydb_connection
+
+        futures = []
+        for t in TABLES:
+            futures.append(self.enable_split_on_load(t))
+
+        try:
+            concurrent.futures.wait(futures, return_when=concurrent.futures.ALL_COMPLETED)
+            for future in futures:
+                future.result()
+        except Exception as e:
+            print("Error enabling split by load: {}".format(e), file=sys.stderr)
+            sys.exit(1)
+
+        print("Split by load enabled")
+
+    def enable_split_on_load(self, table_name):
+        path = self.ydb_connection.get_database() + "/" + table_name
+        alter_partitioning_settings = ydb.table.PartitioningSettings().with_partitioning_by_load(True)
+
+        try:
+            session = self.ydb_connection.driver.table_client.session().create()
+            return session.async_alter_table(path, alter_partitioning_settings=alter_partitioning_settings)
+        except Exception as e:
+            print(type(e))
+            print("Error altering table {}: {}".format(table_name, e), file=sys.stderr)
+            sys.exit(1)
+
 
 class AsyncCreateIndices:
     def run(self, args, ydb_connection=None):
@@ -529,7 +567,6 @@ class AsyncCreateIndices:
                 sys.exit(1)
 
         print("Indices are being created")
-
 
     def create_index(self, sql):
         try:
@@ -1181,6 +1218,9 @@ def main():
 
     drop_parser = subparsers.add_parser('drop')
     drop_parser.set_defaults(func=DropTables().run)
+
+    update_min_parts = subparsers.add_parser('enable-split-by-load')
+    update_min_parts.set_defaults(func=EnableSplitByLoad().run)
 
     aggregate_parser = subparsers.add_parser('aggregate')
     aggregate_parser.add_argument('results_dir', help="Directory with results")

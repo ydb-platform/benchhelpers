@@ -391,6 +391,14 @@ if [ -z "$no_load" ]; then
     elapsed=$(( SECONDS - load_start ))
     log "Loading data done in $elapsed seconds"
 
+    $tpcc_helper --endpoint $endpoint --database $database \
+        -w $warehouses -n $host_count \
+        enable-split-by-load
+    if [[ $? -ne 0 ]]; then
+        log "Failed to enable split by load"
+        exit 1
+    fi
+
     if [[ -z "$skip_compaction" ]]; then
         compaction_start=$SECONDS
         log "Compacting tables"
