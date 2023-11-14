@@ -6,7 +6,6 @@ export LC_ALL=en_US.UTF-8
 execute_time_seconds=60
 warmup_time_seconds=60
 loader_threads=16
-min_shards=50
 compaction_threads=10
 compaction_auth=disabled
 java_memory="2G"
@@ -40,7 +39,6 @@ usage() {
     echo "    [--loader-threads <loader_threads>] \\"
     echo "    [--tpcc-path </path/to/YDB/benchbase>] \\"
     echo "    [--max-sessions $max_sessions] \\"
-    echo "    [--min-shards $min_shards] \\"
     echo "    [--no-load] [--no-run] [--no-drop-create] \\"
     echo "    [--with-flames] [--with-perf-stat] [--with-psi] \\"
 }
@@ -110,9 +108,6 @@ while [[ "$#" > 0 ]]; do case $1 in
         ;;
     --database)
         database=$2
-        shift;;
-    --min-shards)
-        min_shards=$2
         shift;;
     --viewer-url)
         viewer_url=$2
@@ -238,10 +233,6 @@ if [[ $? -ne 0 ]]; then
 fi
 
 host_count=`wc -l $hosts_file | awk '{print $1}'`
-presplit_shards_count=`expr $loader_threads \* $host_count`
-if [[ $presplit_shards_count -lt $min_shards ]]; then
-    presplit_shards_count=$min_shards
-fi
 
 if [[ -z "$use_grpcs" ]]; then
     endpoint="grpc://$ydb_host:$ydb_port"
@@ -278,7 +269,7 @@ kill_tpcc
 if [ -z "$no_drop_create" ]; then
     log "Drop existing tables if exists and create new ones"
     $tpcc_helper --endpoint $endpoint --database $database \
-        -w $warehouses -n $host_count --shard-count $presplit_shards_count $args \
+        -w $warehouses -n $host_count \
         create
     if [[ $? -ne 0 ]]; then
         log "Failed to create tables"
@@ -301,7 +292,6 @@ log "Generating TPC-C configs and uploading to the hosts"
 # Note that host_num is line number in $hosts_file
 $tpcc_helper \
     -w $warehouses \
-    --shard-count $presplit_shards_count \
     generate-configs \
     --hosts $hosts_file \
     --input $config_template \
@@ -374,7 +364,6 @@ if [ -z "$no_load" ]; then
         args=`$tpcc_helper \
             -w $warehouses \
             -n $host_count \
-            --shard-count $presplit_shards_count \
             get-load-args \
             --node-num $host_num`
 
@@ -402,21 +391,6 @@ if [ -z "$no_load" ]; then
     elapsed=$(( SECONDS - load_start ))
     log "Loading data done in $elapsed seconds"
 
-    log "Altering tables"
-    alter_start=$SECONDS
-    $tpcc_helper \
-        --endpoint $endpoint --database $database \
-        -w $warehouses --shard-count $min_shards \
-        update-min-partitions
-
-    if [[ $? -ne 0 ]]; then
-        log "Failed to alter tables"
-        exit 1
-    fi
-
-    elapsed=$(( SECONDS - alter_start ))
-    log "Altered tables in $elapsed seconds"
-
     if [[ -z "$skip_compaction" ]]; then
         compaction_start=$SECONDS
         log "Compacting tables"
@@ -437,7 +411,7 @@ if [ -z "$no_load" ]; then
     index_start=$SECONDS
     log "Started async index build"
     $tpcc_helper --endpoint $endpoint --database $database \
-        -w $warehouses -n $host_count --shard-count $min_shards \
+        -w $warehouses -n $host_count \
         index
 
     if [[ $? -ne 0 ]]; then
@@ -447,7 +421,7 @@ if [ -z "$no_load" ]; then
 
     log "Waiting for index build to finish"
     $tpcc_helper --endpoint $endpoint --database $database \
-        -w $warehouses -n $host_count --shard-count $min_shards \
+        -w $warehouses -n $host_count \
         wait-index
 
     elapsed=$(( SECONDS - index_start ))
@@ -483,7 +457,6 @@ for host in `cat $hosts_file`; do
     args=`$tpcc_helper \
         -w $warehouses \
         -n $host_count \
-        --shard-count $min_shards \
         get-start-args \
         --node-num $host_num`
 

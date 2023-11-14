@@ -14,7 +14,7 @@
 
     <terminals>{terminals}</terminals>
     <loaderThreads>{loader_threads}</loaderThreads>
-    <batchsize>10000</batchsize>
+    <batchsize>1000</batchsize>
     <works>
         <work>
             <time>{execute_time_seconds}</time>

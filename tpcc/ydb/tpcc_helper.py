@@ -28,25 +28,21 @@ TABLES = (
     "stock",
 )
 
-HEAVY_TABLES = (
-    "customer",
-    "history",
-    "new_order",
-    "oorder",
-    "order_line",
-    "stock",
-)
+# only for heavy tbales
+PER_WAREHOUSE_MB = {
+    "stock": 40.6,
+    "customer": 20.1,
+    "order_line": 28.2,
+    "history": 2.4,
+    "oorder": 1.5,
+}
 
 DEFAULT_MIN_PARTITIONS = 50
+DEFAULT_SHARD_SIZE_MB = 2048
 
-# some random big value, probably can just unset to get default one
-MAX_PARTITIONS = 500000
-
-# assume default number of TPC-C items (we presplit anyway)
-ITEMS_NUM = 100000
 
 class HostConfig:
-    def __init__(self, warehouses, node_count, shard_count, node_num):
+    def __init__(self, warehouses, node_count, node_num):
         if node_num <= 0 or node_num > node_count:
             print("Invalid node_num: {}, must be [1; {}]".format(node_num, node_count), file=sys.stderr)
             sys.exit(1)
@@ -58,38 +54,35 @@ class HostConfig:
         # ceil
         self.warehouses_per_host = (warehouses + node_count - 1) // node_count
 
-        # ceil, but normally shards_per_host is equal to loader_threads
-        # and can be divided by node_host without reminder
-        self.shards_per_host = (shard_count + node_count - 1) // node_count
-
         self.start_warehouse = 1 + self.warehouses_per_host * (node_num - 1)
-
         if node_num == node_count:
             # last node
             self.warehouses_per_host = warehouses - (self.warehouses_per_host * (node_count - 1))
-            self.shards_per_host = shard_count - (self.shards_per_host * (node_count - 1))
 
+        self.last_warehouse = self.start_warehouse + self.warehouses_per_host - 1
         self.terminals_per_host = self.warehouses_per_host * 10
-        self.warehouses_per_shard = self.warehouses_per_host // self.shards_per_host
-        self.warehouses_per_shard = max(1, self.warehouses_per_shard)
 
         assert self.warehouses_per_host > 0
 
-    def get_split_keys(self):
-        # we have warehouses from [self.start_warehouse; self.last_warehouse + 1)
-        # we want to split it into self.shards_per_host parts, i.e. find self.shards_per_host - 1 keys
+    def get_split_keys(self, table_name):
+        # we have warehouses [self.start_warehouse; self.last_warehouse]
+        # in total self.warehouses_per_host
 
-        last_warehouse = self.start_warehouse + self.warehouses_per_host - 1
-        assert last_warehouse <= self.warehouses, "last_warehouse={}, warehouses={}, wh_per_host={}".format(
-            last_warehouse, self.warehouses, self.warehouses_per_host)
+        if table_name not in PER_WAREHOUSE_MB:
+            print("not")
+            return []
+
+        mb_per_wh = PER_WAREHOUSE_MB[table_name]
+        warehouses_per_shard = (DEFAULT_SHARD_SIZE_MB + mb_per_wh - 1) //  mb_per_wh
+
+        if warehouses_per_shard > self.warehouses_per_host:
+            return []
 
         split_keys = []
-        if self.node_num == 1:
-            start = 1
-        else:
-            start = 0
-        for i in range(start, self.shards_per_host):
-            split_keys.append(i * self.warehouses_per_shard + self.start_warehouse)
+        current_split_key = self.start_warehouse + warehouses_per_shard
+        while current_split_key < self.last_warehouse:
+            split_keys.append(current_split_key)
+            current_split_key += warehouses_per_shard
 
         return split_keys
 
@@ -151,6 +144,7 @@ class YdbConnection:
     def get_endpoint(self):
         return self.endpoint
 
+
 class GenerateConfig:
     def run(self, args):
         host_to_monport = collections.defaultdict(lambda: 8080)
@@ -178,7 +172,6 @@ class GenerateConfig:
                 host_config = HostConfig(
                     args.warehouse_count,
                     num_nodes,
-                    args.shard_count,
                     node_num)
 
                 config = host_config.get_config(args.input, **kwargs)
@@ -188,19 +181,16 @@ class GenerateConfig:
 
                 host_to_monport[host] = host_to_monport[host] + 1
 
+
 class GetLoadArgs:
     def run(self, args):
         host_config = HostConfig(
             args.warehouse_count,
             args.node_count,
-            args.shard_count,
             args.node_num)
 
-        s = "--create=false --load=true --execute=false --start-from-id {start_from} " \
-            "--warehouses-per-shard {wh_per_shard}".format(
-                start_from=host_config.start_warehouse,
-                wh_per_shard=host_config.warehouses_per_shard,
-            )
+        s = f"""--create=false --load=true --execute=false --start-from-id {host_config.start_warehouse}"""
+        s += f""" --total-warehouses {args.warehouse_count}"""
         print(s)
 
 
@@ -209,7 +199,6 @@ class GetStartArgs:
         host_config = HostConfig(
             args.warehouse_count,
             args.node_count,
-            args.shard_count,
             args.node_num)
 
         s = "--create=false --load=false --execute=true --start-from-id {start_from} ".format(
@@ -247,146 +236,6 @@ class DropTables:
             sys.exit(1)
 
 
-class UpdateMinPartitions:
-    def run(self, args, ydb_connection=None):
-        if not ydb_connection:
-            self.ydb_connection = YdbConnection(args)
-        else:
-            self.ydb_connection = ydb_connection
-
-        # TODO: better values?
-        # 1 WH is about 0.1 GiB, most of which are 6 tables
-        # Thus 1 table in 1 WH is very approximately 10 MiB
-        # If we want 1 part to be 1 GiB, then it should be at least 100 WH
-        self.min_partitions = max(args.shard_count, args.warehouse_count // 100)
-
-        for t in HEAVY_TABLES:
-            self.update_min_max_partitions(t)
-
-        for t in TABLES:
-            self.set_split_on_load(t)
-
-        self.wait_steady_state()
-
-        return
-
-        # TODO: after fixing SDK
-
-        futures = {}
-        for t in HEAVY_TABLES:
-            futures[t] = self.update(t)
-
-        for table, future in futures.items():
-            try:
-                result = future.result()
-            except ydb.issues.DeadlineExceed:
-                print("DeadlineExceed for altering {}".format(table))
-            except Exception as e:
-                print("Failed to alter table {}: {}".format(table, e), file=sys.stderr)
-                sys.exit(1)
-
-        while True:
-            has_pending = False
-            for table in HEAVY_TABLES:
-                self.wait_min_parts(table)
-
-    def set_split_on_load(self, table_name):
-        path = self.ydb_connection.get_database() + "/" + table_name
-
-        sql = f"ALTER TABLE `{path}` SET (AUTO_PARTITIONING_BY_LOAD = ENABLED, AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {self.min_partitions});"
-        print(sql)
-
-        self.update_cli(sql)
-
-    def update_min_max_partitions(self, table_name):
-        path = self.ydb_connection.get_database() + "/" + table_name
-
-        sql = """
-            ALTER TABLE `{}` SET (
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {},
-                AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {});
-            """.format(path, self.min_partitions, MAX_PARTITIONS)
-
-        print(sql)
-        self.update_cli(sql)
-
-    def update_cli(self, sql):
-        command = [
-            "ydb",
-            "--endpoint",
-            self.ydb_connection.get_endpoint(),
-            "--database",
-            self.ydb_connection.get_database(),
-            "table",
-            "query",
-            "execute",
-            "-t",
-            "scheme",
-            "-q",
-            sql,
-        ]
-
-        for i in range(10):
-            result = subprocess.run(command, capture_output=True, text=True)
-            if result.returncode == 0:
-                return
-            print("Error altering table {}: {}".format(sql, result.stderr), file=sys.stderr)
-            sys.exit(1)
-
-    # some bug - doesn't work
-    # TODO: sync with update_* methods (add split on load, etc)
-    def update(self, table_name):
-        print("Not implemented")
-        sys.exit(1)
-
-        path = self.ydb_connection.get_database() + "/" + table_name
-        alter_attributes = {
-            "AUTO_PARTITIONING_MIN_PARTITIONS_COUNT": str(self.min_partitions),
-            "AUTO_PARTITIONING_MAX_PARTITIONS_COUNT": str(MAX_PARTITIONS),
-        }
-
-        try:
-            session = self.ydb_connection.driver.table_client.session().create()
-            return session.async_alter_table(path, alter_attributes=alter_attributes)
-        except Exception as e:
-            print(type(e))
-            print("Error altering table {}: {}".format(table_name, e), file=sys.stderr)
-            sys.exit(1)
-
-    def wait_steady_state(self):
-        prev_count = self.get_total_shards()
-        while True:
-            time.sleep(300)
-            current_count = self.get_total_shards()
-            print(f"Prev shards count: {prev_count}, current count: {current_count}")
-            delta = abs(current_count - prev_count)
-            if delta < 5:
-                break
-            prev_count = current_count
-
-    def get_total_shards(self):
-        db_path = self.ydb_connection.get_database()
-        count = 0
-        for t in TABLES:
-            path = db_path + "/" + t
-            count += self.get_shards_count(path)
-        return count
-
-    def get_shards_count(self, table):
-        settings = ydb.table.DescribeTableSettings()
-        settings.with_include_table_stats(True)
-        for i in range(10):
-            try:
-                session = self.ydb_connection.driver.table_client.session().create()
-                desc = session.describe_table(table, settings)
-                return desc.table_stats.partitions
-            except Exception as e:
-                print(f"Failed to describe {table}: {e}")
-                time.sleep(i)
-        print(f"Failed to get shards count for {table}", file=sys.stderr)
-        sys.exit(1)
-
-
 class CreateTables:
     def run(self, args, ydb_connection=None):
         if not ydb_connection:
@@ -396,41 +245,6 @@ class CreateTables:
 
         drop_tables = DropTables()
         drop_tables.run(args, ydb_connection=self.ydb_connection)
-
-        split_keys = []
-        for node_num in range(1, args.node_count + 1):
-            host_config = HostConfig(
-                args.warehouse_count,
-                args.node_count,
-                args.shard_count,
-                node_num)
-            split_keys += host_config.get_split_keys()
-
-        assert len(split_keys) == args.shard_count - 1
-        for i in range(1, len(split_keys)):
-            assert split_keys[i - 1] < split_keys[i]
-
-        split_keys = [str(x) for x in split_keys]
-
-        if len(split_keys) == 0:
-            split_keys_str = ""
-        else:
-            split_keys_str = ",PARTITION_AT_KEYS = (" + ",".join(split_keys) + ")"
-
-        split_keys_warehouse = []
-        if args.warehouse_count >= args.shard_count:
-            split_wh = args.warehouse_count // args.shard_count
-            cur_wh = split_wh
-
-            while cur_wh < args.warehouse_count:
-                split_keys_warehouse.append(str(cur_wh))
-                cur_wh += split_wh
-
-        warehause_part_args = ""
-        min_warehouse_parts = args.shard_count
-        if split_keys_warehouse:
-            warehause_part_args = ",PARTITION_AT_KEYS = (" + ",".join(split_keys_warehouse) + ")"
-            min_warehouse_parts = max(min_warehouse_parts, len(split_keys_warehouse) + 1)
 
         sql = f"""
             --!syntax_v1
@@ -447,23 +261,11 @@ class CreateTables:
                 PRIMARY KEY (W_ID)
             )
             WITH (
-                AUTO_PARTITIONING_BY_LOAD = DISABLED,
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {min_warehouse_parts}
-                {warehause_part_args}
+                AUTO_PARTITIONING_BY_LOAD = ENABLED,
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {DEFAULT_MIN_PARTITIONS}
             );
         """
         self.create_table(sql)
-
-        split_keys_item = []
-        split_item = ITEMS_NUM // args.shard_count
-        cur_item  = split_item
-        while cur_item < ITEMS_NUM:
-            split_keys_item.append(str(cur_item))
-            cur_item += split_item
-
-        item_part_args = ""
-        if split_keys_item:
-            item_part_args = ",PARTITION_AT_KEYS = (" + ",".join(split_keys_item) + ")"
 
         sql = f"""
             --!syntax_v1
@@ -476,14 +278,14 @@ class CreateTables:
                 PRIMARY KEY (I_ID)
             )
             WITH (
-                AUTO_PARTITIONING_BY_LOAD = DISABLED,
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {args.shard_count}
-                {item_part_args}
+                AUTO_PARTITIONING_BY_LOAD = ENABLED,
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {DEFAULT_MIN_PARTITIONS}
             );
         """
         self.create_table(sql)
 
-        sql = """
+        stock_split_keys, stock_shard_count = self.get_split_keys_str(args, "stock")
+        sql = f"""
             --!syntax_v1
             CREATE TABLE stock (
                 S_W_ID       Int32           NOT NULL,
@@ -506,12 +308,11 @@ class CreateTables:
                 PRIMARY KEY (S_W_ID, S_I_ID)
             )
             WITH (
-                AUTO_PARTITIONING_BY_LOAD = DISABLED,
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {min_parts},
-                AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {min_parts}
-                {part_keys}
+                AUTO_PARTITIONING_BY_LOAD = ENABLED,
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {stock_shard_count}
+                {stock_split_keys}
             );
-        """.format(min_parts=args.shard_count, part_keys=split_keys_str)
+        """
         self.create_table(sql)
 
         sql = f"""
@@ -531,14 +332,14 @@ class CreateTables:
                 PRIMARY KEY (D_W_ID, D_ID)
             )
             WITH (
-                AUTO_PARTITIONING_BY_LOAD = DISABLED,
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {args.shard_count}
-                {warehause_part_args}
+                AUTO_PARTITIONING_BY_LOAD = ENABLED,
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {DEFAULT_MIN_PARTITIONS}
             );
         """
         self.create_table(sql)
 
-        sql = """
+        customer_split_keys, custromer_shard_count = self.get_split_keys_str(args, "customer")
+        sql = f"""
             --!syntax_v1
             CREATE TABLE customer (
                 C_W_ID         Int32            NOT NULL,
@@ -566,15 +367,15 @@ class CreateTables:
                 PRIMARY KEY (C_W_ID, C_D_ID, C_ID)
             )
             WITH (
-                AUTO_PARTITIONING_BY_LOAD = DISABLED,
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {min_parts},
-                AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {min_parts}
-                {part_keys}
+                AUTO_PARTITIONING_BY_LOAD = ENABLED,
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {custromer_shard_count}
+                {customer_split_keys}
             );
-        """.format(min_parts=args.shard_count, part_keys=split_keys_str)
+        """
         self.create_table(sql)
 
-        sql = """
+        history_split_keys, history_shard_count = self.get_split_keys_str(args, "history")
+        sql = f"""
             --!syntax_v1
             CREATE TABLE history (
                 H_C_W_ID    Int32,
@@ -590,15 +391,15 @@ class CreateTables:
                 PRIMARY KEY (H_C_W_ID, H_C_NANO_TS)
             )
             WITH (
-                AUTO_PARTITIONING_BY_LOAD = DISABLED,
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {min_parts},
-                AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {min_parts}
-                {part_keys}
+                AUTO_PARTITIONING_BY_LOAD = ENABLED,
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {history_shard_count}
+                {history_split_keys}
             );
-        """.format(min_parts=args.shard_count, part_keys=split_keys_str)
+        """
         self.create_table(sql)
 
-        sql = """
+        oorder_split_keys, oorder_shard_count = self.get_split_keys_str(args, "oorder")
+        sql = f"""
             --!syntax_v1
             CREATE TABLE oorder (
                 O_W_ID       Int32       NOT NULL,
@@ -613,15 +414,14 @@ class CreateTables:
                 PRIMARY KEY (O_W_ID, O_D_ID, O_ID)
             )
             WITH (
-                AUTO_PARTITIONING_BY_LOAD = DISABLED,
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {min_parts},
-                AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {min_parts}
-                {part_keys}
+                AUTO_PARTITIONING_BY_LOAD = ENABLED,
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {oorder_shard_count}
+                {oorder_split_keys}
             );
-        """.format(min_parts=args.shard_count, part_keys=split_keys_str)
+        """
         self.create_table(sql)
 
-        sql = """
+        sql = f"""
             --!syntax_v1
             CREATE TABLE new_order (
                 NO_W_ID Int32 NOT NULL,
@@ -631,15 +431,14 @@ class CreateTables:
                 PRIMARY KEY (NO_W_ID, NO_D_ID, NO_O_ID)
             )
             WITH (
-                AUTO_PARTITIONING_BY_LOAD = DISABLED,
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {min_parts},
-                AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {min_parts}
-                {part_keys}
+                AUTO_PARTITIONING_BY_LOAD = ENABLED,
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {DEFAULT_MIN_PARTITIONS}
             );
-        """.format(min_parts=args.shard_count, part_keys=split_keys_str)
+        """
         self.create_table(sql)
 
-        sql = """
+        order_line_split_keys, order_line_shard_count = self.get_split_keys_str(args, "order_line")
+        sql = f"""
             --!syntax_v1
             CREATE TABLE order_line (
                 OL_W_ID        Int32           NOT NULL,
@@ -656,24 +455,40 @@ class CreateTables:
                 PRIMARY KEY (OL_W_ID, OL_D_ID, OL_O_ID, OL_NUMBER)
             )
             WITH (
-                AUTO_PARTITIONING_BY_LOAD = DISABLED,
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {min_parts},
-                AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {min_parts}
-                {part_keys}
+                AUTO_PARTITIONING_BY_LOAD = ENABLED,
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {order_line_shard_count}
+                {order_line_split_keys}
             );
-        """.format(min_parts=args.shard_count, part_keys=split_keys_str)
+        """
         self.create_table(sql)
 
         print("Tables created")
 
     def create_table(self, sql):
         try:
+            print(sql)
             session = self.ydb_connection.driver.table_client.session().create()
             session.execute_scheme(sql)
         except Exception as e:
             print("Error creating table: {}, sql:\n{}".format(e, sql), file=sys.stderr)
             sys.exit(1)
 
+    def get_split_keys_str(self, args, table_name):
+        split_keys = []
+        for node_num in range(1, args.node_count + 1):
+            host_config = HostConfig(
+                args.warehouse_count,
+                args.node_count,
+                node_num)
+            split_keys += host_config.get_split_keys(table_name)
+
+        if len(split_keys) == 0:
+            return "", DEFAULT_MIN_PARTITIONS
+        else:
+            split_keys = [str(int(x)) for x in split_keys]
+            split_keys_str = ",PARTITION_AT_KEYS = (" + ",".join(split_keys) + ")"
+            min_partitions = max(DEFAULT_MIN_PARTITIONS, len(split_keys) + 1)
+            return split_keys_str, min_partitions,
 
 class AsyncCreateIndices:
     def run(self, args, ydb_connection=None):
@@ -1319,10 +1134,6 @@ def main():
                         type=int, default=1,
                         help="Number of TPCC nodes")
 
-    parser.add_argument("--shard-count", dest="shard_count",
-                        type=int, default=DEFAULT_MIN_PARTITIONS,
-                        help="Initial shard count")
-
     subparsers = parser.add_subparsers(dest='action', help="Action to perform")
 
     create_parser = subparsers.add_parser('create')
@@ -1371,17 +1182,11 @@ def main():
     drop_parser = subparsers.add_parser('drop')
     drop_parser.set_defaults(func=DropTables().run)
 
-    update_min_parts = subparsers.add_parser('update-min-partitions')
-    update_min_parts.set_defaults(func=UpdateMinPartitions().run)
-
     aggregate_parser = subparsers.add_parser('aggregate')
     aggregate_parser.add_argument('results_dir', help="Directory with results")
     aggregate_parser.set_defaults(func=Aggregator().run)
 
     args = parser.parse_args()
-
-    args.shard_count = min(args.shard_count, args.warehouse_count)
-
     args.func(args)
 
 
