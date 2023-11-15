@@ -286,6 +286,12 @@ if [[ $max_sessions_per_instance -lt $min_max_sessions_per_instance ]]; then
     max_sessions=$min_max_sessions_per_instance
 fi
 
+total_loader_threads=$(( $loader_threads * $host_count ))
+if [[ $total_loader_threads -gt $warehouses ]]; then
+    loader_threads=$(( $warehouses / $host_count + 1 ))
+    log "Reducing loader threads to $loader_threads per instance"
+fi
+
 log "Generating TPC-C configs and uploading to the hosts"
 
 # For each host in $hosts we generate config file with the following name: config.<host_num>.xml,
