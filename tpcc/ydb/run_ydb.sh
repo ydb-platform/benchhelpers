@@ -436,15 +436,8 @@ if [ -z "$no_load" ]; then
     log "Built index in $elapsed seconds"
 
     # we have some issue with reporting OK and having index available
-    # also above we changed min partitions, so we need to wait a bit
-
-    if [[ $warehouses -ge 15000 ]]; then
-        log "Sleeping 20m after altering min partitions and building index"
-        sleep 20m
-    else
-        log "Sleeping 5m after altering min partitions and building index"
-        sleep 5m
-    fi
+    log "Sleeping 5m after building index"
+    sleep 5m
 fi
 
 if [ -n "$no_run" ]; then
