@@ -44,6 +44,70 @@ DEFAULT_MIN_PARTITIONS = 50
 DEFAULT_SHARD_SIZE_MB = 1500
 
 
+def forget_ydb_operation(args, operation_id):
+    print(f"Forget operation {operation_id}")
+    command = [
+        "ydb",
+        "--endpoint",
+        args.endpoint,
+        "--database",
+        args.database,
+        "operation",
+        "forget",
+        operation_id,
+    ]
+
+    print(" ".join(command))
+
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        print("Error (skipped) getting status: {}".format(result.stderr), file=sys.stderr)
+
+
+def wait_ydb_operation_done(args, operation_id):
+    print(f"Waiting for {operation_id} to be done...")
+    command = [
+        "ydb",
+        "--endpoint",
+        args.endpoint,
+        "--database",
+        args.database,
+        "operation",
+        "get",
+        "--format",
+        "proto-json-base64",
+        operation_id,
+    ]
+
+    print(" ".join(command))
+
+    while True:
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0:
+            print("Error getting status: {}".format(result.stderr), file=sys.stderr)
+            sys.exit(1)
+
+        result_json = json.loads(result.stdout)
+        if result_json["status"] != "SUCCESS":
+            formatted_json = json.dumps(result_json, indent=4)
+            print("Error getting status: {}".format(formatted_json), file=sys.stderr)
+            sys.exit(1)
+
+        if "metadata" in result_json:
+            if result_json["metadata"]["progress"] == "PROGRESS_CANCELLED":
+                print("Operation has been canceled: {}".format(result_json),
+                    file=sys.stderr)
+                sys.exit(1)
+
+            if result_json["metadata"]["progress"] == "PROGRESS_DONE":
+                if "ready" in result_json and result_json["ready"]:
+                    break
+
+        time.sleep(10)
+
+    forget_ydb_operation(args, operation_id)
+
+
 class HostConfig:
     def __init__(self, warehouses, node_count, node_num):
         if node_num <= 0 or node_num > node_count:
@@ -132,7 +196,7 @@ class YdbConnection:
             try:
                 self.driver.wait(timeout=5)
             except concurrent.futures.TimeoutError:
-                print("Connect failed to YDB", file=sys.stderr)
+                print(f"Connect failed to YDB: endpoint={self.endpoint}, database={self.database}", file=sys.stderr)
                 print("Last reported errors by discovery:", file=sys.stderr)
                 print(self.driver.discovery_debug_details(), file=sys.stderr)
                 sys.exit(1)
@@ -192,8 +256,8 @@ class GetLoadArgs:
             args.node_count,
             args.node_num)
 
-        s = f"""--create=false --load=true --execute=false --start-from-id {host_config.start_warehouse}"""
-        s += f""" --total-warehouses {args.warehouse_count}"""
+        s = f"--create=false --load=true --execute=false --start-from-id {host_config.start_warehouse}"
+        s += f" --total-warehouses {args.warehouse_count}"
         print(s)
 
 
@@ -658,6 +722,98 @@ class WaitIndicesReady:
             time.sleep(10)
 
         print("Indices are ready")
+
+
+class ImportInitialData:
+    def run(self, args, ydb_connection=None):
+        drop_tables = DropTables()
+        drop_tables.run(args, ydb_connection)
+
+        print("Importing initial data...")
+        start_ts = time.time()
+
+        command = [
+            "ydb",
+            "--endpoint",
+            args.endpoint,
+            "--database",
+            args.database,
+            "import",
+            "s3",
+            "--s3-endpoint",
+            args.s3_endpoint,
+            "--bucket",
+            args.bucket,
+            "--format",
+            "proto-json-base64"
+        ]
+
+        for table in TABLES:
+            item = f"src={args.src_dir}/{table},dst={table}"
+            command.append("--item")
+            command.append(item)
+
+        print(" ".join(command))
+
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0:
+            print("Error importing initial data: {}".format(result.stderr), file=sys.stderr)
+            sys.exit(1)
+
+        result_json = json.loads(result.stdout)
+        if result_json["status"] != "SUCCESS":
+            formatted_json = json.dumps(result_json, indent=4)
+            print("Error importing initial data: {}".format(formatted_json), file=sys.stderr)
+            sys.exit(1)
+
+        wait_ydb_operation_done(args, result_json["id"])
+
+        end_ts = time.time()
+        delta = end_ts - start_ts
+        print("Initial data imported in {} seconds".format(delta))
+
+
+class ExportInitialData:
+    def run(self, args, ydb_connection=None):
+        print("Export TPC-C data...")
+        start_ts = time.time()
+
+        command = [
+            "ydb",
+            "--endpoint",
+            args.endpoint,
+            "--database",
+            args.database,
+            "export",
+            "s3",
+            "--s3-endpoint",
+            args.s3_endpoint,
+            "--bucket",
+            args.bucket,
+            "--format",
+            "proto-json-base64",
+            "--item",
+            f"src=.,dst={args.dst_dir}"
+        ]
+
+        print(" ".join(command))
+
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0:
+            print("Error exporting data: {}".format(result.stderr), file=sys.stderr)
+            sys.exit(1)
+
+        result_json = json.loads(result.stdout)
+        if result_json["status"] != "SUCCESS":
+            formatted_json = json.dumps(result_json, indent=4)
+            print("Error exporting data: {}".format(formatted_json), file=sys.stderr)
+            sys.exit(1)
+
+        wait_ydb_operation_done(args, result_json["id"])
+
+        end_ts = time.time()
+        delta = end_ts - start_ts
+        print("Exported data in {} seconds".format(delta))
 
 
 class ValidateInitialData:
@@ -1212,6 +1368,18 @@ def main():
 
     index_parser = subparsers.add_parser('wait-index')
     index_parser.set_defaults(func=WaitIndicesReady().run)
+
+    import_parser = subparsers.add_parser('import')
+    import_parser.add_argument("--s3-endpoint", required=True, help="S3 endpoint")
+    import_parser.add_argument("--bucket", required=True, help="S3 bucket name")
+    import_parser.add_argument("--src-dir", required=True, help="Path to data in S3")
+    import_parser.set_defaults(func=ImportInitialData().run)
+
+    export_parser = subparsers.add_parser('export')
+    export_parser.add_argument("--s3-endpoint", required=True, help="S3 endpoint")
+    export_parser.add_argument("--bucket", required=True, help="S3 bucket name")
+    export_parser.add_argument("--dst-dir", required=True, help="Path to data in S3")
+    export_parser.set_defaults(func=ExportInitialData().run)
 
     validate_parser = subparsers.add_parser('validate')
     validate_parser.set_defaults(func=ValidateInitialData().run)
