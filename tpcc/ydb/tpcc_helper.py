@@ -38,10 +38,12 @@ PER_WAREHOUSE_MB = {
 }
 
 DEFAULT_MIN_PARTITIONS = 50
+DEFAULT_MIN_WAREHOUSES_PER_SHARD = 100
+DEFAULT_SHARD_SIZE_MB = 1000
 
-# when shard is 2 GB then it is forcely splitted, so we need to place
-# split keys at the boundaries, when there is some space left
-DEFAULT_SHARD_SIZE_MB = 1500
+
+def calc_min_parts(warehouse_count):
+    return max(DEFAULT_MIN_PARTITIONS, warehouse_count // DEFAULT_MIN_WAREHOUSES_PER_SHARD)
 
 
 def forget_ydb_operation(args, operation_id):
@@ -108,6 +110,29 @@ def wait_ydb_operation_done(args, operation_id):
     forget_ydb_operation(args, operation_id)
 
 
+def get_split_keys(warehouse_count, table, min_shard_count):
+        if table in PER_WAREHOUSE_MB:
+            mb_per_wh = PER_WAREHOUSE_MB[table]
+            warehouses_per_shard = (DEFAULT_SHARD_SIZE_MB + mb_per_wh - 1) //  mb_per_wh
+            warehouses_per_shard2 = (warehouse_count + min_shard_count - 1) // min_shard_count
+            warehouses_per_shard = min(warehouses_per_shard, warehouses_per_shard2)
+        else:
+            warehouses_per_shard = (warehouse_count + min_shard_count - 1) // min_shard_count
+
+        if warehouses_per_shard < 2:
+            return []
+
+        split_keys = []
+
+        # first wh id is 1
+        current_split_key = 1 + warehouses_per_shard
+        while current_split_key < warehouse_count + 1:
+            split_keys.append(current_split_key)
+            current_split_key += warehouses_per_shard
+
+        return split_keys
+
+
 class HostConfig:
     def __init__(self, warehouses, node_count, node_num):
         if node_num <= 0 or node_num > node_count:
@@ -130,28 +155,6 @@ class HostConfig:
         self.terminals_per_host = self.warehouses_per_host * 10
 
         assert self.warehouses_per_host > 0
-
-    def get_split_keys(self, table_name):
-        # we have warehouses [self.start_warehouse; self.last_warehouse]
-        # in total self.warehouses_per_host
-
-        if table_name not in PER_WAREHOUSE_MB:
-            print("not")
-            return []
-
-        mb_per_wh = PER_WAREHOUSE_MB[table_name]
-        warehouses_per_shard = (DEFAULT_SHARD_SIZE_MB + mb_per_wh - 1) //  mb_per_wh
-
-        if warehouses_per_shard > self.warehouses_per_host:
-            return []
-
-        split_keys = []
-        current_split_key = self.start_warehouse + warehouses_per_shard
-        while current_split_key < self.last_warehouse:
-            split_keys.append(current_split_key)
-            current_split_key += warehouses_per_shard
-
-        return split_keys
 
     def get_config(self, template_file, **kwargs):
         with open(template_file) as f:
@@ -313,6 +316,9 @@ class CreateTables:
         drop_tables = DropTables()
         drop_tables.run(args, ydb_connection=self.ydb_connection)
 
+        # note that it is used for all small tables
+        small_table_split_keys, small_table_shard_count = self.get_split_keys_str(args.warehouse_count, "warehouse")
+
         sql = f"""
             --!syntax_v1
             CREATE TABLE warehouse (
@@ -329,7 +335,8 @@ class CreateTables:
             )
             WITH (
                 AUTO_PARTITIONING_BY_LOAD = DISABLED,
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {DEFAULT_MIN_PARTITIONS}
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {small_table_shard_count}
+                {small_table_split_keys}
             );
         """
         self.create_table(sql)
@@ -346,12 +353,13 @@ class CreateTables:
             )
             WITH (
                 AUTO_PARTITIONING_BY_LOAD = DISABLED,
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {DEFAULT_MIN_PARTITIONS}
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {small_table_shard_count}
+                {small_table_split_keys}
             );
         """
         self.create_table(sql)
 
-        stock_split_keys, stock_shard_count = self.get_split_keys_str(args, "stock")
+        stock_split_keys, stock_shard_count = self.get_split_keys_str(args.warehouse_count, "stock")
         sql = f"""
             --!syntax_v1
             CREATE TABLE stock (
@@ -376,6 +384,7 @@ class CreateTables:
             )
             WITH (
                 AUTO_PARTITIONING_BY_LOAD = DISABLED,
+                AUTO_PARTITIONING_PARTITION_SIZE_MB = {DEFAULT_SHARD_SIZE_MB},
                 AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {stock_shard_count}
                 {stock_split_keys}
             );
@@ -400,12 +409,13 @@ class CreateTables:
             )
             WITH (
                 AUTO_PARTITIONING_BY_LOAD = DISABLED,
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {DEFAULT_MIN_PARTITIONS}
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {small_table_shard_count}
+                {small_table_split_keys}
             );
         """
         self.create_table(sql)
 
-        customer_split_keys, custromer_shard_count = self.get_split_keys_str(args, "customer")
+        customer_split_keys, custromer_shard_count = self.get_split_keys_str(args.warehouse_count, "customer")
         sql = f"""
             --!syntax_v1
             CREATE TABLE customer (
@@ -435,13 +445,14 @@ class CreateTables:
             )
             WITH (
                 AUTO_PARTITIONING_BY_LOAD = DISABLED,
+                AUTO_PARTITIONING_PARTITION_SIZE_MB = {DEFAULT_SHARD_SIZE_MB},
                 AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {custromer_shard_count}
                 {customer_split_keys}
             );
         """
         self.create_table(sql)
 
-        history_split_keys, history_shard_count = self.get_split_keys_str(args, "history")
+        history_split_keys, history_shard_count = self.get_split_keys_str(args.warehouse_count, "history")
         sql = f"""
             --!syntax_v1
             CREATE TABLE history (
@@ -459,13 +470,14 @@ class CreateTables:
             )
             WITH (
                 AUTO_PARTITIONING_BY_LOAD = DISABLED,
+                AUTO_PARTITIONING_PARTITION_SIZE_MB = {DEFAULT_SHARD_SIZE_MB},
                 AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {history_shard_count}
                 {history_split_keys}
             );
         """
         self.create_table(sql)
 
-        oorder_split_keys, oorder_shard_count = self.get_split_keys_str(args, "oorder")
+        oorder_split_keys, oorder_shard_count = self.get_split_keys_str(args.warehouse_count, "oorder")
         sql = f"""
             --!syntax_v1
             CREATE TABLE oorder (
@@ -482,6 +494,7 @@ class CreateTables:
             )
             WITH (
                 AUTO_PARTITIONING_BY_LOAD = DISABLED,
+                AUTO_PARTITIONING_PARTITION_SIZE_MB = {DEFAULT_SHARD_SIZE_MB},
                 AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {oorder_shard_count}
                 {oorder_split_keys}
             );
@@ -499,12 +512,14 @@ class CreateTables:
             )
             WITH (
                 AUTO_PARTITIONING_BY_LOAD = DISABLED,
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {DEFAULT_MIN_PARTITIONS}
+                AUTO_PARTITIONING_PARTITION_SIZE_MB = {DEFAULT_SHARD_SIZE_MB},
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {small_table_shard_count}
+                {small_table_split_keys}
             );
         """
         self.create_table(sql)
 
-        order_line_split_keys, order_line_shard_count = self.get_split_keys_str(args, "order_line")
+        order_line_split_keys, order_line_shard_count = self.get_split_keys_str(args.warehouse_count, "order_line")
         sql = f"""
             --!syntax_v1
             CREATE TABLE order_line (
@@ -523,6 +538,7 @@ class CreateTables:
             )
             WITH (
                 AUTO_PARTITIONING_BY_LOAD = DISABLED,
+                AUTO_PARTITIONING_PARTITION_SIZE_MB = {DEFAULT_SHARD_SIZE_MB},
                 AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {order_line_shard_count}
                 {order_line_split_keys}
             );
@@ -540,21 +556,16 @@ class CreateTables:
             print("Error creating table: {}, sql:\n{}".format(e, sql), file=sys.stderr)
             sys.exit(1)
 
-    def get_split_keys_str(self, args, table_name):
-        split_keys = []
-        for node_num in range(1, args.node_count + 1):
-            host_config = HostConfig(
-                args.warehouse_count,
-                args.node_count,
-                node_num)
-            split_keys += host_config.get_split_keys(table_name)
+    def get_split_keys_str(self, warehouse_count, table_name):
+        min_parts = calc_min_parts(warehouse_count)
+        split_keys = get_split_keys(warehouse_count, table_name, min_parts)
 
         if len(split_keys) == 0:
-            return "", DEFAULT_MIN_PARTITIONS
+            return "", min_parts
         else:
             split_keys = [str(int(x)) for x in split_keys]
             split_keys_str = ",PARTITION_AT_KEYS = (" + ",".join(split_keys) + ")"
-            min_partitions = max(DEFAULT_MIN_PARTITIONS, len(split_keys) + 1)
+            min_partitions = max(min_parts, len(split_keys) + 1)
             return split_keys_str, min_partitions,
 
 
@@ -567,7 +578,7 @@ class EnableSplitByLoad:
 
         futures = []
         for t in TABLES:
-            futures.append(self.enable_split_on_load(t))
+            futures.append(self.enable_split_on_load(args, t))
 
         try:
             concurrent.futures.wait(futures, return_when=concurrent.futures.ALL_COMPLETED)
@@ -579,9 +590,16 @@ class EnableSplitByLoad:
 
         print("Split by load enabled")
 
-    def enable_split_on_load(self, table_name):
+    def enable_split_on_load(self, args, table_name):
         path = self.ydb_connection.get_database() + "/" + table_name
-        alter_partitioning_settings = ydb.table.PartitioningSettings().with_partitioning_by_load(True)
+
+        min_parts = calc_min_parts(args.warehouse_count)
+        split_keys = get_split_keys(args.warehouse_count, table_name, min_parts)
+        min_parts = max(min_parts, len(split_keys) + 1)
+        alter_partitioning_settings = ydb.table.PartitioningSettings() \
+            .with_partitioning_by_load(True) \
+            .with_min_partitions_count(min_parts) \
+            .with_partition_size_mb(DEFAULT_SHARD_SIZE_MB)
 
         try:
             session = self.ydb_connection.driver.table_client.session().create()
