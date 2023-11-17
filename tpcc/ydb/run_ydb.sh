@@ -3,7 +3,7 @@
 export TZ=UTC
 export LC_ALL=en_US.UTF-8
 
-execute_time_seconds=60
+execute_time_seconds=300
 warmup_time_seconds=60
 
 loader_threads=16
