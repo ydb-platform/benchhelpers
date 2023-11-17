@@ -5,12 +5,17 @@ export LC_ALL=en_US.UTF-8
 
 execute_time_seconds=60
 warmup_time_seconds=60
+
 loader_threads=16
+
 compaction_threads=10
 compaction_auth=disabled
+
 java_memory="2G"
+
 log_dir="$HOME/tpcc_logs/ydb"
 tpcc_path="$HOME/benchbase-ydb"
+
 ydb_port=2135
 
 # Re-defined below, if not configured via command line
