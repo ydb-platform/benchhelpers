@@ -28,7 +28,7 @@ TABLES = (
     "stock",
 )
 
-# only for heavy tbales
+# only for heavy tables
 PER_WAREHOUSE_MB = {
     "stock": 40.6,
     "customer": 20.1,
@@ -40,6 +40,10 @@ PER_WAREHOUSE_MB = {
 DEFAULT_MIN_PARTITIONS = 50
 DEFAULT_MIN_WAREHOUSES_PER_SHARD = 100
 DEFAULT_SHARD_SIZE_MB = 1000
+
+# assume default number of TPC-C items (we presplit, so not a problem anyway)
+ITEMS_NUM = 100000
+MIN_ITEMS_PER_SHARD = 100
 
 
 def calc_min_parts(warehouse_count):
@@ -111,6 +115,18 @@ def wait_ydb_operation_done(args, operation_id):
 
 
 def get_split_keys(warehouse_count, table, min_shard_count):
+        if table == "item":
+            # note, that it is a special table, because there is no warehouse id in its pk
+            items_per_shard = ITEMS_NUM // min_shard_count
+            items_per_shard = max(MIN_ITEMS_PER_SHARD, items_per_shard)
+
+            cur_item = items_per_shard
+            split_keys = []
+            while cur_item < ITEMS_NUM:
+                split_keys.append(str(cur_item))
+                cur_item += items_per_shard
+            return split_keys
+
         if table in PER_WAREHOUSE_MB:
             mb_per_wh = PER_WAREHOUSE_MB[table]
             warehouses_per_shard = (DEFAULT_SHARD_SIZE_MB + mb_per_wh - 1) //  mb_per_wh
@@ -341,6 +357,7 @@ class CreateTables:
         """
         self.create_table(sql)
 
+        item_split_keys, item_shard_count = self.get_split_keys_str(args.warehouse_count, "item")
         sql = f"""
             --!syntax_v1
             CREATE TABLE item (
@@ -353,8 +370,8 @@ class CreateTables:
             )
             WITH (
                 AUTO_PARTITIONING_BY_LOAD = DISABLED,
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {small_table_shard_count}
-                {small_table_split_keys}
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {item_shard_count}
+                {item_split_keys}
             );
         """
         self.create_table(sql)
