@@ -39,7 +39,7 @@ PER_WAREHOUSE_MB = {
 
 DEFAULT_MIN_PARTITIONS = 50
 DEFAULT_MIN_WAREHOUSES_PER_SHARD = 100
-DEFAULT_SHARD_SIZE_MB = 1000
+DEFAULT_SHARD_SIZE_MB = 2000
 
 # assume default number of TPC-C items (we presplit, so not a problem anyway)
 ITEMS_NUM = 100000
