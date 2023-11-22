@@ -30,9 +30,9 @@ TABLES = (
 
 # only for heavy tables
 PER_WAREHOUSE_MB = {
-    "stock": 40.6,
+    "stock": 45,
     "customer": 20.1,
-    "order_line": 28.2,
+    "order_line": 35,
     "history": 2.4,
     "oorder": 1.5,
 }
@@ -604,8 +604,6 @@ class EnableSplitByLoad:
         except Exception as e:
             print("Error enabling split by load: {}".format(e), file=sys.stderr)
             sys.exit(1)
-
-        print("Split by load enabled")
 
     def enable_split_on_load(self, args, table_name):
         path = self.ydb_connection.get_database() + "/" + table_name
