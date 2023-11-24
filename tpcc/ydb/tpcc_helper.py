@@ -1224,6 +1224,7 @@ Result: {self.name}
             total_result.goodput += r.goodput
 
         total_result.efficiency = total_result.tpmc * 100 / total_result.warehouses / 12.86
+        total_result.efficiency = round(total_result.efficiency, 2)
 
         if len(results_by_start_ts) > 1:
             min_start = results_by_start_ts[0].measure_start_ts
@@ -1346,7 +1347,7 @@ Result: {self.name}
         m = self.results_entry.match(line)
         if not m:
             raise Exception("Invalid results line3: {}".format(line))
-        result.tpmc = float(m.group(1))
+        result.tpmc = int(float(m.group(1)))
 
         line = file.readline()
         m = self.results_entry.match(line)
