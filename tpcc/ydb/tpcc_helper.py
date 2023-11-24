@@ -334,6 +334,7 @@ class CreateTables:
 
         # note that it is used for all small tables
         small_table_split_keys, small_table_shard_count = self.get_split_keys_str(args.warehouse_count, "warehouse")
+        small_table_max_shard_count = small_table_shard_count * 2
 
         sql = f"""
             --!syntax_v1
@@ -351,13 +352,15 @@ class CreateTables:
             )
             WITH (
                 AUTO_PARTITIONING_BY_LOAD = DISABLED,
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {small_table_shard_count}
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {small_table_shard_count},
+                AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {small_table_max_shard_count}
                 {small_table_split_keys}
             );
         """
         self.create_table(sql)
 
         item_split_keys, item_shard_count = self.get_split_keys_str(args.warehouse_count, "item")
+        max_item_shard_count = item_shard_count * 2
         sql = f"""
             --!syntax_v1
             CREATE TABLE item (
@@ -370,13 +373,15 @@ class CreateTables:
             )
             WITH (
                 AUTO_PARTITIONING_BY_LOAD = DISABLED,
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {item_shard_count}
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {item_shard_count},
+                AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {max_item_shard_count}
                 {item_split_keys}
             );
         """
         self.create_table(sql)
 
         stock_split_keys, stock_shard_count = self.get_split_keys_str(args.warehouse_count, "stock")
+        stock_max_shard_count = stock_shard_count * 2
         sql = f"""
             --!syntax_v1
             CREATE TABLE stock (
@@ -402,7 +407,8 @@ class CreateTables:
             WITH (
                 AUTO_PARTITIONING_BY_LOAD = DISABLED,
                 AUTO_PARTITIONING_PARTITION_SIZE_MB = {DEFAULT_SHARD_SIZE_MB},
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {stock_shard_count}
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {stock_shard_count},
+                AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {stock_max_shard_count}
                 {stock_split_keys}
             );
         """
@@ -426,13 +432,15 @@ class CreateTables:
             )
             WITH (
                 AUTO_PARTITIONING_BY_LOAD = DISABLED,
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {small_table_shard_count}
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {small_table_shard_count},
+                AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {small_table_max_shard_count}
                 {small_table_split_keys}
             );
         """
         self.create_table(sql)
 
         customer_split_keys, custromer_shard_count = self.get_split_keys_str(args.warehouse_count, "customer")
+        customer_max_shard_count = custromer_shard_count * 2
         sql = f"""
             --!syntax_v1
             CREATE TABLE customer (
@@ -463,13 +471,15 @@ class CreateTables:
             WITH (
                 AUTO_PARTITIONING_BY_LOAD = DISABLED,
                 AUTO_PARTITIONING_PARTITION_SIZE_MB = {DEFAULT_SHARD_SIZE_MB},
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {custromer_shard_count}
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {custromer_shard_count},
+                AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {customer_max_shard_count}
                 {customer_split_keys}
             );
         """
         self.create_table(sql)
 
         history_split_keys, history_shard_count = self.get_split_keys_str(args.warehouse_count, "history")
+        history_max_shard_count = history_shard_count * 2
         sql = f"""
             --!syntax_v1
             CREATE TABLE history (
@@ -488,13 +498,15 @@ class CreateTables:
             WITH (
                 AUTO_PARTITIONING_BY_LOAD = DISABLED,
                 AUTO_PARTITIONING_PARTITION_SIZE_MB = {DEFAULT_SHARD_SIZE_MB},
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {history_shard_count}
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {history_shard_count},
+                AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {history_max_shard_count}
                 {history_split_keys}
             );
         """
         self.create_table(sql)
 
         oorder_split_keys, oorder_shard_count = self.get_split_keys_str(args.warehouse_count, "oorder")
+        oorder_max_shard_count = oorder_shard_count * 2
         sql = f"""
             --!syntax_v1
             CREATE TABLE oorder (
@@ -512,7 +524,8 @@ class CreateTables:
             WITH (
                 AUTO_PARTITIONING_BY_LOAD = DISABLED,
                 AUTO_PARTITIONING_PARTITION_SIZE_MB = {DEFAULT_SHARD_SIZE_MB},
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {oorder_shard_count}
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {oorder_shard_count},
+                AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {oorder_max_shard_count}
                 {oorder_split_keys}
             );
         """
@@ -530,13 +543,15 @@ class CreateTables:
             WITH (
                 AUTO_PARTITIONING_BY_LOAD = DISABLED,
                 AUTO_PARTITIONING_PARTITION_SIZE_MB = {DEFAULT_SHARD_SIZE_MB},
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {small_table_shard_count}
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {small_table_shard_count},
+                AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {small_table_max_shard_count}
                 {small_table_split_keys}
             );
         """
         self.create_table(sql)
 
         order_line_split_keys, order_line_shard_count = self.get_split_keys_str(args.warehouse_count, "order_line")
+        order_line_max_shard_count = order_line_shard_count * 2
         sql = f"""
             --!syntax_v1
             CREATE TABLE order_line (
@@ -556,7 +571,8 @@ class CreateTables:
             WITH (
                 AUTO_PARTITIONING_BY_LOAD = DISABLED,
                 AUTO_PARTITIONING_PARTITION_SIZE_MB = {DEFAULT_SHARD_SIZE_MB},
-                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {order_line_shard_count}
+                AUTO_PARTITIONING_MIN_PARTITIONS_COUNT = {order_line_shard_count},
+                AUTO_PARTITIONING_MAX_PARTITIONS_COUNT = {order_line_max_shard_count}
                 {order_line_split_keys}
             );
         """
