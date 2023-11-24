@@ -1178,6 +1178,21 @@ Result: {self.name}
   Throughput: {self.throughput}
   Goodput: {self.goodput}
 """
+        def to_json(self):
+            return {
+                "name": self.name,
+                "time_seconds": self.time_seconds,
+                "measure_start_ts": self.measure_start_ts,
+                "warehouses": self.warehouses,
+                "new_orders": self.new_orders,
+                "tpmc": self.tpmc,
+                "efficiency": self.efficiency,
+                "throughput": self.throughput,
+                "goodput": self.goodput,
+                "completed_new_orders": self.completed_new_orders,
+                "completed_paymens": self.completed_paymens,
+                "stats": self.stats,
+            }
 
     def run(self, args):
         self.scale_re = re.compile(r"^Scale Factor:\s*(\d+(\.\d+)?)$")
@@ -1259,6 +1274,7 @@ Result: {self.name}
             print(r)
         print(total_result)
 
+        transactions_json = {}
         for transaction_name, stats in transactions_stats_dict.items():
             ok_count = stats['OK']
             failed_count = stats['FAILED']
@@ -1268,13 +1284,30 @@ Result: {self.name}
                 failed_percent = round(failed_count * 100 / total_requests, 2)
                 failed_percent_str = f" ({failed_percent}%)"
 
+            transactions_json[transaction_name] = {
+                "ok_count": ok_count,
+                "failed_count": failed_count,
+                "percentiles": {},
+            }
             print(f"{transaction_name}: OK: {ok_count}, FAILED: {failed_count}{failed_percent_str}")
 
         for transaction_name, histogram in transactions_dict.items():
             print(f"{transaction_name}:")
             for percentile in [50, 90, 95, 99, 99.9]:
+                transactions_json[transaction_name]["percentiles"][percentile] = histogram.percentile(percentile)
                 print(f"  {percentile}%: {histogram.percentile(percentile)} ms")
 
+        json_result = {
+            "summary": total_result.to_json(),
+            "instance_results": [r.to_json() for r in run_results],
+            "transactions": transactions_json,
+        }
+
+        result_file = os.path.join(args.results_dir, "result.json")
+        with open(result_file, "w") as f:
+            json.dump(json_result, f, indent=4)
+
+        print(f"Result saved to {result_file}")
         print("\n*These results are not officially recognized TPC results and are not comparable with other TPC-C test results published on the TPC website")
 
     def process_raw_json(self, file, transactions_dict, transactions_stats_dict, start_ts):
@@ -1335,7 +1368,7 @@ Result: {self.name}
         m = self.results_entry.match(line)
         if not m:
             raise Exception("Invalid results line1: {}".format(line))
-        result.time_seconds = float(m.group(1))
+        result.time_seconds = int(float(m.group(1)))
 
         line = file.readline()
         m = self.results_entry.match(line)
@@ -1359,8 +1392,8 @@ Result: {self.name}
         m = self.rate_re.match(line)
         if not m:
             raise Exception("Invalid results line5: {}".format(line))
-        result.throughput = float(m.group(1))
-        result.goodput = float(m.group(3))
+        result.throughput = int(float(m.group(1)))
+        result.goodput = int(float(m.group(3)))
 
         return result
 
