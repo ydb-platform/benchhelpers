@@ -88,15 +88,15 @@ def wait_ydb_operation_done(args, operation_id):
     print(" ".join(command))
 
     while True:
-        result = subprocess.run(command, capture_output=True, text=True)
-        if result.returncode != 0:
+        for i in range(10):
+            result = subprocess.run(command, capture_output=True, text=True)
+            if result.returncode == 0:
+                result_json = json.loads(result.stdout)
+                if result_json["status"] == "SUCCESS":
+                    break
+            time.sleep(10)
+        else:
             print("Error getting status: {}".format(result.stderr), file=sys.stderr)
-            sys.exit(1)
-
-        result_json = json.loads(result.stdout)
-        if result_json["status"] != "SUCCESS":
-            formatted_json = json.dumps(result_json, indent=4)
-            print("Error getting status: {}".format(formatted_json), file=sys.stderr)
             sys.exit(1)
 
         if "metadata" in result_json:
