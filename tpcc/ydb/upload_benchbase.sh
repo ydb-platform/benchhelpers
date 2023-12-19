@@ -1,9 +1,10 @@
 #!/bin/bash
 
 default_benchbase_url='https://storage.yandexcloud.net/ydb-benchmark-builds/benchbase-ydb.tgz'
+ssh_user="$USER"
 
 usage() {
-    echo "upload_benchbase.sh --hosts <hosts_file> [--package <benchbase-ydb>] [--package-url <url>]"
+    echo "upload_benchbase.sh --hosts <hosts_file> [--package <benchbase-ydb>] [--package-url <url>] [--user <$ssh_user>]"
     echo "If you don't specify package and package-url, script will download benchbase from $benchbase_url"
 }
 
@@ -38,6 +39,10 @@ while [ $# -gt 0 ]; do
         --hosts)
             shift
             hosts=$1
+            ;;
+        --user)
+            shift
+            ssh_user=$1
             ;;
         *)
             usage
@@ -76,6 +81,9 @@ trap cleanup EXIT
 # we need this hack to not force
 # user accept manually cluster hosts
 for host in `cat "$unique_hosts"`; do
+    if [[ -n "$ssh_user" ]]; then
+        host="$ssh_user@$host"
+    fi
     ssh -o StrictHostKeyChecking=no $host &>/dev/null &
 done
 
@@ -85,7 +93,7 @@ if [[ -n "$package" ]]; then
         exit 1
     fi
 
-    parallel-scp -h $unique_hosts $package $HOME
+    parallel-scp --user $ssh_user -h $unique_hosts $package $HOME
     if [ $? -ne 0 ]; then
         echo "Failed to upload package $package to hosts $hosts"
         exit 1
@@ -93,14 +101,14 @@ if [[ -n "$package" ]]; then
 else
     package=`basename $benchbase_url`
 
-    parallel-ssh -h $unique_hosts "wget -O $package $benchbase_url"
+    parallel-ssh --user $ssh_user -h $unique_hosts "wget -O $package $benchbase_url"
     if [ $? -ne 0 ]; then
         echo "Failed to download from $benchbase_url to hosts"
         exit 1
     fi
 fi
 
-parallel-ssh -h $unique_hosts "tar -xzf `basename $package`"
+parallel-ssh --user $ssh_user -h $unique_hosts "tar -xzf `basename $package`"
 if [ $? -ne 0 ]; then
     echo "Failed to extract package $package on hosts $hosts"
     exit 1
