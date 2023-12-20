@@ -122,6 +122,9 @@ while [[ $# -gt 0 ]]; do case $1 in
     --ycsb-hosts)
         YCSB_HOSTS_COUNT_OVERWRITE=$2
         shift;;
+    --user)
+        ssh_user=$2
+        shift;;
     --help|-h)
         usage
         exit;;
@@ -144,6 +147,20 @@ for source in $source_files; do
     log "Source $source"
     . "$source"
 done
+
+if [[ -n "$ssh_user" ]]; then
+    YCSB_HOST_NO_USER="$YCSB_HOSTS"
+    YCSB_HOSTS=
+    for host in $YCSB_HOST_NO_USER; do
+        YCSB_HOSTS="$ssh_user@$host $YCSB_HOSTS"
+    done
+
+    # FIXME: this is a hack to support auto YCSB_PATH with --user
+    if [[ -n "$YCSB_PATH" ]]; then
+        dir_name=$(basename "$YCSB_PATH")
+        YCSB_PATH="/home/$ssh_user/$dir_name"
+    fi
+fi
 
 PATH_TO_SCRIPT=$(dirname "$0")
 

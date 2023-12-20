@@ -39,6 +39,9 @@ while [[ $# -gt 0 ]]; do case $1 in
     --ycsb-hosts)
         EXTRA_ARGS="$EXTRA_ARGS --ycsb-hosts $2"
         shift;;
+    --user)
+        EXTRA_ARGS="$EXTRA_ARGS --user $2"
+        shift;;
     --help|-h)
         usage
         exit;;
