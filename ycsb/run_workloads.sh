@@ -59,11 +59,13 @@ if [[ `echo $source_files | wc -w` != "2" ]]; then
     exit 1
 fi
 
-for source in $@; do
+for source in $source_files
+do
     if [[ ! -e "$source" ]]; then
         echo "Can't source: $source"
         exit 1
     fi
+    . "$source"
 done
 
 if [ ! -d "$LOG_DIR" ]; then

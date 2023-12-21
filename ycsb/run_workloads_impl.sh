@@ -174,6 +174,16 @@ if [ "$TYPE" == "ydbu" ] && [ -z "$YCSB_PATH" ]; then
   YCSB_PATH=$YCSB_DEPLOY_PATH
 fi
 
+if [ "$TYPE" == "ydb_kv" ] && [ -z "$YCSB_PATH" ]; then
+  unzip_tar "$YCSB_DEPLOY_PATH" "$YCSB_TAR_PATH" "$YCSB_HOSTS"
+  YCSB_PATH=$YCSB_DEPLOY_PATH
+fi
+
+if [ "$TYPE" == "ydb_query" ] && [ -z "$YCSB_PATH" ]; then
+  unzip_tar "$YCSB_DEPLOY_PATH" "$YCSB_TAR_PATH" "$YCSB_HOSTS"
+  YCSB_PATH=$YCSB_DEPLOY_PATH
+fi
+
 if [ "$TYPE" == "cockroach" ] && [ -z "$COCKROACH_PATH" ]; then
   unzip_tar "$COCKROACH_DEPLOY_PATH" "$COCKROACH_TAR_PATH" "$YCSB_HOSTS"
   COCKROACH_PATH=$COCKROACH_DEPLOY_PATH
@@ -273,6 +283,16 @@ elif [ "$TYPE" = "ydbu" ]; then
     # which possibly contain Java setup
     cmd_init_template='$ydb_auth $YCSB_PATH/bin/ycsb.sh load ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:${STATIC_NODE_GRPC_PORT}${DATABASE_PATH} -p dropOnInit=true -p splitByLoad=true -p recordcount=$RECORD_COUNT -p import=true -p insertorder=$KEY_ORDER -p maxparts=$MAX_PARTS -p maxpartsizeMB=$MAX_PART_SIZE_MB'
     cmd_run_template='$ydb_auth $YCSB_PATH/bin/ycsb.sh run ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:${STATIC_NODE_GRPC_PORT}${DATABASE_PATH} -threads $threads -p insertorder=$KEY_ORDER -p recordcount=$RECORD_COUNT -p operationcount=$OP_COUNT -p requestdistribution=$distribution -p maxexecutiontime=$MAX_EXECUTION_TIME_SECONDS -p forceUpdate=true'
+elif [ "$TYPE" = "ydb_kv" ]; then
+    # note that we should use ycsb.sh, because it will source user's profile/bashrc
+    # which possibly contain Java setup
+    cmd_init_template='$ydb_auth $YCSB_PATH/bin/ycsb.sh load ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:${STATIC_NODE_GRPC_PORT}${DATABASE_PATH} -threads $LOAD_YCSB_THREADS -p dropOnInit=true -p splitByLoad=true -p recordcount=$RECORD_COUNT -p import=true -p insertorder=$KEY_ORDER -p maxparts=$MAX_PARTS -p maxpartsizeMB=$MAX_PART_SIZE_MB'
+    cmd_run_template='$ydb_auth $YCSB_PATH/bin/ycsb.sh run ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:${STATIC_NODE_GRPC_PORT}${DATABASE_PATH} -threads $threads -p insertorder=$KEY_ORDER -p recordcount=$RECORD_COUNT -p operationcount=$OP_COUNT -p requestdistribution=$distribution -p maxexecutiontime=$MAX_EXECUTION_TIME_SECONDS -p useKV=true'
+elif [ "$TYPE" = "ydb_query" ]; then
+    # note that we should use ycsb.sh, because it will source user's profile/bashrc
+    # which possibly contain Java setup
+    cmd_init_template='$ydb_auth $YCSB_PATH/bin/ycsb.sh load ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:${STATIC_NODE_GRPC_PORT}${DATABASE_PATH} -threads $LOAD_YCSB_THREADS -p dropOnInit=true -p splitByLoad=true -p recordcount=$RECORD_COUNT -p import=true -p insertorder=$KEY_ORDER -p maxparts=$MAX_PARTS -p maxpartsizeMB=$MAX_PART_SIZE_MB'
+    cmd_run_template='$ydb_auth $YCSB_PATH/bin/ycsb.sh run ydb -P $YCSB_PATH/workloads/workload${what} -p dsn=grpc://${TARGET}:${STATIC_NODE_GRPC_PORT}${DATABASE_PATH} -threads $threads -p insertorder=$KEY_ORDER -p recordcount=$RECORD_COUNT -p operationcount=$OP_COUNT -p requestdistribution=$distribution -p maxexecutiontime=$MAX_EXECUTION_TIME_SECONDS -p useQueryService=true'
 elif [ "$TYPE" = "cockroach" ]; then
     cmd_init_template='$COCKROACH_PATH/cockroach workload init ycsb --data-loader=IMPORT --drop --insert-count $RECORD_COUNT --insert-hash=$INSERT_HASH "postgresql://root@$HA_PROXY_HOST:26257?sslmode=disable" --concurrency $LOAD_YCSB_THREADS --workload $what'
     cmd_run_template='sh -c \"2\>\&1 $COCKROACH_PATH/cockroach workload run ycsb --workload $what --request-distribution $distribution --insert-count $RECORD_COUNT --max-ops $OP_COUNT --insert-hash=$INSERT_HASH --display-every 10001s "postgresql://root@$HA_PROXY_HOST:26257?sslmode=disable" --concurrency $threads --duration ${MAX_EXECUTION_TIME_SECONDS}s \"'
