@@ -70,6 +70,8 @@ There are also parameters for `run_workloads.sh`:
 + `--de-threads` - same as `YCSB_THREADS_DE` from [workload](#workload), but with higher priority (overwrites the value from the config).
 + `--ycsb-hosts` - same as `YCSB_HOSTS_COUNT`, but with higher priority (overwrites the value from the config).
 
+By default scripts use anonymous access to YDB. If you want to use a token, then export `YDB_ACCESS_TOKEN_CREDENTIALS` (be aware, that currently this token will be printed in the logs and will be visible in process list!).
+
 ### CockroachDB
 
 ---
