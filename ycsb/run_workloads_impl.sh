@@ -310,12 +310,15 @@ else
     exit 1
 fi
 
+need_load=1
+
 if [[ -n "$WORKLOADS" ]]; then
     for distribution in $DISTRIBUTIONS; do
         # load initial data
         if [[ -n "$LOAD_DATA" ]]; then
             log "load workload $LOAD_DATA data for $distribution"
             load_data $LOAD_DATA
+            need_load=
         fi
 
         running_hosts=$(echo "$hosts" | tr ' ' '\n' | head -$YCSB_HOSTS_COUNT | tr '\n' ' ')
@@ -324,9 +327,13 @@ if [[ -n "$WORKLOADS" ]]; then
     done
 fi
 
+if [[ -z "$WORKLOADS" && -z "$LOAD_DATA" ]]; then
+    # we were requested either d, e or both, but without loading data
+    need_load=
+fi
+
 if [[ -n $RUN_WORKLOAD_D ]] && [ "$RUN_WORKLOAD_D" -eq 1 ]; then
     running_hosts=$(echo "$hosts" | tr ' ' '\n' | head -1)
-    need_load=1
     distribution=latest
     if [[ -n "$need_load" ]]; then
         $debug sleep "$SLEEP_TIME"
@@ -336,11 +343,11 @@ if [[ -n $RUN_WORKLOAD_D ]] && [ "$RUN_WORKLOAD_D" -eq 1 ]; then
     $debug sleep "$SLEEP_TIME"
     OP_COUNT=$OP_COUNT_TOTAL
     run_workload d $YCSB_THREADS_DE "$running_hosts"
+    need_load=1
 fi
 
 if [[ -n $RUN_WORKLOAD_E ]] && [ "$RUN_WORKLOAD_E" -eq 1 ]; then
     running_hosts=$(echo "$hosts" | tr ' ' '\n' | head -1)
-    need_load=1
     distribution=zipfian
     if [[ -n "$need_load" ]]; then
         $debug sleep "$SLEEP_TIME"
