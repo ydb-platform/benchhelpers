@@ -87,13 +87,19 @@ for host in `cat "$unique_hosts"`; do
     ssh -o StrictHostKeyChecking=no $host &>/dev/null &
 done
 
+dst_home=$HOME
+if [[ -n "$ssh_user" ]]; then
+    host0=`head -n 1 $unique_hosts`
+    dst_home="`ssh $ssh_user@$host0 'echo $HOME'`"
+fi
+
 if [[ -n "$package" ]]; then
     if [ ! -f "$package" ]; then
         echo "Package $package not found"
         exit 1
     fi
 
-    parallel-scp --user $ssh_user -h $unique_hosts $package $HOME
+    parallel-scp --user $ssh_user -h $unique_hosts $package $dst_home
     if [ $? -ne 0 ]; then
         echo "Failed to upload package $package to hosts $hosts"
         exit 1
