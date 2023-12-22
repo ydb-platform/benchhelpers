@@ -6,9 +6,84 @@ import argparse
 import concurrent
 import math
 import re
+import sys
 import ydb
 
 from datetime import datetime, timezone
+
+
+def create_ydb_results_table(session, path):
+    sql = f"""
+        --!syntax_v1
+        CREATE TABLE `{path}` (
+            datetime Datetime,
+            version Utf8,
+            label Utf8,
+            description Utf8,
+            ycsb_instances_count Uint32,
+            record_count Uint64,
+            distribution Utf8,
+            workload Utf8,
+            rpsK Uint32,
+            latency99ms Uint32,
+            oks Uint64,
+            errors Uint64,
+            not_found Uint64,
+            min_instance_time_ms Uint32,
+            max_instance_time_ms Uint32,
+            PRIMARY KEY (datetime)
+        );
+    """
+
+    try:
+        session.execute_scheme(sql)
+    except (ydb.issues.AlreadyExists):
+        pass
+    except Exception as e:
+        print("Error creating table: {}, sql:\n{}".format(e, sql), file=sys.stderr)
+        raise e
+
+
+def insert_ydb_results_row(session, path, row):
+    sql = """
+        --!syntax_v1
+        UPSERT INTO `{path}`
+        (
+            datetime,
+            version,
+            record_count,
+            label,
+            workload,
+            ycsb_instances_count,
+            distribution,
+            rpsK,
+            latency99ms,
+            oks,
+            errors,
+            not_found,
+            min_instance_time_ms,
+            max_instance_time_ms
+        )
+        VALUES
+        (
+            DateTime::MakeDatetime(DateTime::FromSeconds(CAST({ts} as Uint32))),
+            "{version}",
+            {record_count},
+            "{label}",
+            "{workload}",
+            {ycsb_instances_count},
+            "{distribution}",
+            {rpsK},
+            {latency},
+            {oks},
+            {errors},
+            {not_found},
+            {min_instance_time_ms},
+            {max_instance_time_ms}
+        );
+        """.format(**row, path=path)
+
+    session.transaction().execute(sql, commit_tx=True)
 
 
 def format_number(num, decimal_places=1):
@@ -290,7 +365,6 @@ class Parser:
             current_ycsb_instances_count,
             current_workload_results)
 
-
     # parse output of the original Java YCSB
     def parse(self, filename, type):
         if type == "cockroach":
@@ -411,67 +485,30 @@ class Parser:
                 print(driver.discovery_debug_details())
                 exit(1)
 
-            session = driver.table_client.session().create()
-            path = args.database + "/" + args.table
+            with ydb.SessionPool(driver) as pool:
+                path = args.database + "/" + args.table
 
-            for ts,result in self.results.items():
-                row = {
-                    "ts": ts,
-                    "version": args.ydb_version,
-                    "record_count": args.record_count,
-                    "label": args.label,
-                    "workload": result.workload,
-                    "ycsb_instances_count": result.ycsb_instances_count,
-                    "distribution": result.distribution,
-                    "rpsK": math.floor(result.throughput / 1000),
-                    "latency": math.ceil(result.latency),
-                    "oks": result.oks,
-                    "errors": result.errors,
-                    "not_found": result.not_found,
-                    "min_instance_time_ms": result.min_time_ms,
-                    "max_instance_time_ms": result.max_time_ms
-                }
+                pool.retry_operation_sync(lambda session: create_ydb_results_table(session, path))
 
-                session.transaction().execute(
-                    """
-                    --!syntax_v1
-                    UPSERT INTO `{path}`
-                    (
-                        datetime,
-                        version,
-                        record_count,
-                        label,
-                        workload,
-                        ycsb_instances_count,
-                        distribution,
-                        rpsK,
-                        latency99ms,
-                        oks,
-                        errors,
-                        not_found,
-                        min_instance_time_ms,
-                        max_instance_time_ms
-                    )
-                    VALUES
-                    (
-                        DateTime::MakeDatetime(DateTime::FromSeconds(CAST({ts} as Uint32))),
-                        "{version}",
-                        {record_count},
-                        "{label}",
-                        "{workload}",
-                        {ycsb_instances_count},
-                        "{distribution}",
-                        {rpsK},
-                        {latency},
-                        {oks},
-                        {errors},
-                        {not_found},
-                        {min_instance_time_ms},
-                        {max_instance_time_ms}
-                    );
-                    """.format(**row, path=path),
-                    commit_tx=True,
-                )
+                for ts,result in self.results.items():
+                    row = {
+                        "ts": ts,
+                        "version": args.ydb_version,
+                        "record_count": args.record_count,
+                        "label": args.label,
+                        "workload": result.workload,
+                        "ycsb_instances_count": result.ycsb_instances_count,
+                        "distribution": result.distribution,
+                        "rpsK": math.floor(result.throughput / 1000),
+                        "latency": math.ceil(result.latency),
+                        "oks": result.oks,
+                        "errors": result.errors,
+                        "not_found": result.not_found,
+                        "min_instance_time_ms": result.min_time_ms,
+                        "max_instance_time_ms": result.max_time_ms
+                    }
+
+                    pool.retry_operation_sync(lambda session: insert_ydb_results_row(session, path, row))
 
     def dump_workloads_txt(self):
         for ts,result in self.results.items():
