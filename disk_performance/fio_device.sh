@@ -20,10 +20,11 @@ results_dir="."
 usage() {
     echo "Usage: $0"
     echo "  --filename <filename> "
-    echo "  --filesize <filesize> (default: $filesize)"
-    echo "  --numjobs <numjobs> (default: $numjobs)"
-    echo "  --results-dir <results-dir> (default: $results_dir)"
-    echo "  --skip-fill-disk (default: false)"
+    echo "  [--filesize <filesize>] (default: $filesize)"
+    echo "  [--numjobs <numjobs>] (default: $numjobs)"
+    echo "  [--results-dir <results-dir>] (default: $results_dir)"
+    echo "  [--skip-fill-disk] (default: false)"
+    echo "  [--format <format>] (default: $format)"
 }
 
 if ! which fio >/dev/null; then
@@ -193,5 +194,7 @@ sudo fio --name=read_latency_test \
   --output-format=$format \
   --output="$results_dir/read_latency_test.$format"
 
-script_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-$script_dir/aggregate.py "$results_dir" 2>&1 | tee "$results_dir/result.txt"
+if [[ "$format" == "json" ]]; then
+    script_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
+    $script_dir/aggregate.py "$results_dir" 2>&1 | tee "$results_dir/result.txt"
+fi
