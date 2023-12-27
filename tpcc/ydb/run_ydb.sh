@@ -27,6 +27,8 @@ max_sessions=1000
 # number of max sessions should be greater than this value
 min_max_sessions_per_instance=50
 
+perf_measure_user=$USER
+
 usage() {
     echo "Usage: $0"
     echo "    --warehouses <N> \\"
@@ -46,6 +48,7 @@ usage() {
     echo "    [--max-sessions $max_sessions] \\"
     echo "    [--no-load] [--no-run] [--no-drop-create] \\"
     echo "    [--with-flames] [--with-perf-stat] [--with-psi] \\"
+    echo "    [--perf-measure-user <user>] \\"
 }
 
 log() {
@@ -166,6 +169,9 @@ while [[ "$#" > 0 ]]; do case $1 in
     --with-psi)
         sample_psi=1
         ;;
+    --perf-measure-user)
+        perf_measure_user=$2
+        shift;;
     --log-dir)
         log_dir=$2
         shift;;
@@ -496,7 +502,7 @@ if [[ -n "$with_flames" ]]; then
             svg="$results_dir/flamegraph_$ts_$short_host.svg"
 
             log "Running flamegraph on $flame_host"
-            $flame_script $flame_host -o $svg
+            $flame_script "$perf_measure_user@$flame_host" -o $svg
         done
     else
         log "Skipped flamegraph, no $flame_script"
@@ -507,7 +513,7 @@ if [[ -n "$sample_psi" ]]; then
     ydb_hosts=`curl -s "$viewer_url/counters/hosts?dynamic_only=1" | sed 's/:[0-9]\+$//' | sort -u`
     for sample_host in $ydb_hosts; do
         log "Sampling pressure on $sample_host"
-        ssh $sample_host "tail /proc/pressure/*"
+        ssh "$perf_measure_user@$sample_host" "tail /proc/pressure/*"
     done
 fi
 
@@ -515,7 +521,7 @@ if [[ -n "$with_perf_stat" ]]; then
     ydb_hosts=`curl -s "$viewer_url/counters/hosts?dynamic_only=1" | sed 's/:[0-9]\+$//' | sort -u`
     for perf_host in $ydb_hosts; do
         log "Running perf stat on $perf_host"
-        ssh $perf_host 'sudo perf stat -a -d -d -d -- sleep 10'
+        ssh "$perf_measure_user@$perf_host" 'sudo perf stat -a -d -d -d -- sleep 10'
     done
 fi
 

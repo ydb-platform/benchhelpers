@@ -42,7 +42,7 @@ if [[ -z "$output" ]]; then
     output="flamegraph-$short_host-$dt.svg"
 fi
 
-flamegraph_dir="$HOME/FlameGraph"
+flamegraph_dir="FlameGraph"
 this_dir=`dirname $0`
 flamegraph_package="${this_dir}/FlameGraph.tar.gz"
 
