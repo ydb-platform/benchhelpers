@@ -1,10 +1,16 @@
 # How to run TPC-C on YDB
 
+Until you have a cluster of a reasonable size, you can easily run a single instance of [TPC-C](https://github.com/ydb-platform/tpcc). Current implementation of TPC-C is relatively [resource](https://github.com/ydb-platform/tpcc#hardware-requirements) greedy, which is why you might need to start multiple instances of TPC-C on different machines, when your YDB cluster contains hundreds of cores. For this purpose we provide `run_ydb.sh`, a tpcc benchhelper, which helps to start the TPC-C instances as well as to aggregate the results.
+
+Also this directory contains some additional scripts to help you with TPC-C installation, ssh keys configuration, etc.
+
 ## Prerequisites
 
+<center><img src="img/tpcc.drawio.png" width="400"></center>
+
 The TPC-C setup involves the following components:
-1. Helper scripts located in this directory. Execute them on any random machine.
-2. TPC-C clients, which can be executed on the same machine as the helper scripts. However, for a reasonable YDB cluster, it is recommended to have multiple machines running the TPC-C clients. Please, check hardware [requirements](https://github.com/ydb-platform/tpcc#hardware-requirements) for TPC-C clients.
+1. `run_ydb.sh` tpcc benchhelper and its dependencies located in its directory. Execute it on any random machine.
+2. TPC-C clients, which can be executed on the same machine as the `run_ydb.sh`. However, for a reasonable YDB cluster, it is recommended to have multiple machines running the TPC-C clients. Please, check hardware [requirements](https://github.com/ydb-platform/tpcc#hardware-requirements) for TPC-C clients.
 3. A running YDB cluster. While it can be on the same machines where the TPC-C client is executed, we strongly advise having separate machines for the YDB cluster.
 4. Prepared file containing a list of TPC-C hosts (separated by new lines) to run the TPC-C client on. Note that if your machine has multiple cores, you can run multiple instances of TPC-C on the same machine. For example:
 
@@ -23,9 +29,9 @@ For a regular installation to install all the dependencies and TPC-C, you can us
 exec -l $SHELL
 ```
 
-Until the end of this section we provide a detailed description of the prerequisites and how to install them manually.
+Currently `setup_tpcc_nodes.sh` supports Ubuntu only. That is why it might fail to install some dependencies. Until the end of this section we provide a detailed description of the prerequisites and how to install them manually.
 
-Prerequisites to run helper scripts:
+Prerequisites to run `run_ydb.sh` tpcc benchhelper script:
 1. Install pssh.
 2. Install the ydb, numpy and requests Python packages using `pip3 install ydb numpy requests`.
 3. [Download](https://ydb.tech/en/docs/downloads/) the latest YDB CLI and place it somewhere in your PATH.
@@ -45,7 +51,9 @@ To install the package, execute the following (note, that if you don't specify t
 ./upload_benchbase.sh --hosts tpcc.hosts [--package benchbase-ydb.tgz]
 ```
 
-[Here](https://github.com/ydb-platform/ydb-jdbc-driver/#authentication-modes) you can find description of the authentication. Usually you will either use anonymous authentication in case of self deployed YDB, or provide a service account key file using the `saFile=file:` jdbc url parameter in [tpcc_config_template.xml](https://github.com/ydb-platform/benchhelpers/blob/108cb4ca3efc89dee7866b4bb8fca1a59ad265a8/tpcc/ydb/tpcc_config_template.xml#L7), when run managed YDB. Also, these scripts use `ydb` CLI and python script using `ydb` SDK. In case of managed YDB and service account key, you must export `YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS` and `SA_KEY_FILE` before running the scripts.
+### Authentication (optional)
+
+There are various [authentication](https://github.com/ydb-platform/ydb-jdbc-driver/#authentication-modes) modes. By default the `run_ydb.sh` uses anonymous authentication. If you want to use a service account key, you should alter jdbc url parameter in [tpcc_config_template.xml](https://github.com/ydb-platform/benchhelpers/blob/main/tpcc/ydb/tpcc_config_template.xml#L7) by adding `saFile=file:<PATH_TO_SERVICE_ACCOUNT_KEY_FILE>`. Also, you must export `YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS` and `SA_KEY_FILE` before running the script.
 
 ## Running the benchmark
 
