@@ -110,7 +110,12 @@ if ! which parallel-ssh >/dev/null; then
     exit 1
 fi
 
-for module in numpy requests; do
+if ! which pg_config; then
+    echo "pg_config not found, you should install libpq-dev (e.g. sudo apt-get install libpq-dev)"
+    exit 1
+fi
+
+for module in numpy requests psycopg2; do
     if ! python3 -c "import $module" 2>/dev/null; then
         echo "Python3 module $module not found, you should install it, execute: pip3 install $module)"
         exit 1
@@ -160,6 +165,18 @@ while [[ "$#" > 0 ]]; do case $1 in
         shift;;
     --log-dir)
         log_dir=$2
+        shift;;
+    --force-tpcc-ddl)
+        force_tpcc_ddl=1
+        ;;
+    --force-load-host)
+        force_load_host=$2
+        shift;;
+    --force-load-port)
+        force_load_port=$2
+        shift;;
+    --max-maintenance-work-mem)
+        max_maintenance_work_mem=$2
         shift;;
     --help|-h)
         usage
@@ -260,9 +277,6 @@ if [ ! -e $results_dir ]; then
 fi
 
 if [ -z "$no_load" ]; then
-    load_start=$SECONDS
-    log "Loading data"
-
     single_hosts=`mktemp`
     head -1 $hosts_file > $single_hosts
 
@@ -270,31 +284,82 @@ if [ -z "$no_load" ]; then
     generate_configs $single_hosts
     rm -f $single_hosts
 
-    if [ -z "$no_drop_create" ]; then
-        args="--create=true"
-    else
-        args="--create=false"
-    fi
-
     args="$args --load=true --execute=false"
 
     host=`head -1 $hosts_file`
+
+    if [ -n "$force_load_host" ]; then
+        postgres_host_args="$postgres_host_args --force-host $force_load_host"
+    fi
+
+    if [ -n "$force_load_port" ]; then
+        postgres_host_args="$postgres_host_args --force-port $force_load_port"
+    fi
+
+    if [ -z "$no_drop_create" ]; then
+        log "Drop and create tables"
+
+        if [ -z "$force_tpcc_ddl" ]; then
+            $tpcc_helper \
+                create \
+                $postgres_host_args \
+                --tpcc-config $config_template
+
+            if [ $? -ne 0 ]; then
+                echo "Failed to create tables"
+                exit 1
+            fi
+        else
+            args="$args --create=true"
+        fi
+    else
+        args="$args --create=false"
+    fi
+
+    load_start=$SECONDS
+    log "Loading data"
+
     ssh $host "cd $tpcc_path && ./scripts/tpcc.sh --memory $java_memory -c config.1.xml $args" \
         &> $results_dir/$host.load.log
+    if [ $? -ne 0 ]; then
+        echo "Failed to load data"
+        exit 1
+    fi
 
     elapsed=$(( SECONDS - load_start ))
     log "Loading data done in $elapsed seconds"
 
-    # we have some issue with reporting OK and having index available
-    # also above we changed min partitions, so we need to wait a bit
+    if [ -z "$force_tpcc_ddl" ]; then
+        postload_start=$SECONDS
+        log "Postload alter started"
+        if [ -n "$max_maintenance_work_mem" ]; then
+            post_args="--max-maintenance-work-mem  $max_maintenance_work_mem"
+        fi
+        $tpcc_helper \
+            postload-alter \
+            $postgres_host_args \
+            $post_args \
+            --tpcc-config $config_template
 
-    if [[ $warehouses -ge 15000 ]]; then
-        log "Sleeping 60m after loading the data"
-        sleep 60m
-    else
-        log "Sleeping 30m after loading the data"
-        sleep 30m
+        if [ $? -ne 0 ]; then
+            echo "Failed to alter tables and create indexes"
+            exit 1
+        fi
+
+        elapsed=$(( SECONDS - postload_start ))
+        log "Alter done in $elapsed seconds"
     fi
+
+    elapsed=$(( SECONDS - load_start ))
+    log "Full loading time is $elapsed seconds"
+
+    #if [[ $warehouses -ge 15000 ]]; then
+    #    log "Sleeping 60m after loading the data"
+    #    sleep 60m
+    #else
+    #    log "Sleeping 10m after loading the data"
+    #    sleep 10m
+    #fi
 fi
 
 if [ -n "$no_run" ]; then
