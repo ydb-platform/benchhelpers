@@ -43,9 +43,16 @@ def main():
     write_iops_path = os.path.join(args.results_dir, "write_iops_test.json")
     result['write_iops'] = parse_result(write_iops_path, 'write')
 
+    write_iops_path = os.path.join(args.results_dir, "write_iops_test_8K.json")
+    result['write_iops_8K'] = parse_result(write_iops_path, 'write')
+
     write_latency_path = os.path.join(args.results_dir, "write_latency_test.json")
     if os.path.exists(write_latency_path):
         result['write_latency'] = parse_result(write_latency_path, 'write')
+
+    write_latency_path = os.path.join(args.results_dir, "write_latency_test_8K.json")
+    if os.path.exists(write_latency_path):
+        result['write_latency_8K'] = parse_result(write_latency_path, 'write')
 
     read_bandwidth_path = os.path.join(args.results_dir, "read_bandwidth_test.json")
     result['read_bandwidth'] = parse_result(read_bandwidth_path, 'read')
@@ -53,9 +60,16 @@ def main():
     read_iops_path = os.path.join(args.results_dir, "read_iops_test.json")
     result['read_iops'] = parse_result(read_iops_path, 'read')
 
+    read_iops_path = os.path.join(args.results_dir, "read_iops_test_8K.json")
+    result['read_iops_8K'] = parse_result(read_iops_path, 'read')
+
     read_latency_path = os.path.join(args.results_dir, "read_latency_test.json")
     if os.path.exists(read_latency_path):
         result['read_latency'] = parse_result(read_latency_path, 'read')
+
+    read_latency_path = os.path.join(args.results_dir, "read_latency_test_8K.json")
+    if os.path.exists(read_latency_path):
+        result['read_latency_8K'] = parse_result(read_latency_path, 'read')
 
     print("RAW RESULTS")
     print("{:<20} {:>15} {:>20} {:>15}".format('Test', 'Bandwidth, MiB/s', 'IOPS (in Kilo)', "Latency, us"))
@@ -69,16 +83,28 @@ def main():
 
     # we assume defaults
     summary = {
-        "Random read 4k": {
+        "Random read 4K": {
             "bw": result['read_iops']['bw'],
             "iops": result['read_iops']['iops'],
             "latency": result['read_latency']['latency'] if 'read_latency' in result else None,
         },
 
-        "Random write 4k": {
+        "Random write 4K": {
             "bw": result['write_iops']['bw'],
             "iops": result['write_iops']['iops'],
             "latency": result['write_latency']['latency'] if 'write_latency' in result else None,
+        },
+
+        "Random read 8K": {
+            "bw": result['read_iops_8K']['bw'],
+            "iops": result['read_iops_8K']['iops'],
+            "latency": result['read_latency_8K']['latency'] if 'read_latency_8K' in result else None,
+        },
+
+        "Random write 8K": {
+            "bw": result['write_iops_8K']['bw'],
+            "iops": result['write_iops_8K']['iops'],
+            "latency": result['write_latency_8K']['latency'] if 'write_latency_8K' in result else None,
         },
 
         "Read 1M": {
@@ -103,7 +129,7 @@ def main():
             operation,
             result['bw'],
             result['iops'],
-            result['latency'] if result['latency'] is not None else 'n/a',))
+            result['latency'] if ('latency' in result and result['latency'] is not None) else 'n/a',))
 
 
 if __name__ == '__main__':

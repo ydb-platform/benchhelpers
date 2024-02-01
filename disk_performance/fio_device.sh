@@ -135,7 +135,7 @@ sudo fio --name=write_bandwidth_test \
   --output="$results_dir/write_bandwidth_test.$format"
 
 #
-# write IOPS test
+# write IOPS test 4K
 #
 sudo fio --name=write_iops_test \
   --filename="$filename" --filesize=$filesize \
@@ -147,7 +147,19 @@ sudo fio --name=write_iops_test \
   --output="$results_dir/write_iops_test.$format"
 
 #
-# write latency test
+# write IOPS test 8K
+#
+sudo fio --name=write_iops_test \
+  --filename="$filename" --filesize=$filesize \
+  --time_based --ramp_time=$ramp_time --runtime=$runtime \
+  --ioengine=libaio --direct=1 --verify=0 --randrepeat=0 \
+  --bs=8K --iodepth=256 --rw=randwrite \
+  --iodepth_batch_submit=256  --iodepth_batch_complete_max=256 \
+  --output-format=$format \
+  --output="$results_dir/write_iops_test_8K.$format"
+
+#
+# write latency test 4K
 #
 sudo fio --name=write_latency_test \
   --filename="$filename" --filesize=$filesize \
@@ -157,6 +169,18 @@ sudo fio --name=write_latency_test \
   --iodepth_batch_complete_max=4 \
   --output-format=$format \
   --output="$results_dir/write_latency_test.$format"
+
+#
+# write latency test 8K
+#
+sudo fio --name=write_latency_test \
+  --filename="$filename" --filesize=$filesize \
+  --time_based --ramp_time=$ramp_time --runtime=$runtime \
+  --ioengine=libaio --direct=1 --verify=0 --randrepeat=0 \
+  --bs=8K --iodepth=4 --rw=randwrite --iodepth_batch_submit=4  \
+  --iodepth_batch_complete_max=4 \
+  --output-format=$format \
+  --output="$results_dir/write_latency_test_8K.$format"
 
 #
 # read bandwidth test
@@ -171,7 +195,7 @@ sudo fio --name=read_bandwidth_test \
   --output="$results_dir/read_bandwidth_test.$format"
 
 #
-# read IOPS test
+# read IOPS test 4K
 #
 sudo fio --name=read_iops_test \
   --filename="$filename" --filesize=$filesize \
@@ -183,7 +207,19 @@ sudo fio --name=read_iops_test \
   --output="$results_dir/read_iops_test.$format"
 
 #
-# read latency test
+# read IOPS test 8K
+#
+sudo fio --name=read_iops_test \
+  --filename="$filename" --filesize=$filesize \
+  --time_based --ramp_time=$ramp_time --runtime=$runtime \
+  --ioengine=libaio --direct=1 --verify=0 --randrepeat=0 \
+  --bs=8K --iodepth=256 --rw=randread \
+  --iodepth_batch_submit=256  --iodepth_batch_complete_max=256 \
+  --output-format=$format \
+  --output="$results_dir/read_iops_test_8K.$format"
+
+#
+# read latency test 4K
 #
 sudo fio --name=read_latency_test \
   --filename="$filename" --filesize=$filesize \
@@ -193,6 +229,18 @@ sudo fio --name=read_latency_test \
   --iodepth_batch_submit=4  --iodepth_batch_complete_max=4 \
   --output-format=$format \
   --output="$results_dir/read_latency_test.$format"
+
+#
+# read latency test 4K
+#
+sudo fio --name=read_latency_test \
+  --filename="$filename" --filesize=$filesize \
+  --time_based --ramp_time=$ramp_time --runtime=$runtime \
+  --ioengine=libaio --direct=1 --verify=0 --randrepeat=0 \
+  --bs=8K --iodepth=4 --rw=randread \
+  --iodepth_batch_submit=4  --iodepth_batch_complete_max=4 \
+  --output-format=$format \
+  --output="$results_dir/read_latency_test_8K.$format"
 
 if [[ "$format" == "json" ]]; then
     script_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"

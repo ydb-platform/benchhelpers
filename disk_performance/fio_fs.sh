@@ -72,7 +72,7 @@ sudo fio --name=write_bandwidth_test --directory=$fiotest_dir --numjobs=16 \
   --output="$results_dir/write_bandwidth_test.$format"
 
 #
-# write IOPS test
+# write IOPS test 4K
 #
 sudo fio --name=write_iops_test --directory=$fiotest_dir --size=10G \
   --time_based --runtime=60s --ramp_time=2s --ioengine=libaio --direct=1 \
@@ -80,6 +80,16 @@ sudo fio --name=write_iops_test --directory=$fiotest_dir --size=10G \
   --iodepth_batch_submit=256 --iodepth_batch_complete_max=256 \
   --output-format=$format \
   --output="$results_dir/write_iops_test.$format"
+
+#
+# write IOPS test 8K
+#
+sudo fio --name=write_iops_test --directory=$fiotest_dir --size=10G \
+  --time_based --runtime=60s --ramp_time=2s --ioengine=libaio --direct=1 \
+  --verify=0 --bs=8K --iodepth=256 --rw=randwrite \
+  --iodepth_batch_submit=256 --iodepth_batch_complete_max=256 \
+  --output-format=$format \
+  --output="$results_dir/write_iops_test_8K.$format"
 
 #
 # read bandwidth test
@@ -92,7 +102,7 @@ sudo fio --name=read_bandwidth_test --directory=$fiotest_dir --numjobs=16 \
   --output="$results_dir/read_bandwidth_test.$format"
 
 #
-# read IOPS test
+# read IOPS test 4K
 #
 sudo fio --name=read_iops_test --directory=$fiotest_dir --size=10G \
   --time_based --runtime=60s --ramp_time=2s --ioengine=libaio --direct=1 \
@@ -100,6 +110,16 @@ sudo fio --name=read_iops_test --directory=$fiotest_dir --size=10G \
   --iodepth_batch_submit=256 --iodepth_batch_complete_max=256 \
   --output-format=$format \
   --output="$results_dir/read_iops_test.$format"
+
+#
+# read IOPS test 8K
+#
+sudo fio --name=read_iops_test --directory=$fiotest_dir --size=10G \
+  --time_based --runtime=60s --ramp_time=2s --ioengine=libaio --direct=1 \
+  --verify=0 --bs=8K --iodepth=256 --rw=randread \
+  --iodepth_batch_submit=256 --iodepth_batch_complete_max=256 \
+  --output-format=$format \
+  --output="$results_dir/read_iops_test_8K.$format"
 
 if [[ "$format" == "json" ]]; then
     script_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
