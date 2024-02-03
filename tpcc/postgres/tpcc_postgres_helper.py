@@ -19,8 +19,6 @@ sript_dir = os.path.dirname(os.path.abspath(__file__))
 CREATE_DDL = os.path.join(sript_dir, "ddl-create.sql")
 DROP_DDL = os.path.join(sript_dir, "ddl-drop.sql")
 
-POSTLOAD_DDL = os.path.join(sript_dir, "ddl-postload.sql")
-
 TABLES = (
     "warehouse",
     "district",
@@ -304,6 +302,10 @@ class DropTables:
 
 class CreateTables:
     def run(self, args, pg_connection=None):
+        if args.unlogged:
+            global CREATE_DDL
+            CREATE_DDL = os.path.join(sript_dir, "ddl-create-unlogged.sql")
+
         if not pg_connection:
             self.pg_connection = PostgresConnection(args)
         else:
@@ -319,7 +321,7 @@ class CreateTables:
         self.pg_connection.execute_ddl(CREATE_DDL)
 
 
-class PostLoadAlter:
+class PostLoad:
     def run(self, args, pg_connection=None):
         if not pg_connection:
             self.pg_connection = PostgresConnection(args)
@@ -335,7 +337,7 @@ class PostLoadAlter:
             self.pg_connection.execute_sql(f"ALTER SYSTEM SET maintenance_work_mem='{args.max_work_mem}';")
             self.pg_connection.execute_sql("SELECT pg_reload_conf();")
 
-        print("Creating indexes and setting foreign constraints ...")
+        print("Creating indexes ...")
 
         index1_sql = "CREATE INDEX idx_customer_name ON customer (c_w_id, c_d_id, c_last, c_first);"
         index2_sql = "CREATE INDEX idx_order ON oorder (o_w_id, o_d_id, o_c_id, o_id);"
@@ -343,8 +345,6 @@ class PostLoadAlter:
         futures = []
         futures.append(execute_sql_async(self.pg_connection.connection_params, index1_sql, "customer_index"))
         futures.append(execute_sql_async(self.pg_connection.connection_params, index2_sql, "order_index"))
-
-        self.pg_connection.execute_ddl(POSTLOAD_DDL)
 
         try:
             for future in as_completed(futures):
@@ -396,40 +396,6 @@ class VacuumAnalyze:
             print(f"Restoring maintenance_work_mem to {current_work_mem} KiB...")
             self.pg_connection.execute_sql(f"ALTER SYSTEM SET maintenance_work_mem='{current_work_mem}';")
             self.pg_connection.execute_sql("SELECT pg_reload_conf();")
-
-
-class AlterValidate:
-    def run(self, args, pg_connection=None):
-        if not pg_connection:
-            self.pg_connection = PostgresConnection(args)
-        else:
-            self.pg_connection = pg_connection
-
-        print("Validating fk ...")
-
-        tables_and_fks = [
-            ("stock", "fk_stock_warehouse"),
-            ("stock", "fk_stock_item"),
-            ("oorder", "fk_oorder_customer"),
-            ("order_line", "fk_order_line_oorder"),
-            ("order_line", "fk_order_line_stock"),
-            ("history", "fk_history_customer"),
-            ("history", "fk_history_district"),
-            ("new_order", "fk_new_order_oorder"),
-            ("customer", "fk_customer_district"),
-            ("district", "fk_district_warehouse"),
-        ]
-
-        futures = []
-        for table, fk in tables_and_fks:
-            sql = f"ALTER TABLE {table} VALIDATE CONSTRAINT {fk};"
-            futures.append(execute_sql_async(self.pg_connection.connection_params, sql, f"alter_validate_{table}"))
-
-        try:
-            for future in as_completed(futures):
-                future.result()
-        except Exception as e:
-            print(f"Unable to alter validate fk: {e}", file=sys.stderr)
 
 
 class ValidateInitialData:
@@ -504,9 +470,10 @@ def main():
     create_parser.add_argument("--tpcc-config", dest="tpcc_config_path", required=True, help="TPCC config file")
     create_parser.add_argument("--force-host", dest="force_host", help="Force host")
     create_parser.add_argument("--force-port", dest="force_port", help="Force port")
+    create_parser.add_argument("--unlogged-tables", dest="unlogged", action="store_true", help="Use unlogged tables")
 
-    post_load_alter = subparsers.add_parser("postload-alter")
-    post_load_alter.set_defaults(func=PostLoadAlter().run)
+    post_load_alter = subparsers.add_parser("postload")
+    post_load_alter.set_defaults(func=PostLoad().run)
     post_load_alter.add_argument("--tpcc-config", dest="tpcc_config_path", required=True, help="TPCC config file")
     post_load_alter.add_argument("--max-maintenance-work-mem", dest="max_work_mem", help="Max maintenance_work_mem, KiB")
     post_load_alter.add_argument("--force-host", dest="force_host", help="Force host")
@@ -518,13 +485,6 @@ def main():
     vacuum_analyze.add_argument("--max-maintenance-work-mem", dest="max_work_mem", help="Max maintenance_work_mem, KiB")
     vacuum_analyze.add_argument("--force-host", dest="force_host", help="Force host")
     vacuum_analyze.add_argument("--force-port", dest="force_port", help="Force port")
-
-    alter_validate = subparsers.add_parser("alter-validate")
-    alter_validate.set_defaults(func=AlterValidate().run)
-    alter_validate.add_argument("--tpcc-config", dest="tpcc_config_path", required=True, help="TPCC config file")
-    alter_validate.add_argument("--max-maintenance-work-mem", dest="max_work_mem", help="Max maintenance_work_mem, KiB")
-    alter_validate.add_argument("--force-host", dest="force_host", help="Force host")
-    alter_validate.add_argument("--force-port", dest="force_port", help="Force port")
 
     validate_parser = subparsers.add_parser('validate')
     validate_parser.set_defaults(func=ValidateInitialData().run)

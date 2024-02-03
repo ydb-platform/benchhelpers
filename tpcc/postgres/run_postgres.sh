@@ -178,6 +178,9 @@ while [[ "$#" > 0 ]]; do case $1 in
     --max-maintenance-work-mem)
         max_maintenance_work_mem=$2
         shift;;
+    --unlogged-tables)
+        unlogged_tables=1
+        ;;
     --help|-h)
         usage
         exit;;
@@ -300,9 +303,13 @@ if [ -z "$no_load" ]; then
         log "Drop and create tables"
 
         if [ -z "$force_tpcc_ddl" ]; then
+            if [[ -n "$unlogged_tables" ]]; then
+                create_args="$create_args --unlogged-tables"
+            fi
             $tpcc_helper \
                 create \
                 $postgres_host_args \
+                $create_args \
                 --tpcc-config $config_template
 
             if [ $? -ne 0 ]; then
@@ -331,12 +338,12 @@ if [ -z "$no_load" ]; then
 
     if [ -z "$force_tpcc_ddl" ]; then
         postload_start=$SECONDS
-        log "Postload alter started"
+        log "Postload started"
         if [ -n "$max_maintenance_work_mem" ]; then
             post_args="--max-maintenance-work-mem  $max_maintenance_work_mem"
         fi
         $tpcc_helper \
-            postload-alter \
+            postload \
             $postgres_host_args \
             $post_args \
             --tpcc-config $config_template
@@ -347,19 +354,27 @@ if [ -z "$no_load" ]; then
         fi
 
         elapsed=$(( SECONDS - postload_start ))
-        log "Alter done in $elapsed seconds"
+        log "Postload done in $elapsed seconds"
+
+        analyze_start=$SECONDS
+        log "Analyze started"
+        $tpcc_helper \
+            vacuum-analyze \
+            $postgres_host_args \
+            $post_args \
+            --tpcc-config $config_template
+
+        if [ $? -ne 0 ]; then
+            echo "Failed to analyze tables and create indexes"
+            exit 1
+        fi
+
+        elapsed=$(( SECONDS - analyze_start ))
+        log "Analyze done in $elapsed seconds"
     fi
 
     elapsed=$(( SECONDS - load_start ))
     log "Full loading time is $elapsed seconds"
-
-    #if [[ $warehouses -ge 15000 ]]; then
-    #    log "Sleeping 60m after loading the data"
-    #    sleep 60m
-    #else
-    #    log "Sleeping 10m after loading the data"
-    #    sleep 10m
-    #fi
 fi
 
 if [ -n "$no_run" ]; then
