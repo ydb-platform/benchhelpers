@@ -1199,7 +1199,7 @@ Result: {self.name}
         self.start_measure_re = re.compile(r"^\[INFO\s*\] (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) \[main\].*Warmup complete, starting measurements.$")
         self.results_line_re = re.compile(r"^================RESULTS================")
         self.results_entry = re.compile(r".*\|\s*(\d+(\.\d+)?)%?\s*$")
-        self.rate_re = re.compile(r"^Rate limited.*= (\d+(\.\d+)?) requests/sec \(throughput\), (\d+(\.\d+)?) requests/sec \(goodput\)$")
+        self.rate_re = re.compile(r"^(?:Rate limited|reqs/s).*= (\d+(\.\d+)?) requests/sec \(throughput\), (\d+(\.\d+)?) requests/sec \(goodput\)$")
 
         host_dirs = []
         for name in os.listdir(args.results_dir):
