@@ -22,7 +22,6 @@
     <works>
         <work>
             <time>{execute_time_seconds}</time>
-            <rate>10000</rate>
             <warmup>{warmup_time_seconds}</warmup>
             <weights>45,43,4,4,4</weights>
         </work>
