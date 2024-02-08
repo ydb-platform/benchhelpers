@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import collections
 import os
 import psycopg2
 import re
@@ -223,6 +224,8 @@ class HostConfig:
 
 class GenerateConfig:
     def run(self, args):
+        host_to_monport = collections.defaultdict(lambda: 8080)
+
         with open(args.hosts_file) as f:
             num_nodes = len(f.readlines())
 
@@ -237,6 +240,8 @@ class GenerateConfig:
                     "execute_time_seconds": args.execute_time,
                     "warmup_time_seconds": args.warmup_time,
                     "max_connections": args.max_connections,
+                    "mport": host_to_monport[host],
+                    "mname": f"node_{node_num}",
                 }
 
                 host_config = HostConfig(
@@ -248,6 +253,8 @@ class GenerateConfig:
                 output = f"config.{node_num}.xml"
                 with open(output, "w") as f:
                     f.write(config)
+
+                host_to_monport[host] = host_to_monport[host] + 1
 
 
 class GetStartArgs:
