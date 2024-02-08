@@ -17,7 +17,7 @@ from psycopg2 import sql
 
 sript_dir = os.path.dirname(os.path.abspath(__file__))
 
-CREATE_DDL = os.path.join(sript_dir, "ddl-create.sql")
+CREATE_DDL = os.path.join(sript_dir, "ddl-create-no-fk.sql")
 DROP_DDL = os.path.join(sript_dir, "ddl-drop.sql")
 
 TABLES = (
