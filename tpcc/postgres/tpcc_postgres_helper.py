@@ -321,9 +321,9 @@ class CreateTables:
         drop_tables = DropTables()
         drop_tables.run(args, pg_connection=self.pg_connection)
 
-        self.pg_connection.execute_sql("ALTER SYSTEM SET wal_level = minimal;")
-        self.pg_connection.execute_sql("ALTER SYSTEM SET synchronous_commit=OFF;")
-        self.pg_connection.execute_sql("SELECT pg_reload_conf();")
+        #self.pg_connection.execute_sql("ALTER SYSTEM SET wal_level = minimal;")
+        #self.pg_connection.execute_sql("ALTER SYSTEM SET synchronous_commit=OFF;")
+        #self.pg_connection.execute_sql("SELECT pg_reload_conf();")
 
         self.pg_connection.execute_ddl(CREATE_DDL)
 
@@ -365,9 +365,9 @@ class PostLoad:
             self.pg_connection.execute_sql(f"ALTER SYSTEM SET maintenance_work_mem='{current_work_mem}';")
             self.pg_connection.execute_sql("SELECT pg_reload_conf();")
 
-        self.pg_connection.execute_sql("ALTER SYSTEM SET wal_level = replica;")
-        self.pg_connection.execute_sql("ALTER SYSTEM SET synchronous_commit=On;")
-        self.pg_connection.execute_sql("SELECT pg_reload_conf();")
+        #self.pg_connection.execute_sql("ALTER SYSTEM SET wal_level = replica;")
+        #self.pg_connection.execute_sql("ALTER SYSTEM SET synchronous_commit=On;")
+        #self.pg_connection.execute_sql("SELECT pg_reload_conf();")
 
 
 class VacuumAnalyze:
