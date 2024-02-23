@@ -9,7 +9,6 @@ warmup_time_seconds=60
 loader_threads=16
 
 compaction_threads=10
-compaction_auth=disabled
 
 java_memory="2G"
 
@@ -38,7 +37,6 @@ usage() {
     echo "    [--secure] \\"
     echo "    [--viewer-url http://ydb-host:8765] \\"
     echo "    [--compaction-threads <compaction_threads>] \\"
-    echo "    [--compaction-auth <Disabled,OAuth,Login>] \\"
     echo "    [--skip-compaction] \\"
     echo "    [--run-phase-only] \\"
     echo "    [--log-dir <log_dir>] \\"
@@ -62,16 +60,14 @@ kill_tpcc() {
         return
     fi
 
-    unique_hosts=`mktemp`
-    sort -u $hosts_file > $unique_hosts
-
     parallel-ssh -h $unique_hosts -i 'pkill -9 -f "^/bin/bash.*tpcc.sh"; pkill -9 -f "^java.*benchbase.jar -b tpcc"' &>/dev/null
     parallel-ssh -h $unique_hosts -i "cd $tpcc_path && rm -rf results_*" &>/dev/null
-
-    rm -f $unique_hosts
 }
 
 cleanup() {
+    if [[ -n "$unique_hosts" ]]; then
+        rm -f $unique_hosts
+    fi
     kill_tpcc
     exit 1
 }
@@ -111,20 +107,26 @@ while [[ "$#" > 0 ]]; do case $1 in
     --ydb-port)
         ydb_port=$2
         shift;;
+    --database)
+        database=$2
+        shift;;
     --secure)
         use_grpcs=1
         ;;
-    --database)
-        database=$2
+    --token-file)
+        token_file_path=$2
+        shift;;
+    --sa-key-file)
+        sa_key_file_path=$2
+        shift;;
+    --ca-file)
+        ca_file_path=$2
         shift;;
     --viewer-url)
         viewer_url=$2
         shift;;
     --compaction-threads)
         compaction_threads=$2
-        shift;;
-    --compaction-auth)
-        compaction_auth=$2
         shift;;
     --skip-compaction)
         skip_compaction=1
@@ -225,6 +227,9 @@ if [ ! -r "$hosts_file" ]; then
     exit 1
 fi
 
+unique_hosts=`mktemp`
+sort -u $hosts_file > $unique_hosts
+
 # we need this hack to not force
 # user accept manually cluster hosts
 for host in `cat "$hosts_file" | sort -u`; do
@@ -245,12 +250,6 @@ fi
 
 host_count=`wc -l $hosts_file | awk '{print $1}'`
 
-if [[ -z "$use_grpcs" ]]; then
-    endpoint="grpc://$ydb_host:$ydb_port"
-else
-    endpoint="grpcs://$ydb_host:$ydb_port"
-fi
-
 if [ -z "$database" ]; then
     echo "Please specify the database"
     usage
@@ -261,18 +260,82 @@ if [[ -z "$viewer_url" ]]; then
     viewer_url="http://$ydb_host:8765"
 fi
 
-if [ -z "$viewer_url" ]; then
-    echo "Please specify the viewer url"
-    usage
-    exit 1
-fi
-
 tpcc_script="$tpcc_path/scripts/tpcc.sh"
 parallel-ssh -h $hosts_file -i 'test -e $tpcc_script || (echo tpcc.sh does not exist && exit 1)'
 if [ $? -ne 0 ]; then
     echo "$tpcc_script not found on some/all hosts, install benchbase (check our build and README)"
-    rm -f $unique_hosts
     exit 1
+fi
+
+gen_config_args=
+
+if [[ -n "$ca_file_path" ]]; then
+    if [[ ! -r "$ca_file_path" ]]; then
+        echo "CA file not found: $ca_file_path"
+        exit 1
+    fi
+    log "Using CA file: $ca_file_path, enforcing secure connection"
+    use_grpcs=1
+
+    parallel-scp -h $unique_hosts $ca_file_path $tpcc_path/ &>/dev/null
+    if [[ $? -ne 0 ]]; then
+        log "Failed to copy $ca_file_path file to the tpcc hosts"
+        exit 1
+    fi
+
+    gen_config_args="$gen_config_args --ca-file `basename $ca_file_path`"
+fi
+
+if [[ -z "$YDB_ANONYMOUS_CREDENTIALS" ]]; then
+    if [[ -n "$token_file_path" ]]; then
+        if [[ ! -r "$token_file_path" ]]; then
+            echo "Token file not found: $token_file_path"
+            exit 1
+        fi
+        log "Using token file: $token_file_path"
+        export YDB_TOKEN_FILE="$token_file_path"
+        export YDB_ACCESS_TOKEN_CREDENTIALS=`cat $token_file_path`
+
+        parallel-scp -h $unique_hosts $token_file_path $tpcc_path/ &>/dev/null
+        if [[ $? -ne 0 ]]; then
+            log "Failed to copy $token_file_path file to the tpcc hosts"
+            exit 1
+        fi
+
+        # TODO: not yet supported
+        skip_compaction=1
+    elif [[ -n "$sa_key_file_path" ]]; then
+        if [[ ! -r "$sa_key_file_path" ]]; then
+            echo "Service account key file not found: $sa_key_file_path"
+            exit 1
+        fi
+        log "Using service account key file: $sa_key_file_path"
+        export SA_KEY_FILE="$sa_key_file_path"
+        export YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS="$SA_KEY_FILE"
+
+        parallel-scp -h $unique_hosts $sa_key_file_path $tpcc_path/ &>/dev/null
+        if [[ $? -ne 0 ]]; then
+            log "Failed to copy $sa_key_file_path file to the tpcc hosts"
+            exit 1
+        fi
+
+        # TODO: not yet supported
+        skip_compaction=1
+    elif [[ -n "$YDB_USER" && -n "$YDB_PASSWORD" ]]; then
+        log "Using static creds from environment, YDB_USER: $YDB_USER, YDB_PASSWORD: ***"
+        # TODO: not yet supported
+        skip_compaction=1
+    else
+        log "Using anonymous access"
+        export YDB_ANONYMOUS_CREDENTIALS=1
+    fi
+fi
+
+if [[ -z "$use_grpcs" ]]; then
+    endpoint="grpc://$ydb_host:$ydb_port"
+else
+    endpoint="grpcs://$ydb_host:$ydb_port"
+    gen_config_args="$gen_config_args --secure"
 fi
 
 kill_tpcc
@@ -310,6 +373,7 @@ log "Generating TPC-C configs and uploading to the hosts"
 $tpcc_helper \
     -w $warehouses \
     generate-configs \
+    $gen_config_args \
     --hosts $hosts_file \
     --input $config_template \
     --execute-time $execute_time_seconds \
@@ -317,7 +381,7 @@ $tpcc_helper \
     --max-sessions $max_sessions_per_instance \
     --loader-threads $loader_threads \
     --ydb-host $ydb_host \
-    --database $database
+    --database $database \
 
 if [ $? -ne 0 ]; then
     echo "Failed to generate configs"
@@ -420,7 +484,11 @@ if [ -z "$no_load" ]; then
         compaction_start=$SECONDS
         log "Compacting tables"
         for table in oorder district item warehouse customer order_line new_order stock history; do
-            $table_full_compact --all --viewer-url "$viewer_url" --auth $compaction_auth --threads $compaction_threads ${database}/${table} 1>/dev/null
+            $table_full_compact --all \
+                --viewer-url "$viewer_url" \
+                $compaction_auth_args \
+                --threads $compaction_threads \
+                ${database}/${table} 1>/dev/null
             if [[ $? -ne 0 ]]; then
                 log "Failed to compact table $table"
                 exit 1

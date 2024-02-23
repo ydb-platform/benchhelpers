@@ -235,6 +235,33 @@ class GenerateConfig:
     def run(self, args):
         host_to_monport = collections.defaultdict(lambda: 8080)
 
+        auth_url_part = ''
+        auth_params = ''
+        if args.ca_file:
+            auth_url_part = f"&amp;secureConnectionCertificate=file:{args.ca_file}"
+            args.secure = True # overwrite even if it is not set
+
+        if args.secure:
+            grpc_scheme = "grpcs"
+        else:
+            grpc_scheme = "grpc"
+
+        anonymous_token = os.getenv("YDB_ANONYMOUS_CREDENTIALS")
+        sa_key = os.getenv("SA_KEY_FILE")
+        user = os.getenv("YDB_USER")
+        password = os.getenv("YDB_PASSWORD")
+
+        if anonymous_token is None:
+            access_token = os.getenv("YDB_TOKEN_FILE")
+            if access_token:
+                basename = os.path.basename(access_token)
+                auth_url_part += f"&amp;token=file:{basename}"
+            elif sa_key:
+                basename = os.path.basename(sa_key)
+                auth_url_part += f"&amp;saFile=file:{basename}"
+            elif user and password:
+                auth_params = f"<user>{user}</user><password>{password}</password>"
+
         with open(args.hosts_file) as f:
             num_nodes = len(f.readlines())
 
@@ -253,6 +280,9 @@ class GenerateConfig:
                     "mname": f"node_{node_num}",
                     "ydb_host": args.ydb_host,
                     "db_path": args.database,
+                    "auth_url_part": auth_url_part,
+                    "auth_params": auth_params,
+                    "grpc_scheme": grpc_scheme,
                 }
 
                 host_config = HostConfig(
@@ -1433,6 +1463,9 @@ def main():
 
     generate_config_parser.add_argument("--max-sessions", dest="max_sessions",
                                         required=True, help="Max sessions per TPC-C instance")
+
+    generate_config_parser.add_argument("--ca-file", help="Path to the CA certificate")
+    generate_config_parser.add_argument("--secure", help="Use grpcs", action="store_true")
 
     generate_config_parser.set_defaults(func=GenerateConfig().run)
 

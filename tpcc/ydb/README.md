@@ -51,9 +51,29 @@ To install the package, execute the following (note, that if you don't specify t
 ./upload_benchbase.sh --hosts tpcc.hosts [--package benchbase-ydb.tgz]
 ```
 
-### Authentication (optional)
+### Authentication
 
-There are various [authentication](https://github.com/ydb-platform/ydb-jdbc-driver/#authentication-modes) modes. By default the `run_ydb.sh` uses anonymous authentication. If you want to use a service account key, you should alter jdbc url parameter in [tpcc_config_template.xml](https://github.com/ydb-platform/benchhelpers/blob/main/tpcc/ydb/tpcc_config_template.xml#L7) by adding `saFile=file:<PATH_TO_SERVICE_ACCOUNT_KEY_FILE>`. Also, you must export `YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS` and `SA_KEY_FILE` before running the script.
+There are various [authentication](https://github.com/ydb-platform/ydb-jdbc-driver/#authentication-modes) modes.
+
+#### Anonymous auth (default)
+
+You don't have to do anything.
+
+#### Access token
+
+Run `run_ydb.sh` with `--token-file /PATH/ydb_token_file` argument. Please, note that this token file will be copied to the machines listed in `tpcc.hosts` file.
+
+#### Service Account Key
+
+Run `run_ydb.sh` with `--sa-key-file /PATH/sa_key_file`. Please, note that service account key will be copied to the machines listed in `tpcc.hosts` file.
+
+#### Using secure connection (grpcs) and CA certificate
+
+Run `run_ydb.sh` with `--ca-file /PATH/ca.crt --secure`. Please, note that `ca.crt` will be copied to the machines listed in `tpcc.hosts` file.
+
+#### Static credentials
+
+Export `YDB_USER` and `YDB_PASSWORD` variables, before running the `run_ydb.sh`. Note, that their values will be saved in config for TPC-C and this config is uploaded to the machines listed in `tpcc.hosts` file.
 
 ## Running the benchmark
 

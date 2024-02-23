@@ -77,16 +77,20 @@ def main():
     parser.add_argument('--threads', type=int, default=10)
     parser.add_argument('--viewer-url')
     parser.add_argument('--auth', dest="auth_mode", default='OAuth')
+    parser.add_argument('--token', dest="token_file", default='~/.ydb/token')
     parser.add_argument('--all', action='store_true')
     parser.add_argument('table')
     args = parser.parse_args()
 
     global VIEWER_HEADERS
 
-    if args.auth_mode=='' or args.auth_mode.lower()=='disabled':
+    access_token = os.getenv("YDB_ACCESS_TOKEN_CREDENTIALS")
+    anonymous_token = os.getenv("YDB_ANONYMOUS_CREDENTIALS")
+
+    if args.auth_mode=='' or args.auth_mode.lower()=='disabled' or anonymous_token:
         VIEWER_HEADERS = {}
-    else:
-        token_path = os.path.expanduser("~/.ydb/token")
+    elif args.token_file and os.path.isfile(args.token_file):
+        token_path = os.path.expanduser(args.token_file)
         if not os.path.isfile(token_path):
             print(f"{token_path} does not exist")
             sys.exit(1)
@@ -94,6 +98,10 @@ def main():
         token = open(token_path).read().strip()
         VIEWER_HEADERS = {
             'Authorization': str(args.auth_mode) + ' ' + token,
+        }
+    elif access_token:
+        VIEWER_HEADERS = {
+            'Authorization': 'OAuth ' + token,
         }
 
     # TODO: eliminate global variable
