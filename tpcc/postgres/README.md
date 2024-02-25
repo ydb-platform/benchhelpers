@@ -22,7 +22,7 @@ Until the end of this section we provide a detailed description of the prerequis
 Prerequisites to run helper scripts:
 1. Install pssh.
 2. Install libpq-dev (`sudo apt-get install libpq-dev`)
-3. Install the psycopg2, numpy and requests Python packages using `pip3 install psycopg2 numpy requests`.
+3. Install the psycopg2, numpy and requests Python packages using `pip3 install ydb psycopg2 numpy requests`.
 4. To generate (if needed) and save your SSH keys:
 ```
 ../../common/copy_ssh_keys.sh --hosts tpcc.hosts
