@@ -23,7 +23,7 @@ machine2.com
 EOF
 ```
 
-For a regular installation to install all the dependencies and TPC-C, you can use the following command:
+For a regular installation to install all the dependencies and TPC-C (except Java 21), you can use the following command:
 ```
 ./setup_tpcc_nodes.sh --hosts tpcc.hosts
 exec -l $SHELL
@@ -33,7 +33,7 @@ Currently `setup_tpcc_nodes.sh` supports Ubuntu only. That is why it might fail 
 
 Prerequisites to run `run_ydb.sh` tpcc benchhelper script:
 1. Install pssh.
-2. Install the ydb, numpy and requests Python packages using `pip3 install ydb numpy requests`.
+2. Install the `ydb`, `numpy` and `requests` Python packages using `pip3 install ydb numpy requests`.
 3. [Download](https://ydb.tech/en/docs/downloads/) the latest YDB CLI and place it somewhere in your PATH.
 4. To generate (if needed) and save your SSH keys:
 ```
@@ -42,8 +42,8 @@ exec -l $SHELL
 ```
 
 Prerequisites to run TPC-C client:
-1. Install Java 21. You can use `../../common/install_java21.sh --hosts tpcc.hosts`
-2. Install YDB's [fork](https://github.com/ydb-platform/tpcc) of benchbase into your home folder on each machine.
+1. Install Java 21 (note, that the scripts updates `/usr/local/bin/java` symlink). Should be used only for testing purposes. You can use `../../common/install_java21.sh --hosts tpcc.hosts`
+2. Install YDB's [TPC-C](https://github.com/ydb-platform/tpcc) into your home folder on each machine.
 You have two options: build it on your own or use the prebuilt package. Here you can find prebuilt [benchbase-ydb.tgz](https://storage.yandexcloud.net/ydb-benchmark-builds/benchbase-ydb.tgz).
 
 To install the package, execute the following (note, that if you don't specify the package, the script will download the latest from the internet):
@@ -96,3 +96,11 @@ mkdir -p $HOME/tpcc_logs
 Note, that warmup and time are in seconds. By default the benchmark uses just 16 loader threads, if your machines have enough cores (as well as YDB cluster), you can increase the number of threads using the `--loader-threads` flag. In our runs we usually use 128 threads per machine (1 thread per core) and 8 machines to run the benchmark (YDB cluster has 384 cores in total).
 
 If you have already executed the benchmark, you can use the `--run-phase-only` flag to reuse existing data and skip the loading phase. This will save you time on data generation. Also just to load the data and skip the execution, use the `--no-run` flag. Usually it is convinient to load the data, check the monitoring metrics and then run the benchmark.
+
+## TPC-C client metrics
+
+To collect metrics from TPC-C instances add the following to the `tpcc_config_template.xml`:
+```xml
+    <monitoringPort>{mport}</monitoringPort>
+    <monitoringName>{mname}</monitoringName>
+```

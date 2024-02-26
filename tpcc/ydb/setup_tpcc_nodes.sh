@@ -81,12 +81,6 @@ if [[ $? -ne 0 ]]; then
     some_failed=1
 fi
 
-"$common_dir"/install_java21.sh --hosts "$hosts"
-if [[ $? -ne 0 ]]; then
-    echo "Failed to install Java 21. Please install it manually"
-    some_failed=1
-fi
-
 "$script_dir"/upload_benchbase.sh --hosts "$hosts"
 if [[ $? -ne 0 ]]; then
     echo "Failed to install tpcc. Please install it manually"
