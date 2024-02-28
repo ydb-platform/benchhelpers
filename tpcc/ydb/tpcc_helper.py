@@ -1277,8 +1277,7 @@ Result: {self.name}
             start_delta = max_start - min_start
             print(f"Delta between earliest and latest measurements start: {start_delta} seconds")
 
-        transactions_dict = collections.defaultdict(
-            lambda: Aggregator.Histogram([1, 5, 10, 50, 100, 500, 1000, 2000, 3000, 4000, 4500, 5000, 6000, 10000]))
+        transactions_dict = {}
 
         transactions_stats_dict = collections.defaultdict(lambda: collections.defaultdict(int))
 
@@ -1323,6 +1322,9 @@ Result: {self.name}
 
         for transaction_name, histogram in transactions_dict.items():
             print(f"{transaction_name}:")
+            if len(histogram) == 0:
+                print("  No data")
+                continue
             for percentile in [50, 90, 95, 99, 99.9]:
                 transactions_json[transaction_name]["percentiles"][percentile] = histogram.percentile(percentile)
                 print(f"  {percentile}%: {histogram.percentile(percentile)} ms")
@@ -1348,7 +1350,7 @@ Result: {self.name}
             transactions_stats_dict[transaction_name]["OK"] += transaction_data["SuccessCount"]
             transactions_stats_dict[transaction_name]["FAILED"] += transaction_data["FailureCount"]
 
-            if len(transactions_dict[transaction_name]) == 0:
+            if transaction_name not in transactions_dict:
                 buckets = transaction_data["LatencySuccessHistogramMs"]["bucketlist"]
                 transactions_dict[transaction_name] = Aggregator.Histogram(buckets)
 
