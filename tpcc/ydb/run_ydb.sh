@@ -533,6 +533,11 @@ for host in `cat $hosts_file`; do
     mkdir -p "$results_dir/$host"
 done
 
+log "Cleaning up previous results"
+for host in `cat $hosts_file`; do
+    ssh $host "cd $tpcc_path && rm -rf results_*"
+done
+
 log "Running benchmark"
 
 pids=()
@@ -550,7 +555,7 @@ for host in `cat $hosts_file`; do
         args="$args --virtual-threads"
     fi
 
-    ssh $host "cd $tpcc_path && rm -rf "results_${host_num}" && ./scripts/tpcc.sh --memory $java_memory -d results_${host_num} -c $config $args" \
+    ssh $host "cd $tpcc_path && ./scripts/tpcc.sh --memory $java_memory -d results_${host_num} -c $config $args" \
         > $results_dir/$host/$host_num.run.log 2>&1 &
     pids+=($!)
     host_num=`expr $host_num + 1`
@@ -606,7 +611,7 @@ log "Running benchmark done, copying results from the hosts"
 for host in `cat $hosts_file | sort -u`; do
     host_results="$results_dir/$host"
     cd "$host_results"
-    scp -r $host:$tpcc_path/results* ./
+    scp -r $host:$tpcc_path/results_* ./
     cd -
 done
 

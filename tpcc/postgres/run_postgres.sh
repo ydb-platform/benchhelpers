@@ -388,6 +388,11 @@ done
 log "Generating TPC-C configs and uploading to the hosts"
 generate_configs $hosts_file
 
+log "Cleaning up previous results"
+for host in `cat $hosts_file`; do
+    ssh $host "cd $tpcc_path && rm -rf results_*"
+done
+
 log "Running benchmark"
 
 pids=()
@@ -421,7 +426,7 @@ log "Running benchmark done, copying results from the hosts"
 for host in `cat $hosts_file | sort -u`; do
     host_results="$results_dir/$host"
     cd "$host_results"
-    scp -r $host:$tpcc_path/results* ./
+    scp -r $host:$tpcc_path/results_* ./
     cd -
 done
 
