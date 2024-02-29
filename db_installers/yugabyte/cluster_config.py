@@ -36,5 +36,9 @@ Disks = [
 ]
 
 Cores = 128
+
+# a quick hack, must be the same length as tservers_per_host
+TaskSets = []
+
 Cache = "20GB"
 SqlMemory = "30GB"

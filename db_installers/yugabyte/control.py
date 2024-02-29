@@ -68,6 +68,11 @@ class Start(PSSHAction):
                 self._logger.error("Disks count should be multiple of tserver instances")
                 raise ErrorExit()
 
+        if TaskSets and len(TaskSets) > 0:
+            if len(TaskSets) != self.tservers_per_host:
+                self._logger.error("TaskSets count should be equal to tserver instances")
+                raise ErrorExit()
+
     def start_master(self, host, store_args, listen_addr, webserver_port, master_hosts):
         self._logger.info("Start master on " + host + ", addr " + listen_addr)
         master_hosts_str = ",".join(master_hosts)
@@ -194,7 +199,11 @@ class Start(PSSHAction):
                     store_args = "--fs_data_dirs=" + instance_dirs
 
                     end_core = start_core + cores_per_instance - 1 + (cores_reminder > 0)
-                    task_set = str(start_core) + "-" + str(end_core)
+
+                    if TaskSets and len(TaskSets):
+                        task_set = TaskSets[i]
+                    else:
+                        task_set = str(start_core) + "-" + str(end_core)
 
                     self.start_server(
                         host,
