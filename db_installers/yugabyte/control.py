@@ -57,7 +57,16 @@ class Start(PSSHAction):
 
     def __init__(self, args):
         super().__init__(args)
-        self.per_disk_instance = args.per_disk_instance
+        self.tservers_per_host = args.tservers_per_host
+
+        if self.tservers_per_host > 1:
+            disks_count = len(Disks)
+            if disks_count < self.tservers_per_host:
+                self._logger.error("Not enough disks for tserver instances")
+                raise ErrorExit()
+            if disks_count % self.tservers_per_host != 0:
+                self._logger.error("Disks count should be multiple of tserver instances")
+                raise ErrorExit()
 
     def start_master(self, host, store_args, listen_addr, webserver_port, master_hosts):
         self._logger.info("Start master on " + host + ", addr " + listen_addr)
@@ -111,6 +120,7 @@ class Start(PSSHAction):
         cmd += " --cql_proxy_bind_address {cql_addr}"
         cmd += " --ysql_max_connections 4096"
         cmd += " --db_block_cache_num_shard_bits=7"
+        cmd += " --start_redis_proxy=false"
         if memory_ratio:
             cmd += " --default_memory_limit_to_ram_ratio " + str(memory_ratio)
         cmd += " \""
@@ -160,12 +170,13 @@ class Start(PSSHAction):
 
         cores_per_instance = Cores
         memory_ratio_per_instance = 85  # default in yugabyte is 85% for tserver
-        if self.per_disk_instance:
-            memory_ratio_per_instance = int(85 // len(Disks))
-            cores_per_instance = Cores // len(Disks)
+        if self.tservers_per_host:
+            memory_ratio_per_instance = int(85 // self.tservers_per_host)
+            cores_per_instance = int(Cores // self.tservers_per_host)
+            disks_per_instance = int(len(Disks) // self.tservers_per_host)
 
         for host in Hosts:
-            if self.per_disk_instance:
+            if self.tservers_per_host > 1:
                 start_core = 0
                 current_server_port = LISTEN_PORT_SERVER
                 current_psql_port = PSQL_PORT
@@ -174,12 +185,13 @@ class Start(PSSHAction):
                 current_webserver_port = SERVER_WEBSERVER_PORT
                 current_cql_webserver_port = CQL_WEBSERVER_PORT
                 current_psql_webserver_port = PSQL_WEBSERVER_PORT
-                memory_ratio_reminder = 85 % len(Disks)
-                cores_reminder = Cores % len(Disks)
+                memory_ratio_reminder = 85 % self.tservers_per_host
+                cores_reminder = Cores % self.tservers_per_host
 
-                for dir in mount_dirs:
+                for i in range(self.tservers_per_host):
+                    instance_dirs = ",".join(mount_dirs[i * disks_per_instance:(i + 1) * disks_per_instance])
                     listen_host = LOCAL_IP.get(host, host) + ":" + str(current_server_port)
-                    store_args = "--fs_data_dirs=" + dir
+                    store_args = "--fs_data_dirs=" + instance_dirs
 
                     end_core = start_core + cores_per_instance - 1 + (cores_reminder > 0)
                     task_set = str(start_core) + "-" + str(end_core)
@@ -353,7 +365,7 @@ class Main(object):
         self.parser.add_argument("--sudo-user", type=str, help="pssh sudo username", default="root")
         self.parser.add_argument("--fail-on-error", action="store_true", help="Abort if any subcommand failed")
         self.parser.add_argument("--dry-run", action="store_true", help="Don't execute commands")
-        self.parser.add_argument("--per-disk-instance", action="store_true", help="Run per disk Yugabyte instances")
+        self.parser.add_argument("--tservers-per-host", action="store", type=int, default=1, help="Number of tserver instances per host")
         self.args = self.parser.parse_args()
 
     def run(self):

@@ -52,9 +52,25 @@ parallel-ssh -H "$YUGABYTE_HOSTS" -p 30 "sudo rm -rf $YUGABYTE_DEPLOY_PATH; sudo
 
 echo "Deploy yugabyte"
 "$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --stop
+
 "$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --format
+if [[ $? -ne 0 ]]; then
+    echo "Failed to format disks"
+    exit 1
+fi
+
 "$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --deploy "$YUGABYTE_TAR"
-"$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --start #--per-disk-instance
+if [[ $? -ne 0 ]]; then
+    echo "Failed to deploy yugabyte"
+    exit 1
+fi
+
+"$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --start --tservers-per-host 2
+if [[ $? -ne 0 ]]; then
+    echo "Failed to start yugabyte"
+    exit 1
+fi
+
 sleep 10s
 
 IFS=', ' read -r -a HOSTS_LIST <<< "$YUGABYTE_HOSTS"
