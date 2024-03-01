@@ -174,9 +174,9 @@ class Start(PSSHAction):
             self.start_master(host, store_args, listen_host, MASTER_WEBSERVER_PORT, master_hosts)
 
         cores_per_instance = Cores
-        memory_ratio_per_instance = 85  # default in yugabyte is 85% for tserver
+        memory_ratio_per_instance = 0.85  # default in yugabyte is 85% for tserver
         if self.tservers_per_host:
-            memory_ratio_per_instance = int(85 // self.tservers_per_host)
+            memory_ratio_per_instance = round(memory_ratio_per_instance / self.tservers_per_host, 2)
             cores_per_instance = int(Cores // self.tservers_per_host)
             disks_per_instance = int(len(Disks) // self.tservers_per_host)
 
@@ -190,7 +190,6 @@ class Start(PSSHAction):
                 current_webserver_port = SERVER_WEBSERVER_PORT
                 current_cql_webserver_port = CQL_WEBSERVER_PORT
                 current_psql_webserver_port = PSQL_WEBSERVER_PORT
-                memory_ratio_reminder = 85 % self.tservers_per_host
                 cores_reminder = Cores % self.tservers_per_host
 
                 for i in range(self.tservers_per_host):
@@ -217,7 +216,7 @@ class Start(PSSHAction):
                         cql_webserver_port=current_cql_webserver_port,
                         psql_webserver_port=current_psql_webserver_port,
                         task_set=task_set,
-                        memory_ratio=memory_ratio_per_instance + (memory_ratio_reminder > 0))
+                        memory_ratio=memory_ratio_per_instance)
 
                     current_server_port += 1
                     current_psql_port += 1
@@ -227,7 +226,6 @@ class Start(PSSHAction):
                     current_cql_webserver_port += 1
                     current_psql_webserver_port += 1
                     start_core = end_core + 1
-                    memory_ratio_reminder -= (memory_ratio_reminder > 0)
                     cores_reminder -= (cores_reminder > 0)
             else:
                 listen_host = LOCAL_IP.get(host, host) + ":" + str(LISTEN_PORT_SERVER)
