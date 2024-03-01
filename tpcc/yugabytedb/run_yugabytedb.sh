@@ -15,6 +15,8 @@ log_dir="$HOME/tpcc_logs/yugabytedb"
 default_yb_path=/opt/yugabyte
 default_compaction_timeout=3600
 
+max_sessions=3000
+
 # intentionally relative
 tpcc_path="tpcc"
 
@@ -81,6 +83,9 @@ while [[ "$#" > 0 ]]; do case $1 in
     --run-phase-only)
         no_load=1
         no_drop_create=1
+        ;;
+    --compact)
+        need_compaction=1
         ;;
     --hosts)
         hosts_file=$2
@@ -268,23 +273,37 @@ if [ -z "$no_load" ]; then
     elapsed=$(( SECONDS - fk_enable_start ))
     log "Enabling foreign keys done in $elapsed seconds"
 
+    need_compaction=1
+fi
+
+if [[ -n "$need_compaction" ]]; then
     log "Compacting tables"
     compaction_started=$SECONDS
     yb_node=`echo $yb_nodes | cut -d, -f1`
+
+    pids=()
     for table in warehouse district customer history new_order oorder order_line item stock idx_customer_name idx_order; do
-        log "Compacting table $table"
-        ssh $ssh_user@$yb_node "$default_yb_path/bin/yb-admin -master_addresses $yb_nodes compact_table ysql.yugabyte $table $default_compaction_timeout" \
-            > $results_dir/compact_$table.log 2>&1
-        if [[ $? -ne 0 ]]; then
-            log "Failed to compact table $table"
-            exit 1
+        log "Starting to compact table $table"
+        ssh $ssh_user@$yb_node \
+            "$default_yb_path/bin/yb-admin -master_addresses $yb_nodes compact_table ysql.yugabyte $table $default_compaction_timeout" \
+            > $results_dir/compact_$table.log 2>&1 &
+        pids+=($!)
+    done
+
+    for pid in "${pids[@]}"; do
+        wait $pid
+        if [ $? -ne 0 ]; then
+            log "Possibly failed to compact data on some/all hosts"
         fi
     done
+
     elapsed=$(( SECONDS - compaction_started ))
     log "Compacting tables done in $elapsed seconds"
 
-    total_time=$(( SECONDS - load_start ))
-    log "Total load time: $total_time seconds"
+    if [[ -n "$load_start" ]]; then
+        total_time=$(( SECONDS - load_start ))
+        log "Total load time: $total_time seconds"
+    fi
 fi
 
 if [ -n "$no_run" ]; then
@@ -325,11 +344,17 @@ start_warehouse_id=1
 current_warmup_time_seconds=$warmup_time_seconds
 current_delay_seconds=0
 single_instance_warmup_time_seconds=`expr $warmup_time_seconds / $host_count`
+sessions_per_host=`expr $max_sessions / $host_count`
 
 for host in `cat $hosts_file`; do
-    cmd="./tpccbenchmark --execute=true --nodes=$yb_nodes --warehouses $warehouses_per_host \
-        --start-warehouse-id $start_warehouse_id --total-warehouses=$warehouses \
-        --warmup-time-secs=$current_warmup_time_seconds --initial-delay-secs=$current_delay_seconds"
+    cmd="./tpccbenchmark --execute=true \
+        --nodes=$yb_nodes \
+        --warehouses $warehouses_per_host \
+        --num-connections $sessions_per_host\
+        --start-warehouse-id $start_warehouse_id \
+        --total-warehouses=$warehouses \
+        --warmup-time-secs=$current_warmup_time_seconds \
+        --initial-delay-secs=$current_delay_seconds"
 
     log "Running tpcc on $host (host_num=$host_num): $cmd"
 
