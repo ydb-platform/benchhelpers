@@ -260,7 +260,7 @@ class GenerateConfig:
                 basename = os.path.basename(sa_key)
                 auth_url_part += f"&amp;saFile=file:{basename}"
             elif user and password:
-                auth_params = f"<user>{user}</user><password>{password}</password>"
+                auth_params = f"<username>{user}</username><password>{password}</password>"
 
         with open(args.hosts_file) as f:
             num_nodes = len(f.readlines())
