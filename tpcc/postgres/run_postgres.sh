@@ -239,7 +239,7 @@ if [[ $? -ne 0 ]]; then
     exit 1
 fi
 
-host_count=`wc -l $hosts_file | awk '{print $1}'`
+host_count=`cat $hosts_file | wc -l | awk '{print $1}'`
 
 tpcc_script="$tpcc_path/scripts/tpcc.sh"
 parallel-ssh -h $hosts_file -i 'test -e $tpcc_script || (echo tpcc.sh does not exist && exit 1)'

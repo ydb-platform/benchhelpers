@@ -227,7 +227,15 @@ class GenerateConfig:
         host_to_monport = collections.defaultdict(lambda: 8080)
 
         with open(args.hosts_file) as f:
-            num_nodes = len(f.readlines())
+            num_nodes = 0
+            for line in f:
+                host = line.strip()
+                if host != "":
+                    num_nodes += 1
+
+            if num_nodes == 0:
+                print("No nodes found in {}".format(args.hosts_file), file=sys.stderr)
+                sys.exit(1)
 
         with open(args.hosts_file) as f:
             for node_num, line in enumerate(f, start=1):
