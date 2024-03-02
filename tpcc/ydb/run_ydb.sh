@@ -50,7 +50,7 @@ usage() {
 }
 
 log() {
-    echo "`date` tpcc_ydb: $@"
+    echo "`date '+%Y-%m-%d %H:%M UTC'` tpcc_ydb: $@"
 }
 
 kill_tpcc() {

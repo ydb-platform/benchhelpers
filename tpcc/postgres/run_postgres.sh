@@ -32,7 +32,7 @@ usage() {
 }
 
 log() {
-    echo "`date` tpcc_postgres: $@"
+    echo "`date '+%Y-%m-%d %H:%M UTC'` tpcc_ydb: $@"
 }
 
 kill_tpcc() {
