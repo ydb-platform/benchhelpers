@@ -59,9 +59,9 @@ class Init(SSHAction):
     def run(self):
         super().run()
         cockroach = DEPLOY_PATH + "/cockroach"
+        host_no_user = self.host.split('@')[-1]
 
-        cmd = "sudo -u {user} {cockroach} init --insecure --host={host}"
-        cmd = cmd.format(user=self.sudo_user, host=self.host, cockroach=cockroach)
+        cmd = f"sudo -u {self.sudo_user} {cockroach} init --insecure --host={host_no_user}"
 
         self.ssh_cmd(cmd)
 
@@ -73,6 +73,11 @@ class Start(PSSHAction):
         super().__init__(args)
         self.task_set = args.task_set
         self.per_disk_instance = args.per_disk_instance
+
+        if hasattr(args, "ssh_user"):
+            self.ssh_user = args.ssh_user
+        else:
+            self.ssh_user = None
 
     def start_instance(self, host, store_args, listen_addr, http_addr, join_hosts, task_set, region, cache_size, sql_mem_size):
         self._logger.info("Start on " + host + ", addr " + listen_addr)
@@ -100,6 +105,7 @@ class Start(PSSHAction):
                 self.hosts = host
                 self.dry_run = parent.dry_run
                 self.fail_on_error = parent.fail_on_error
+                self.ssh_user = parent.ssh_user
 
         action = SSHAction(Args(host, self))
         action.ssh_cmd(cmd)
@@ -348,6 +354,7 @@ class Main(object):
         self.parser.add_argument("-p", "--package", type=str, help="Cockroach package")
         self.parser.add_argument("--hosts", type=str, help="pssh calc expression")
         self.parser.add_argument("--username", type=str, help="pssh username")
+        self.parser.add_argument("--ssh-user", type=str, help="ssh/pssh username")
         self.parser.add_argument("--sudo-user", type=str, help="pssh sudo username", default="root")
         self.parser.add_argument("--task-set", type=str, help="Specify cpus to run on")
         self.parser.add_argument("--fail-on-error", action="store_true", help="Abort if any subcommand failed")

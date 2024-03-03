@@ -137,6 +137,9 @@ class SSHAction(BaseAction):
         self.dry_run = args.dry_run
         self.fail_on_error = args.fail_on_error
 
+        if hasattr(args, "ssh_user") and args.ssh_user and not "@" in self.host:
+            self.host = args.ssh_user + "@" + self.host
+
     def ssh_cmd(self, cmd):
         ssh_cmd = list()
         if self.dry_run:
@@ -166,13 +169,21 @@ class PSSHAction(BaseAction):
         self.fail_on_error = args.fail_on_error
         self.username = args.username
         self.sudo_user = args.sudo_user
+
         self._select_hosts()
+
+        if hasattr(args, "ssh_user") and args.ssh_user:
+            for i in range(len(self.pssh_hosts)):
+                if "@" not in self.pssh_hosts[i]:
+                    self.pssh_hosts[i] = args.ssh_user + "@" + self.pssh_hosts[i]
+
+
 
     def pssh_cmd(self, cmd, add_hosts=None):
         pssh_cmd = list()
         if self.dry_run:
             pssh_cmd.append("echo")
-        pssh_cmd += ["parallel-ssh", "-t", "0", "-p", "100", "-H", self._get_hosts(add_hosts)] + cmd
+        pssh_cmd += ["parallel-ssh", "-i", "-t", "0", "-p", "100", "-H", self._get_hosts(add_hosts)] + cmd
         job = Job(pssh_cmd, timeout=self.TIMEOUT)
         try:
             job.safe_run()
