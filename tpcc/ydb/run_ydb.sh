@@ -338,6 +338,15 @@ else
     gen_config_args="$gen_config_args --secure"
 fi
 
+# Unfortunately, ydb CLI can't show the version and we try to get it via HTTP. No auth yet.
+version_info=`curl -s $ydb_host:8765/ver | egrep '(Git|Arc) info:' -A 13`
+if [[ $? -ne 0 ]]; then
+    log "Failed to get YDB version via HTTP"
+else
+    log "YDB version info:"
+    echo "$version_info"
+fi
+
 kill_tpcc
 
 if [ -z "$no_drop_create" ]; then
