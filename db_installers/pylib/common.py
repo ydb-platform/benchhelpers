@@ -177,8 +177,6 @@ class PSSHAction(BaseAction):
                 if "@" not in self.pssh_hosts[i]:
                     self.pssh_hosts[i] = args.ssh_user + "@" + self.pssh_hosts[i]
 
-
-
     def pssh_cmd(self, cmd, add_hosts=None):
         pssh_cmd = list()
         if self.dry_run:
@@ -225,7 +223,7 @@ class PSSHAction(BaseAction):
             # overwrite Hosts
             self.pssh_hosts = self.hosts.split()
         else:
-            self.pssh_hosts = Hosts
+            self.pssh_hosts = Hosts.copy()
 
         if len(self.pssh_hosts) == 0:
             self._logger.error("PSSH hosts list is empty. Need specify --config or/and --hosts")
