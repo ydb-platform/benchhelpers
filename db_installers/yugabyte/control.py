@@ -76,9 +76,10 @@ class Start(PSSHAction):
     def start_master(self, host, store_args, listen_addr, webserver_port, master_hosts):
         self._logger.info("Start master on " + host + ", addr " + listen_addr)
         master_hosts_str = ",".join(master_hosts)
+        memory_ratio = 0.05
         cmd = "sudo -u {user} sh -c \""
         cmd += "{path}/yugabyte_wrapper {path}/bin/yb-master --rpc_bind_addresses={listen_addr} --master_addresses={master_hosts_str} "
-        cmd += " --db_block_cache_num_shard_bits=7 --webserver_port {webserver_port}"
+        cmd += " --default_memory_limit_to_ram_ratio {memory_ratio} --webserver_port {webserver_port}"
         cmd += " " + store_args
         cmd += " \""
         cmd = cmd.format(
@@ -86,7 +87,8 @@ class Start(PSSHAction):
             user=self.sudo_user,
             webserver_port=webserver_port,
             listen_addr=listen_addr,
-            master_hosts_str=master_hosts_str)
+            master_hosts_str=master_hosts_str,
+            memory_ratio=memory_ratio)
         if self.dry_run:
             cmd = "echo '" + cmd + "'"
 
@@ -123,8 +125,7 @@ class Start(PSSHAction):
         cmd += store_args
         cmd += " --pgsql_proxy_bind_address {psql_addr}"
         cmd += " --cql_proxy_bind_address {cql_addr}"
-        cmd += " --ysql_max_connections 4096"
-        cmd += " --db_block_cache_num_shard_bits=7"
+        cmd += " --ysql_max_connections 1000"
         cmd += " --start_redis_proxy=false"
         if memory_ratio:
             cmd += " --default_memory_limit_to_ram_ratio " + str(memory_ratio)
