@@ -248,7 +248,7 @@ if [[ $? -ne 0 ]]; then
     exit 1
 fi
 
-host_count=`cat $hosts_file | wc -l | awk '{print $1}'`
+host_count=`cat $hosts_file | grep -v '^$' | wc -l | awk '{print $1}'`
 
 if [ -z "$database" ]; then
     echo "Please specify the database"
