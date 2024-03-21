@@ -293,8 +293,9 @@ if [[ -z "$YDB_ANONYMOUS_CREDENTIALS" ]]; then
             exit 1
         fi
         log "Using token file: $token_file_path"
-        export YDB_TOKEN_FILE="$token_file_path"
         export YDB_ACCESS_TOKEN_CREDENTIALS=`cat $token_file_path`
+        export YDB_TOKEN="$YDB_ACCESS_TOKEN_CREDENTIALS"
+        export YDB_TOKEN_FILE="$token_file_path"
 
         parallel-scp -h $unique_hosts $token_file_path $tpcc_path/ &>/dev/null
         if [[ $? -ne 0 ]]; then
