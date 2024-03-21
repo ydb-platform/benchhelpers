@@ -65,7 +65,7 @@ def forget_ydb_operation(args, operation_id):
 
     print(" ".join(command))
 
-    result = subprocess.run(command, capture_output=True, text=True)
+    result = subprocess.run(' '.join(command), capture_output=True, text=True, shell=True, executable='/bin/bash')
     if result.returncode != 0:
         print("Error (skipped) getting status: {}".format(result.stderr), file=sys.stderr)
 
@@ -89,7 +89,7 @@ def wait_ydb_operation_done(args, operation_id):
 
     while True:
         for i in range(10):
-            result = subprocess.run(command, capture_output=True, text=True)
+            result = subprocess.run(' '.join(command), capture_output=True, text=True, shell=True, executable='/bin/bash')
             if result.returncode == 0:
                 result_json = json.loads(result.stdout)
                 if result_json["status"] == "SUCCESS":
@@ -750,7 +750,7 @@ class WaitIndicesReady:
 
         while True:
             for i in range(10):
-                result = subprocess.run(command, capture_output=True, text=True)
+                result = subprocess.run(' '.join(command), capture_output=True, text=True, shell=True, executable='/bin/bash')
                 if result.returncode != 0:
                     time.sleep(10)
 
@@ -842,7 +842,7 @@ class ImportInitialData:
 
         print(" ".join(command))
 
-        result = subprocess.run(command, capture_output=True, text=True)
+        result = subprocess.run(' '.join(command), capture_output=True, text=True, shell=True, executable='/bin/bash')
         if result.returncode != 0:
             print("Error importing initial data: {}".format(result.stderr), file=sys.stderr)
             sys.exit(1)
@@ -885,7 +885,7 @@ class ExportInitialData:
 
         print(" ".join(command))
 
-        result = subprocess.run(command, capture_output=True, text=True)
+        result = subprocess.run(' '.join(command), capture_output=True, text=True, shell=True, executable='/bin/bash')
         if result.returncode != 0:
             print("Error exporting data: {}".format(result.stderr), file=sys.stderr)
             sys.exit(1)
