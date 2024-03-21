@@ -79,7 +79,7 @@ if ! which parallel-ssh >/dev/null; then
     exit 1
 fi
 
-if ! which ydb >/dev/null; then
+if ! command -v ydb >/dev/null; then
     echo "ydb CLI not found, you might want to download it from ydb.tech and put to any dir in $PATH"
     exit 1
 fi
@@ -606,6 +606,8 @@ if [[ -n "$with_perf_stat" ]]; then
         ssh "$perf_measure_user@$perf_host" 'sudo perf stat -a -d -d -d -- sleep 10'
     done
 fi
+
+log "Running benchmark main phase remaining time is approximately $execute_time_seconds seconds"
 
 for pid in "${pids[@]}"; do
     wait $pid
