@@ -141,8 +141,13 @@ while [[ "$#" > 0 ]]; do case $1 in
         no_drop_create=1
         ;;
     --run-phase-only)
-        no_load=1
-        no_drop_create=1
+        only_run=1
+        ;;
+    --only-run)
+        only_run=1
+        ;;
+    --run-only)
+        only_run=1
         ;;
     --hosts)
         hosts_file=$2
@@ -188,6 +193,11 @@ while [[ "$#" > 0 ]]; do case $1 in
         usage
         exit 1;;
 esac; shift; done
+
+if [ -n "$only_run" ]; then
+    no_load=1
+    no_drop_create=1
+fi
 
 if [ -z "$warehouses" ]; then
     echo "Please specify the number of warehouses"
