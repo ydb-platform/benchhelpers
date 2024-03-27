@@ -60,7 +60,7 @@ def forget_ydb_operation(args, operation_id):
         args.database,
         "operation",
         "forget",
-        operation_id,
+        f"'{operation_id}'",
     ]
 
     print(" ".join(command))
@@ -82,18 +82,27 @@ def wait_ydb_operation_done(args, operation_id):
         "get",
         "--format",
         "proto-json-base64",
-        operation_id,
+        f"'{operation_id}'",
     ]
 
     print(" ".join(command))
 
     while True:
         for i in range(10):
-            result = subprocess.run(' '.join(command), capture_output=True, text=True, shell=True, executable='/bin/bash')
-            if result.returncode == 0:
-                result_json = json.loads(result.stdout)
-                if result_json["status"] == "SUCCESS":
-                    break
+            try:
+                result = subprocess.run(
+                    ' '.join(command),
+                    capture_output=True,
+                    text=True,
+                    shell=True,
+                    executable='/bin/bash')
+                if result.returncode == 0:
+                    result_json = json.loads(result.stdout)
+                    if result_json["status"] == "SUCCESS":
+                        break
+            except Exception as e:
+                print(f"Error getting status of operation {operation_id}: {e}", file=sys.stderr)
+
             time.sleep(10)
         else:
             print("Error getting status: {}".format(result.stderr), file=sys.stderr)
