@@ -84,7 +84,7 @@ else
     if [ -n "$package_url" ]; then
         url=$package_url
     else
-        arch=`ssh $some_host uname -m`
+        arch=`ssh $some_host "uname -m"`
         if [ "$arch" == "x86_64" ]; then
             echo "Downloading x86_64 Java 21"
             url=$java_x86_url
