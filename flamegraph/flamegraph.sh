@@ -10,7 +10,7 @@ frequency=199
 
 
 usage() {
-    echo "Usage: $0 <host> [-t <duration>] [-f <frequency>] [-o <output file>]"
+    echo "Usage: $0 <host> [-t <duration>] [-f <frequency>] [--only-storage] [-o <output file>]"
 }
 
 while [[ "$#" > 0 ]]; do case $1 in
@@ -23,6 +23,8 @@ while [[ "$#" > 0 ]]; do case $1 in
     -f|--frequency)
         frequency="$2"
         shift;;
+    --only-storage)
+        only_storage=1;;
     -h|--help)
         usage
         exit 0;;
@@ -66,7 +68,12 @@ perf_data_file="${dt}_perf.data"
 stack_collapse_script="$flamegraph_dir/stackcollapse-perf.pl"
 flamegraph_script="$flamegraph_dir/flamegraph.pl"
 
-perf_record_cmd="sudo perf record -F $frequency -o $perf_data_file -a -g -- sleep $duration"
+if [[ -n "$only_storage" ]]; then
+    perf_record_cmd="sudo perf record -F $frequency -o $perf_data_file -a -g -p \`pgrep -f ydbd.*static | head -1\` -- sleep $duration"
+else
+    perf_record_cmd="sudo perf record -F $frequency -o $perf_data_file -a -g -- sleep $duration"
+fi
+
 flamegraph_cmd="sudo perf script -i $perf_data_file | $stack_collapse_script | $flamegraph_script"
 
 echo "Recording perf data during $duration seconds on $host: $perf_record_cmd"
