@@ -19,6 +19,7 @@ def create_ydb_results_table(session, path):
             datetime Datetime,
             version Utf8,
             label Utf8,
+            cluster Utf8,
             description Utf8,
             ycsb_instances_count Uint32,
             record_count Uint64,
@@ -496,6 +497,7 @@ class Parser:
                         "version": args.ydb_version,
                         "record_count": args.record_count,
                         "label": args.label,
+                        "cluster": args.label_cluster,
                         "workload": result.workload,
                         "ycsb_instances_count": result.ycsb_instances_count,
                         "distribution": result.distribution,
@@ -539,6 +541,7 @@ def main():
     parser.add_argument("--ydb-version", help="YDB version")
     parser.add_argument("--record-count", help="DB size in rows", type=int)
     parser.add_argument("--label", help="Label to save results with", default="")
+    parser.add_argument("--label-cluster", help="cluster label")
 
     args = parser.parse_args()
 

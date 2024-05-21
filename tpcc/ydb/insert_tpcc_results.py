@@ -32,6 +32,7 @@ def create_table(session, table_path):
         --!syntax_v1
         CREATE TABLE `{table_path}` (
             timestamp Timestamp,
+            cluster Utf8,
             version Utf8,
             label Utf8,
             warehouses Uint32,
@@ -67,6 +68,7 @@ def insert_ydb_results_row(session, path, args, results):
             `timestamp`,
             `version`,
             `label`,
+            `cluster`,
             `warehouses`,
             `duration_seconds`,
             `tpmC`,
@@ -79,6 +81,7 @@ def insert_ydb_results_row(session, path, args, results):
             DateTime::FromSeconds({summary['measure_start_ts']}),
             "{args.ydb_version}",
             "{args.label}",
+            "{args.label_cluster}",
             {summary['warehouses']},
             {summary['time_seconds']},
             {summary['tpmc']},
@@ -101,6 +104,7 @@ def main():
     parser.add_argument("--token", help="YDB token")
     parser.add_argument("--ydb-version", help="YDB version")
     parser.add_argument("--label", help="label")
+    parser.add_argument("--label-cluster", help="cluster label")
     parser.add_argument("--drop", help="Drop table with results", action="store_true")
 
     args = parser.parse_args()
