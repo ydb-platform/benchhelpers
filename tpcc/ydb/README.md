@@ -33,7 +33,7 @@ Currently `setup_tpcc_nodes.sh` supports Ubuntu only. That is why it might fail 
 
 Prerequisites to run `run_ydb.sh` tpcc benchhelper script:
 1. Install pssh.
-2. Install the `ydb`, `numpy` and `requests` Python packages using `pip3 install ydb numpy requests`.
+2. Install the `ydb`,`ydb[yc]`, `numpy` and `requests` Python packages using `pip3 install ydb numpy requests ydb[yc]`.
 3. [Download](https://ydb.tech/en/docs/downloads/) the latest YDB CLI and place it somewhere in your PATH.
 4. To generate (if needed) and save your SSH keys:
 ```

@@ -34,6 +34,10 @@ def create_table(session, table_path):
             timestamp Timestamp,
             cluster Utf8,
             version Utf8,
+            git_repository Utf8,
+            git_commit_timestamp Timestamp,
+            git_branch Utf8,
+            run_type Utf8,
             label Utf8,
             warehouses Uint32,
             duration_seconds Uint32,
@@ -69,6 +73,10 @@ def insert_ydb_results_row(session, path, args, results):
             `version`,
             `label`,
             `cluster`,
+            `git_repository Utf8`,
+            `git_commit_timestamp`,
+            `git_branch`,
+            `run_type`,
             `warehouses`,
             `duration_seconds`,
             `tpmC`,
@@ -82,6 +90,10 @@ def insert_ydb_results_row(session, path, args, results):
             "{args.ydb_version}",
             "{args.label}",
             "{args.label_cluster}",
+            "{args.git_repository}",
+            DateTime::FromSeconds({args.git_commit_timestamp}),
+            "{args.git_branch}",
+            "{args.run_type}",
             {summary['warehouses']},
             {summary['time_seconds']},
             {summary['tpmc']},
@@ -105,28 +117,36 @@ def main():
     parser.add_argument("--ydb-version", help="YDB version")
     parser.add_argument("--label", help="label")
     parser.add_argument("--label-cluster", help="cluster label")
+    parser.add_argument("--git-commit-timestamp", help="git commit timestamp")
+    parser.add_argument("--git-repository", help="repository")
+    parser.add_argument("--git-branch", help="branch")
+    parser.add_argument("--run-type", help="type of run (additional attribute)")
     parser.add_argument("--drop", help="Drop table with results", action="store_true")
 
     args = parser.parse_args()
 
-    if not os.path.exists(args.token):
-        print("Token file not found")
-        sys.exit(1)
 
     if not os.path.exists(args.results_file):
         print("Results file not found")
         sys.exit(1)
-
-    with open(args.token, 'r') as f:
-        token = f.readline()
-
-    driver_config = ydb.DriverConfig(
-        args.endpoint, args.database, credentials=ydb.AccessTokenCredentials(token),
-        root_certificates=ydb.load_ydb_root_certificate(),
-    )
+    
+  
+    if args.token is not None:
+        if not os.path.exists(args.token):
+            print(f"IAM token file not found by path {args.token}")
+            sys.exit(1)
+        driver_config = ydb.DriverConfig(
+            args.endpoint,
+            args.database,
+            credentials=ydb.iam.ServiceAccountCredentials.from_file(args.token),
+        )
+    else:
+        print(f"Token not passed as agrument")
+        sys.exit(1)
+    
     with ydb.Driver(driver_config) as driver:
         try:
-            driver.wait(timeout=5)
+            driver.wait(timeout=15)
         except concurrent.futures._base.TimeoutError:
             print("Connect failed to YDB")
             print("Last reported errors by discovery:")

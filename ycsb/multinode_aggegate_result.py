@@ -8,6 +8,7 @@ import math
 import re
 import sys
 import ydb
+import os
 
 from datetime import datetime, timezone
 
@@ -20,6 +21,10 @@ def create_ydb_results_table(session, path):
             version Utf8,
             label Utf8,
             cluster Utf8,
+            git_repository Utf8,
+            git_commit_timestamp Timestamp,
+            git_branch Utf8,
+            run_type Utf8,
             description Utf8,
             ycsb_instances_count Uint32,
             record_count Uint64,
@@ -55,6 +60,10 @@ def insert_ydb_results_row(session, path, row):
             record_count,
             label,
             cluster,
+            git_repository,
+            git_commit_timestamp,
+            git_branch,
+            run_type,
             workload,
             ycsb_instances_count,
             distribution,
@@ -73,6 +82,10 @@ def insert_ydb_results_row(session, path, row):
             {record_count},
             "{label}",
             "{cluster}",
+            "{git_repository}",
+            "{git_commit_timestamp}",
+            "{git_branch}",
+            "{run_type}",
             "{workload}",
             {ycsb_instances_count},
             "{distribution}",
@@ -472,13 +485,20 @@ class Parser:
         if len(self.results) == 0:
             return
 
-        with open(args.token, 'r') as f:
-            token = f.readline()
 
-        driver_config = ydb.DriverConfig(
-            args.endpoint, args.database, credentials=ydb.AccessTokenCredentials(token),
-            root_certificates=ydb.load_ydb_root_certificate(),
-        )
+        if args.token is not None:
+            if not os.path.exists(args.token):
+                print(f"IAM token file not found by path {args.token}")
+                sys.exit(1)
+            driver_config = ydb.DriverConfig(
+                args.endpoint,
+                args.database,
+                credentials=ydb.iam.ServiceAccountCredentials.from_file(args.token),
+            )
+        else:
+            print(f"Token not passed as agrument")
+            sys.exit(1)
+
         with ydb.Driver(driver_config) as driver:
             try:
                 driver.wait(timeout=5)
@@ -492,7 +512,7 @@ class Parser:
                 path = args.database + "/" + args.table
 
                 pool.retry_operation_sync(lambda session: create_ydb_results_table(session, path))
-
+                
                 for ts,result in self.results.items():
                     row = {
                         "ts": ts,
@@ -500,6 +520,10 @@ class Parser:
                         "record_count": args.record_count,
                         "label": args.label,
                         "cluster": args.label_cluster,
+                        "git_repository": args.git_repository,
+                        "git_commit_timestamp": datetime.FromSeconds(args.git_commit_timestamp),
+                        "git_branch": args.git_branch,
+                        "run_type": args.git_branch,
                         "workload": result.workload,
                         "ycsb_instances_count": result.ycsb_instances_count,
                         "distribution": result.distribution,
@@ -544,6 +568,10 @@ def main():
     parser.add_argument("--record-count", help="DB size in rows", type=int)
     parser.add_argument("--label", help="Label to save results with", default="")
     parser.add_argument("--label-cluster", help="cluster label")
+    parser.add_argument("--git-repository", help="git repository")
+    parser.add_argument("--git-commit-timestamp", help="git commit timestamp")
+    parser.add_argument("--git-branch", help="branch")
+    parser.add_argument("--run-type", help="type of run (additional attribute)")
 
     args = parser.parse_args()
 
