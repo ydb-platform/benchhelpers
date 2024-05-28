@@ -488,12 +488,25 @@ class Parser:
 
         if args.token is not None:
             if not os.path.exists(args.token):
-                print(f"IAM token file not found by path {args.token}")
+                print(f"YDB token file not found by path {args.token}")
+                sys.exit(1)
+            with open(args.token, 'r') as f:
+                token = f.readline()
+
+            driver_config = ydb.DriverConfig(
+                args.endpoint,
+                args.database,
+                credentials=ydb.AccessTokenCredentials(token),
+                root_certificates=ydb.load_ydb_root_certificate(),
+            )
+        elif args.sa_token is not None:
+            if not os.path.exists(args.sa_token):
+                print(f"IAM token file not found by path {args.sa_token}")
                 sys.exit(1)
             driver_config = ydb.DriverConfig(
                 args.endpoint,
                 args.database,
-                credentials=ydb.iam.ServiceAccountCredentials.from_file(args.token),
+                credentials=ydb.iam.ServiceAccountCredentials.from_file(args.sa_token),
             )
         else:
             print(f"Token not passed as agrument")
@@ -564,6 +577,7 @@ def main():
     parser.add_argument("-d", "--database", help="YDB database")
     parser.add_argument("--table", help="YDB table name")
     parser.add_argument("--token", help="YDB token")
+    parser.add_argument("--sa-token", help="YDB service account token")
     parser.add_argument("--ydb-version", help="YDB version")
     parser.add_argument("--record-count", help="DB size in rows", type=int)
     parser.add_argument("--label", help="Label to save results with", default="")
