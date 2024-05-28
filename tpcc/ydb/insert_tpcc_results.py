@@ -73,7 +73,7 @@ def insert_ydb_results_row(session, path, args, results):
             `version`,
             `label`,
             `cluster`,
-            `git_repository Utf8`,
+            `git_repository`,
             `git_commit_timestamp`,
             `git_branch`,
             `run_type`,
