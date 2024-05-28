@@ -536,7 +536,7 @@ class Parser:
                         "git_repository": args.git_repository,
                         "git_commit_timestamp": args.git_commit_timestamp,
                         "git_branch": args.git_branch,
-                        "run_type": args.git_branch,
+                        "run_type": args.run_type,
                         "workload": result.workload,
                         "ycsb_instances_count": result.ycsb_instances_count,
                         "distribution": result.distribution,
