@@ -83,7 +83,7 @@ def insert_ydb_results_row(session, path, row):
             "{label}",
             "{cluster}",
             "{git_repository}",
-            DateTime::FromSeconds(CAST({ts} as Uint32)),
+            DateTime::FromSeconds(CAST({git_commit_timestamp} as Uint32)),
             "{git_branch}",
             "{run_type}",
             "{workload}",
