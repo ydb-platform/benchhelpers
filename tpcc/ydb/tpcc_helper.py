@@ -915,32 +915,64 @@ class ExportInitialData:
 class ValidateInitialData:
     def run(self, args):
         self.ydb_connection = YdbConnection(args)
-        get_session = lambda: self.ydb_connection.driver.table_client.session().create()
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            futures = {
-                executor.submit(self.validate_warehouses, args, get_session()),
-                executor.submit(self.validate_districts, args, get_session()),
-                executor.submit(self.validate_customers, args, get_session()),
-                executor.submit(self.validate_items, args, get_session()),
-                executor.submit(self.validate_open_orders, args, get_session()),
-                executor.submit(self.validate_new_orders, args, get_session()),
-                executor.submit(self.validate_order_lines, args, get_session()),
-                executor.submit(self.validate_stock, args, get_session()),
-                executor.submit(self.validate_history, args, get_session()),
-            }
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            with ydb.SessionPool(self.ydb_connection.driver) as pool:
+                pool.retry_operation_sync(lambda session: self.validate_warehouses(args, session))
 
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    error = future.result()
-                    if error:
-                        print(error)
-                        sys.exit(1)
-                except Exception as e:
-                    print(f"An exception occurred: {e}")
-                    traceback.print_exc()
-                    sys.exit(1)
+                futures = {
+                    executor.submit(
+                        pool.retry_operation_sync,
+                        lambda session: self.validate_warehouses(args, session)): "warehouses",
 
+                    executor.submit(
+                        pool.retry_operation_sync,
+                        lambda session: self.validate_districts(args, session)): "districts",
+
+                    executor.submit(
+                        pool.retry_operation_sync,
+                        lambda session: self.validate_customers(args, session)): "customers",
+
+                    executor.submit(
+                        pool.retry_operation_sync,
+                        lambda session: self.validate_items(args, session)): "items",
+
+                    executor.submit(
+                        pool.retry_operation_sync,
+                        lambda session: self.validate_open_orders(args, session)): "open_orders",
+
+                    executor.submit(
+                        pool.retry_operation_sync,
+                        lambda session: self.validate_new_orders(args, session)): "new_orders",
+
+                    executor.submit(
+                        pool.retry_operation_sync,
+                        lambda session: self.validate_order_lines(args, session)): "order_lines",
+
+                    executor.submit(
+                        pool.retry_operation_sync,
+                        lambda session: self.validate_stock(args, session)): "stock",
+
+                    executor.submit(
+                        pool.retry_operation_sync,
+                        lambda session: self.validate_oorder(args, session)): "oorder",
+
+                    executor.submit(
+                        pool.retry_operation_sync,
+                        lambda session: self.validate_history(args, session)): "history",
+                }
+
+                for future in concurrent.futures.as_completed(futures.keys()):
+                    try:
+                        check_name = futures[future]
+                        error = future.result()
+                        if error:
+                            print(f"{check_name} failed: {error}")
+                        else:
+                            print(f"{check_name} OK")
+                    except Exception as e:
+                        print(f"{check_name} an exception occurred: {e}")
+                        traceback.print_exc()
 
     def validate_warehouses(self, args, session):
         sql = """
@@ -1056,11 +1088,21 @@ class ValidateInitialData:
             LIMIT 1
         """
 
-        result_sets = session.transaction().execute(sql)
-        if not result_sets[0].rows:
+        async_it = self.ydb_connection.driver.table_client.async_scan_query(sql)
+        row = None
+        while True:
+            try:
+                ft = next(async_it)
+                if not ft.result().result_set.rows:
+                    return "No order lines found"
+                row = ft.result().result_set.rows[0]
+                break
+            except StopIteration:
+                break
+
+        if not row:
             return "No order lines found"
 
-        row = result_sets[0].rows[0]
         if row.order_count != 3000:
             error = "Order lines count is {} and not 3000 in warehouse {} district {}".format(
                 row.order_count, row.warehouse, row.district)
@@ -1090,6 +1132,25 @@ class ValidateInitialData:
             return error
 
         return None
+
+    def validate_oorder(self, args, session):
+        sql = """
+            $per_district = (
+                SELECT O_W_ID, O_D_ID, SUM(O_C_ID) as csum FROM oorder
+                WHERE O_ID <= 3000
+                GROUP BY O_W_ID, O_D_ID
+            );
+
+            SELECT O_W_ID, O_D_ID, csum FROM $per_district
+            WHERE csum != 4501500
+            ORDER BY O_W_ID, O_D_ID;
+        """
+
+        result_sets = session.transaction().execute(sql)
+        if result_sets[0].rows:
+            for row in result_sets[0].rows:
+                print("Order sum is {} in warehouse {} district {}".format(row.csum, row.O_W_ID, row.O_D_ID))
+            return "oorder sums are incorrect"
 
     def validate_stock(self, args, session):
         sql = """
