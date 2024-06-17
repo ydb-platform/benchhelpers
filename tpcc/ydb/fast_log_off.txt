@@ -1,0 +1,90 @@
+ModifyScheme {
+  WorkingDir: "WORKING_DIR_PATH"
+  OperationType: ESchemeOpAlterTable
+  AlterTable {
+    Name: "customer"
+    PartitionConfig {
+      ExecutorFastLogPolicy: false
+    }
+  }
+}
+ModifyScheme {
+  WorkingDir: "WORKING_DIR_PATH"
+  OperationType: ESchemeOpAlterTable
+  AlterTable {
+    Name: "district"
+    PartitionConfig {
+      ExecutorFastLogPolicy: false
+    }
+  }
+}
+ModifyScheme {
+  WorkingDir: "WORKING_DIR_PATH"
+  OperationType: ESchemeOpAlterTable
+  AlterTable {
+    Name: "history"
+    PartitionConfig {
+      ExecutorFastLogPolicy: false
+    }
+  }
+}
+ModifyScheme {
+  WorkingDir: "WORKING_DIR_PATH"
+  OperationType: ESchemeOpAlterTable
+  AlterTable {
+    Name: "item"
+    PartitionConfig {
+      ExecutorFastLogPolicy: false
+    }
+  }
+}
+ModifyScheme {
+  WorkingDir: "WORKING_DIR_PATH"
+  OperationType: ESchemeOpAlterTable
+  AlterTable {
+    Name: "new_order"
+    PartitionConfig {
+      ExecutorFastLogPolicy: false
+    }
+  }
+}
+ModifyScheme {
+  WorkingDir: "WORKING_DIR_PATH"
+  OperationType: ESchemeOpAlterTable
+  AlterTable {
+    Name: "oorder"
+    PartitionConfig {
+      ExecutorFastLogPolicy: false
+    }
+  }
+}
+ModifyScheme {
+  WorkingDir: "WORKING_DIR_PATH"
+  OperationType: ESchemeOpAlterTable
+  AlterTable {
+    Name: "order_line"
+    PartitionConfig {
+      ExecutorFastLogPolicy: false
+    }
+  }
+}
+ModifyScheme {
+  WorkingDir: "WORKING_DIR_PATH"
+  OperationType: ESchemeOpAlterTable
+  AlterTable {
+    Name: "stock"
+    PartitionConfig {
+      ExecutorFastLogPolicy: false
+    }
+  }
+}
+ModifyScheme {
+  WorkingDir: "WORKING_DIR_PATH"
+  OperationType: ESchemeOpAlterTable
+  AlterTable {
+    Name: "warehouse"
+    PartitionConfig {
+      ExecutorFastLogPolicy: false
+    }
+  }
+}

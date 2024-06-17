@@ -107,11 +107,20 @@ while [[ "$#" > 0 ]]; do case $1 in
     --ydb-port)
         ydb_port=$2
         shift;;
+    --ydb-host-user)
+        ydb_host_user=$2
+        shift;;
+    --ydb-bin-path)
+        ydb_bin_path=$2
+        shift;;
     --database)
         database=$2
         shift;;
     --secure)
         use_grpcs=1
+        ;;
+    --disable-fast-log)
+        disable_fast_log=1
         ;;
     --token-file)
         token_file_path=$2
@@ -452,6 +461,52 @@ if [ ! -e $results_dir ]; then
         echo "Failed to create $results_dir directory"
         exit 1
     fi
+fi
+
+if [[ -n "$disable_fast_log" ]]; then
+    # TODO: support auth. Now, the problem is that we have remote YDBD binary and have to copy tokens/env
+    # to the remote host. If we had a local YDBD binary, that would be easy, because the env and tokens were set
+    if [[ -z $YDB_ANONYMOUS_CREDENTIALS ]]; then
+        echo "At this moment fast log off is not supported with non-anonymous access"
+        exit 1
+    fi
+
+    if [[ -z "$ydb_host_user" ]]; then
+        echo "Please specify the ydb_host_user"
+        usage
+        exit 1
+    fi
+
+    if [[ -z "$ydb_bin_path" ]]; then
+        echo "Please specify the ydb_bin_path"
+        usage
+        exit 1
+    fi
+
+    scheme_cmd=`mktemp`
+    cat $this_path/fast_log_off.txt | sed "s:WORKING_DIR_PATH:$database:" > $scheme_cmd
+
+    scp $scheme_cmd $ydb_host_user@$ydb_host:
+    if [[ $? -ne 0 ]]; then
+        log "Failed to upload fast_log_off.txt to $ydb_host_user@$ydb_host"
+        rm $scheme_cmd
+        exit 1
+    fi
+
+    scheme_cmd_name=`basename $scheme_cmd`
+    ydb_scheme_cmd="$ydb_bin_path -s $endpoint db schema execute $scheme_cmd_name"
+    ssh $ydb_host_user@$ydb_host "$ydb_scheme_cmd"
+    if [[ $? -ne 0 ]]; then
+        log "Failed to execute fast log off scheme"
+        ssh $ydb_host_user@$ydb_host "rm $scheme_cmd_name"
+        rm $scheme_cmd
+        exit 1
+    fi
+
+    ssh $ydb_host_user@$ydb_host "rm $scheme_cmd_name"
+    rm $scheme_cmd
+
+    log "Fast log off scheme executed"
 fi
 
 if [ -z "$no_load" ]; then
