@@ -9,11 +9,17 @@ numjobs=16
 ramp_time=2s
 runtime=1m
 
+bandwidth_depth=64
+iops_depth=256
+
 format=json
 
 # NOTE: we don't check if the file is big enough for the test
 multi_stream_seq_test_offset=100G
 seq_test_offset=500G
+
+ioengine=libaio
+ioengine_args=
 
 results_dir="."
 
@@ -24,6 +30,10 @@ usage() {
     echo "  [--numjobs <numjobs>] (default: $numjobs)"
     echo "  [--results-dir <results-dir>] (default: $results_dir)"
     echo "  [--skip-fill-disk] (default: false)"
+    echo "  [--ioengine] (default $ioengine)"
+    echo "  [--ioengine-args] (default NONE)"
+    echo "  [--bandwidth-depth <bandwidth-depth>] (default: $bandwidth_depth)"
+    echo "  [--iops-depth <iops-depth>] (default: $iops_depth)"
     echo "  [--format <format>] (default: $format)"
 }
 
@@ -48,6 +58,18 @@ while [[ "$#" > 0 ]]; do case $1 in
     --skip-fill-disk)
         skip_fill_disk=true
         ;;
+    --ioengine)
+        ioengine="$2";
+        shift;;
+    --ioengine-args)
+        ioengine_args="$2";
+        shift;;
+    --bandwidth-depth)
+        bandwidth_depth="$2";
+        shift;;
+    --iops-depth)
+        iops_depth="$2";
+        shift;;
     --format)
         format="$2";
         shift;;
@@ -103,7 +125,7 @@ fi
 if [[ -z "$skip_fill_disk" ]]; then
     sudo fio --name=fill_disk \
     --filename="$filename" --filesize=$filesize \
-    --ioengine=libaio --direct=1 --verify=0 --randrepeat=0 \
+    --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
     --bs=128K \
     --rw=randwrite \
     --iodepth=64 \
@@ -123,7 +145,7 @@ fi
 sudo fio --name=write_bandwidth_test \
   --filename="$filename" --filesize=$filesize \
   --time_based --ramp_time=$ramp_time --runtime=$runtime \
-  --ioengine=libaio --direct=1 --verify=0 --randrepeat=0 \
+  --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
   --bs=1M \
   --iodepth=64 \
   --iodepth_batch_submit=64 \
@@ -140,7 +162,7 @@ sudo fio --name=write_bandwidth_test \
 sudo fio --name=write_iops_test \
   --filename="$filename" --filesize=$filesize \
   --time_based --ramp_time=$ramp_time --runtime=$runtime \
-  --ioengine=libaio --direct=1 --verify=0 --randrepeat=0 \
+  --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
   --bs=4K --iodepth=256 --rw=randwrite \
   --iodepth_batch_submit=256  --iodepth_batch_complete_max=256 \
   --output-format=$format \
@@ -152,7 +174,7 @@ sudo fio --name=write_iops_test \
 sudo fio --name=write_iops_test \
   --filename="$filename" --filesize=$filesize \
   --time_based --ramp_time=$ramp_time --runtime=$runtime \
-  --ioengine=libaio --direct=1 --verify=0 --randrepeat=0 \
+  --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
   --bs=8K --iodepth=256 --rw=randwrite \
   --iodepth_batch_submit=256  --iodepth_batch_complete_max=256 \
   --output-format=$format \
@@ -164,7 +186,7 @@ sudo fio --name=write_iops_test \
 sudo fio --name=write_latency_test \
   --filename="$filename" --filesize=$filesize \
   --time_based --ramp_time=$ramp_time --runtime=$runtime \
-  --ioengine=libaio --direct=1 --verify=0 --randrepeat=0 \
+  --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
   --bs=4K --iodepth=4 --rw=randwrite --iodepth_batch_submit=4  \
   --iodepth_batch_complete_max=4 \
   --output-format=$format \
@@ -176,7 +198,7 @@ sudo fio --name=write_latency_test \
 sudo fio --name=write_latency_test \
   --filename="$filename" --filesize=$filesize \
   --time_based --ramp_time=$ramp_time --runtime=$runtime \
-  --ioengine=libaio --direct=1 --verify=0 --randrepeat=0 \
+  --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
   --bs=8K --iodepth=4 --rw=randwrite --iodepth_batch_submit=4  \
   --iodepth_batch_complete_max=4 \
   --output-format=$format \
@@ -188,7 +210,7 @@ sudo fio --name=write_latency_test \
 sudo fio --name=read_bandwidth_test \
   --filename="$filename" --filesize=$filesize \
   --time_based --ramp_time=$ramp_time --runtime=$runtime \
-  --ioengine=libaio --direct=1 --verify=0 --randrepeat=0 \
+  --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
   --bs=1M --iodepth=64 --rw=read --numjobs=$numjobs --offset_increment=100G \
   --iodepth_batch_submit=64  --iodepth_batch_complete_max=64 \
   --output-format=$format \
@@ -200,7 +222,7 @@ sudo fio --name=read_bandwidth_test \
 sudo fio --name=read_iops_test \
   --filename="$filename" --filesize=$filesize \
   --time_based --ramp_time=$ramp_time --runtime=$runtime \
-  --ioengine=libaio --direct=1 --verify=0 --randrepeat=0 \
+  --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
   --bs=4K --iodepth=256 --rw=randread \
   --iodepth_batch_submit=256  --iodepth_batch_complete_max=256 \
   --output-format=$format \
@@ -212,7 +234,7 @@ sudo fio --name=read_iops_test \
 sudo fio --name=read_iops_test \
   --filename="$filename" --filesize=$filesize \
   --time_based --ramp_time=$ramp_time --runtime=$runtime \
-  --ioengine=libaio --direct=1 --verify=0 --randrepeat=0 \
+  --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
   --bs=8K --iodepth=256 --rw=randread \
   --iodepth_batch_submit=256  --iodepth_batch_complete_max=256 \
   --output-format=$format \
@@ -224,19 +246,19 @@ sudo fio --name=read_iops_test \
 sudo fio --name=read_latency_test \
   --filename="$filename" --filesize=$filesize \
   --time_based --ramp_time=$ramp_time --runtime=$runtime \
-  --ioengine=libaio --direct=1 --verify=0 --randrepeat=0 \
+  --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
   --bs=4K --iodepth=4 --rw=randread \
   --iodepth_batch_submit=4  --iodepth_batch_complete_max=4 \
   --output-format=$format \
   --output="$results_dir/read_latency_test.$format"
 
 #
-# read latency test 4K
+# read latency test 8K
 #
 sudo fio --name=read_latency_test \
   --filename="$filename" --filesize=$filesize \
   --time_based --ramp_time=$ramp_time --runtime=$runtime \
-  --ioengine=libaio --direct=1 --verify=0 --randrepeat=0 \
+  --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
   --bs=8K --iodepth=4 --rw=randread \
   --iodepth_batch_submit=4  --iodepth_batch_complete_max=4 \
   --output-format=$format \
