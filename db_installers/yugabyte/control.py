@@ -9,6 +9,9 @@ import os
 import pipes
 import sys
 
+MasterMemoryRatio = 0.15
+TServerMemoryRatio = 0.85
+
 if __package__:
     from ..pylib.common import ErrorExit, SSHAction, PSSHAction, BaseAction, Hosts
 else:
@@ -76,8 +79,11 @@ class Start(PSSHAction):
     def start_master(self, host, store_args, listen_addr, webserver_port, master_hosts):
         self._logger.info("Start master on " + host + ", addr " + listen_addr)
         master_hosts_str = ",".join(master_hosts)
-        memory_ratio = 0.05
+        memory_ratio = MasterMemoryRatio
         cmd = "sudo -u {user} sh -c \""
+
+        if MasterTaskSet:
+            cmd += "taskset -c " + MasterTaskSet + " "
         cmd += "{path}/yugabyte_wrapper {path}/bin/yb-master --rpc_bind_addresses={listen_addr} --master_addresses={master_hosts_str} "
         cmd += " --default_memory_limit_to_ram_ratio {memory_ratio} --webserver_port {webserver_port}"
         cmd += " " + store_args
@@ -175,7 +181,7 @@ class Start(PSSHAction):
             self.start_master(host, store_args, listen_host, MASTER_WEBSERVER_PORT, master_hosts)
 
         cores_per_instance = Cores
-        memory_ratio_per_instance = 0.85  # default in yugabyte is 85% for tserver
+        memory_ratio_per_instance = TServerMemoryRatio  # default in yugabyte is 85% for tserver
         if self.tservers_per_host:
             memory_ratio_per_instance = round(memory_ratio_per_instance / self.tservers_per_host, 2)
             cores_per_instance = int(Cores // self.tservers_per_host)
@@ -230,11 +236,14 @@ class Start(PSSHAction):
                     cores_reminder -= (cores_reminder > 0)
             else:
                 listen_host = LOCAL_IP.get(host, host) + ":" + str(LISTEN_PORT_SERVER)
+                if TaskSets and len(TaskSets):
+                    task_set = TaskSets[0]
                 self.start_server(
                     host,
                     store_args,
                     listen_host,
                     master_hosts,
+                    task_set=task_set,
                     psql_port=PSQL_PORT,
                     cql_port=CQL_PORT,
                     redis_webserver_port=REDIS_WEBSERVER_PORT,

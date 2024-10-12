@@ -1,5 +1,7 @@
 #!/bin/bash
 
+tservers_per_host=2
+
 set -e
 
 usage() {
@@ -18,6 +20,9 @@ while [[ $# -gt 0 ]]; do case $1 in
         shift;;
     --config)
         YUGABYTE_CONFIG=$2
+        shift;;
+    --tservers-per-host)
+        tservers_per_host=$2
         shift;;
     --help|-h)
         usage
@@ -65,7 +70,7 @@ if [[ $? -ne 0 ]]; then
     exit 1
 fi
 
-"$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --start --tservers-per-host 2
+"$PATH_TO_SCRIPT"/control.py -c $YUGABYTE_CONFIG --start --tservers-per-host $tservers_per_host
 if [[ $? -ne 0 ]]; then
     echo "Failed to start yugabyte"
     exit 1
