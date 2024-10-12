@@ -42,7 +42,7 @@ exec -l $SHELL
 ```
 
 Prerequisites to run TPC-C client:
-1. Install Java 21 (note, that the scripts updates `/usr/local/bin/java` symlink). Should be used only for testing purposes. You can use `../../common/install_java21.sh --hosts tpcc.hosts`
+1. Install Java 21.
 2. Install YDB's [TPC-C](https://github.com/ydb-platform/tpcc) into your home folder on each machine.
 You have two options: build it on your own or use the prebuilt package. Here you can find prebuilt [benchbase-ydb.tgz](https://storage.yandexcloud.net/ydb-benchmark-builds/benchbase-ydb.tgz).
 

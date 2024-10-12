@@ -31,7 +31,7 @@ exec -l $SHELL
 4. Copy the tpcc_config_template.xml file to tpcc_config.xml and edit url, user, password.
 
 Prerequisites to run TPC-C client:
-1. Install Java 21. You can use `../../common/install_java21.sh --hosts tpcc.hosts`
+1. Install Java 21.
 2. Install YDB's [fork](https://github.com/ydb-platform/tpcc) (`vanilla` branch) of benchbase into your home folder on each machine.
 You have two options: build it on your own or use the prebuilt package. Here you can find prebuilt [benchbase-postgres.tgz](https://storage.yandexcloud.net/ydb-benchmark-builds/benchbase-postgres.tgz).
 
