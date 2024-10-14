@@ -224,10 +224,6 @@ if [ -z "$no_drop_create" ]; then
     fi
 fi
 
-if [[ -n "$no_load" && -n "$no_run" ]]; then
-    exit 0
-fi
-
 if [ -z "$no_load" ]; then
     load_start=$SECONDS
     log "Loading data"
