@@ -359,7 +359,7 @@ else
 fi
 
 # Unfortunately, ydb CLI can't show the version and we try to get it via HTTP. No auth yet.
-version_info=`curl -s $ydb_host:8765/ver | egrep '(Git|Arc) info:' -A 13`
+version_info=`curl -s $ydb_host:8765/ver --connect-timeout 5 --max-time 10 | egrep '(Git|Arc) info:' -A 13`
 if [[ $? -ne 0 ]]; then
     log "Failed to get YDB version via HTTP"
 else
