@@ -6,8 +6,8 @@ YDB reports two transaction latencies: server side and client side. Client side 
 * currently some server latency is accounted as client: at least server's GRPC and network stack.
 * it includes network time.
 
-If we get TCP dump (on the server), then this tool shows pure server and client+network time. If dump it produced
-on the client side, then server time will include network, while "client+network" will show only client time.
+If we get TCP dump on the server, then we see pure server and client + network time. If dump is produced
+on the client side, then server time will include network, while client time will show pure client time.
 
 ## Build
 

@@ -225,6 +225,22 @@ public:
         TransactionId = transaction_id;
     }
 
+    const std::string& get_transaction_id() const {
+        return TransactionId;
+    }
+
+    const std::string& get_session_id() const {
+        return SessionId;
+    }
+
+    bool is_request_in_progress() const {
+        return !CurrentRequestStreamId.empty();
+    }
+
+    Http2StreamId get_current_stream_id() const {
+        return CurrentRequestStreamId;
+    }
+
     void start_request(const Http2StreamId& streamId, const std::string& session_id, u_int64_t ts) {
         if (SessionId != session_id) {
             std::cerr << "Session id mismatch: " << SessionId << " vs. " << session_id << std::endl;
@@ -240,7 +256,8 @@ public:
         CurrentRequestStreamId = streamId;
         CurrentRequestStartTs = ts;
 
-        DEBUG("Started request in session " << SessionId << " with streamId " << streamId);
+        DEBUG("Started request in session " << SessionId
+            << " with streamId " << streamId << " transaction " << TransactionId);
     }
 
     void finish_request(const Http2StreamId& streamId, u_int64_t ts) {
@@ -265,11 +282,11 @@ public:
         CurrentRequestStartTs = 0;
 
         DEBUG("Finished request in session " << SessionId << " with streamId " << CurrentRequestStreamId
-            << " in " << microsec_to_ms_str(delta));
+            << " transaction " << TransactionId << " in " << microsec_to_ms_str(delta));
     }
 
     void start_commit(const Http2StreamId& streamId, const std::string& session_id, u_int64_t ts) {
-        DEBUG("Started commit in session " << SessionId);
+        DEBUG("Started commit in session " << SessionId << " transaction " << TransactionId);
 
         // commit is the same request-response pair matched by streamId
         start_request(streamId, session_id, ts);
@@ -294,12 +311,8 @@ public:
             ServerUs += latency;
         }
 
-        DEBUG("Finished transaction in session " << SessionId << " with streamId " << streamId << " in "
-            << microsec_to_ms_str(get_total_time_us()));
-    }
-
-    const std::string& get_session_id() const {
-        return SessionId;
+        DEBUG("Finished transaction in session " << SessionId << " with streamId " << streamId
+            << " transaction " << TransactionId << " in " << microsec_to_ms_str(get_total_time_us()));
     }
 
     u_int64_t get_total_time_us() const {
@@ -319,14 +332,9 @@ public:
     }
 
     void print(std::ostream& os) const {
-        long server_time = 0;
-        for (const auto& latency: RequestLatencies) {
-            server_time += latency;
-        }
-        long client_time = get_total_time_us() - server_time;
-
         os << "Transaction " << TransactionId << " took " << microsec_to_ms_str(get_total_time_us())
-           << " (client and net: " << microsec_to_ms_str(client_time) << ", server: " << microsec_to_ms_str(server_time)
+           << " (client and net: " << microsec_to_ms_str(get_client_time())
+        << ", server: " << microsec_to_ms_str(get_server_time())
            << "), with " << RequestLatencies.size() << " requests:";
         for (size_t i = 0; i < RequestLatencies.size(); ++i) {
             os << " r" << (i + 1) << ": " << microsec_to_ms_str(RequestLatencies[i], true);
@@ -370,17 +378,9 @@ struct PacketParser {
 
     class TransactionHandler {
     public:
-        TransactionHandler() = default;
-
-        bool is_transaction_we_care_about(const ydb::ExecuteDataQueryRequest& request) const {
-            static const std::string get_customer_query = "SELECT C_DISCOUNT, C_LAST, C_CREDIT";
-            const auto& query = request.query();
-            if (query.yql_text().find(get_customer_query) != std::string::npos) {
-                return true;
-            }
-
-            return true;
-        }
+        TransactionHandler(const std::function<bool(const ydb::ExecuteDataQueryRequest&)>& filter)
+            : Filter(filter)
+        {}
 
         void handle_data_query_request(const ydb::ExecuteDataQueryRequest& request, const FrameInfo& frame_info) {
             Http2StreamId streamId;
@@ -402,10 +402,11 @@ struct PacketParser {
                     break;
                 }
                 case ydb::TransactionControl::kBeginTx: {
-                    if (!is_transaction_we_care_about(request)) {
-                        return;
+                    if (!Filter || Filter(request)) {
+                        start_transaction(streamId, request.session_id(), frame_info.TsUs);
+                    } else {
+                        ++RequestResponsesSkipped;
                     }
-                    start_transaction(streamId, request.session_id(), frame_info.TsUs);
                     break;
                 }
                 default:
@@ -478,9 +479,12 @@ struct PacketParser {
             std::sort(ServerLatencies.begin(), ServerLatencies.end());
         }
 
-        void print(std::ostream& os) const {
+        void print(std::ostream& os, long top_n) const {
             os << "Processed " << RequestResponsesProcessed << " requests and responses, skipped "
                << RequestResponsesSkipped << std::endl
+               << "Total transactions aborted: " << TransactionsAborted << std::endl
+               << "Total transaction id mismatch: " << TransactionIdMismatch << std::endl
+               << "Total request-response mismatch: " << RequestResponseMismatch << std::endl
                << "Total transactions committed: " << FinishedTransactions.size() << std::endl;
 
             const auto& percentiles = {0.5, 0.9, 0.95, 0.99};
@@ -506,9 +510,13 @@ struct PacketParser {
                    << microsec_to_ms_str(ServerLatencies[index]) << std::endl;
             }
 
-            os << "Top 10 transactions by latency:\n";
+            if (top_n == std::numeric_limits<long>::max()) {
+                os << "Transactions by latency:\n";
+            } else {
+                os << "Top " << top_n << " transactions by latency:\n";
+            }
             for (auto it = FinishedTransactions.rbegin();
-                      it != FinishedTransactions.rend() && it - FinishedTransactions.rbegin() < 10; ++it) {
+                      it != FinishedTransactions.rend() && it - FinishedTransactions.rbegin() < top_n; ++it) {
                 os << **it;
             }
         }
@@ -516,12 +524,19 @@ struct PacketParser {
         void start_transaction(const Http2StreamId& streamId, const std::string& session_id, u_int64_t ts) {
             if (auto it = TransactionsByStream.find(streamId); it != TransactionsByStream.end()) {
                 std::cerr << "Transaction already exists for stream " << streamId << std::endl;
-                throw std::runtime_error("Transaction already exists");
+
+                TransactionsByStream.erase(streamId);
+                ActiveTransactions.erase(session_id);
+                ++RequestResponseMismatch;
+                return;
             }
 
             if (auto it = ActiveTransactions.find(session_id); it != ActiveTransactions.end()) {
-                std::cerr << "Transaction already exists for session " << session_id << std::endl;
-                throw std::runtime_error("Transaction already exists");
+                // since it is missing in TransactionsByStream, there is no active request.
+                // some transactions are aborted, but we don't handle it in response processing,
+                // so for simplicity we can skip aborted transaction and start new one.
+                ActiveTransactions.erase(it);
+                ++TransactionsAborted;
             }
 
             auto state_ptr = std::make_unique<TrasnactionState>(streamId, session_id, ts);
@@ -551,16 +566,48 @@ struct PacketParser {
                 return;
             }
 
-            it->second->set_transaction_id(tx_id);
+            auto& state_ptr = it->second;
 
-            if (!is_commit) {
-                it->second->start_request(streamId, session_id, ts);
-            } else {
-                it->second->start_commit(streamId, session_id, ts);
+            if (const auto& current_stream_id = state_ptr->get_current_stream_id(); !current_stream_id.empty()) {
+                std::cerr << "Can't start request " << streamId << " in session " << session_id
+                    << ", because waiting for the response for " << current_stream_id << std::endl;
+
+                TransactionsByStream.erase(current_stream_id);
+                ActiveTransactions.erase(it);
+                ++RequestResponseMismatch;
+                return;
             }
 
-            TransactionsByStream[streamId] = it->second.get();
+            if (const auto& current_transaction_id = state_ptr->get_transaction_id(); current_transaction_id.empty()) {
+                state_ptr->set_transaction_id(tx_id);
+            } else if (current_transaction_id != tx_id) {
+                Http2StreamId streamFound;
+                for (const auto& [stream, transaction] : TransactionsByStream) {
+                    if (transaction == state_ptr.get()) {
+                        streamFound = stream;
+                        break;
+                    }
+                }
+                std::cerr << "Transaction id mismatch: " << current_transaction_id
+                          << " vs. " << tx_id << " for stream " << streamFound
+                          << std::endl;
 
+                if (!streamFound.empty()) {
+                    TransactionsByStream.erase(streamFound);
+                }
+
+                ActiveTransactions.erase(it);
+                ++TransactionIdMismatch;
+                return;
+            }
+
+            if (!is_commit) {
+                state_ptr->start_request(streamId, session_id, ts);
+            } else {
+                state_ptr->start_commit(streamId, session_id, ts);
+            }
+
+            TransactionsByStream[streamId] = state_ptr.get();
             ++RequestResponsesProcessed;
         }
 
@@ -600,6 +647,8 @@ struct PacketParser {
         }
 
     private:
+        const std::function<bool(const ydb::ExecuteDataQueryRequest&)>& Filter;
+
         std::unordered_map<std::string, TrasnactionStatePtr> ActiveTransactions;
         std::unordered_map<Http2StreamId, TrasnactionState *, Hasher<Http2StreamId>> TransactionsByStream;
 
@@ -609,9 +658,17 @@ struct PacketParser {
 
         size_t RequestResponsesProcessed = 0;
         size_t RequestResponsesSkipped = 0;
+        size_t TransactionsAborted = 0;
+        size_t TransactionIdMismatch = 0;
+        size_t RequestResponseMismatch = 0;
     };
 
-    PacketParser(long skip_n) : NumberingOffset(skip_n) {}
+    PacketParser(
+            const std::function<bool(const ydb::ExecuteDataQueryRequest&)>& filter,
+            long skip_n)
+        : transaction_handler(filter)
+        , NumberingOffset(skip_n)
+    {}
 
     void handle_ethernet_frame(const struct pcap_pkthdr *header, const u_char *frame) {
         const size_t ETHERNET_HEADER_SIZE = 14; // assume no P/Q tags present
@@ -812,22 +869,25 @@ struct PacketParser {
         }
     }
 
-    void process_print_results() {
+    void process_print_results(long top_n) {
         transaction_handler.calculate_results();
-        transaction_handler.print(std::cout);
+        transaction_handler.print(std::cout, top_n);
     }
 
 public:
+    TransactionHandler transaction_handler;
+
     long NumberingOffset = 0;
     long ParsedCount = 0;
-
-    TransactionHandler transaction_handler;
 };
 
 int main(int argc, char *argv[]) {
     std::string file_path;
-    long n = std::numeric_limits<int>::max();
+    long n = std::numeric_limits<long>::max();
     long skip_n = 0;
+    long top_n = 50;
+
+    bool all_transaction_types = false;
 
     if (argc < 2) {
         std::cerr << "Too few arguments\n";
@@ -845,6 +905,10 @@ int main(int argc, char *argv[]) {
             n = std::stol(argv[++i]);
         } else if (arg == "--skip" && (i + 1 < argc)) {
             skip_n = std::stol(argv[++i]);
+        } else if (arg == "--print-all-transactions") {
+            top_n = std::numeric_limits<long>::max();
+        } else if (arg == "--all-types") {
+            all_transaction_types = true;
         } else if (arg == "--debug") {
             g_debug_level = DEBUG_LEVEL_DEBUG;
         } else if (arg == "--trace") {
@@ -861,6 +925,19 @@ int main(int argc, char *argv[]) {
             displayHelp();
             return -1;
         }
+    }
+
+    std::function<bool(const ydb::ExecuteDataQueryRequest&)> filter;
+    if (!all_transaction_types) {
+        filter = [](const ydb::ExecuteDataQueryRequest& request) {
+            static const std::string get_customer_query = "SELECT C_DISCOUNT, C_LAST, C_CREDIT";
+            const auto& query = request.query();
+            if (query.yql_text().find(get_customer_query) != std::string::npos) {
+                return true;
+            }
+
+            return false;
+        };
     }
 
     auto MyLogHandler = [] (google::protobuf::LogLevel level, const char* filename, int line, const std::string& message)
@@ -887,12 +964,12 @@ int main(int argc, char *argv[]) {
     }
 
     try {
-        PacketParser parser(skip_n);
+        PacketParser parser(filter, skip_n);
         while (int result = pcap_next_ex(handle, &header, &packet) == 1 && parser.ParsedCount < n) {
             parser.handle_ethernet_frame(header, packet);
         }
 
-        parser.process_print_results();
+        parser.process_print_results(top_n);
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
         return 1;
