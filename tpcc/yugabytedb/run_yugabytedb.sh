@@ -382,8 +382,17 @@ for host in `cat $hosts_file`; do
     host_num=`expr $host_num + 1`
 done
 
-ssh $single_tpcc_host "cd $tpcc_path && rm -rf results/*"
-scp $results_dir/raw_results/*csv $single_tpcc_host:$tpcc_path/results
+remote_temp_dir=`ssh $single_tpcc_host mktemp -d`
+if [[ -z "$remote_temp_dir" ]]; then
+    log "Failed to create remote temp dir on $single_tpcc_host"
+    exit 1
+fi
 
-ssh $single_tpcc_host "cd $tpcc_path && ./tpccbenchmark --merge-results=true --dir=results --warehouses=$warehouses" \
-    tee $results_dir/aggregate.log 2>&1
+scp $results_dir/raw_results/*csv $single_tpcc_host:$remote_temp_dir/
+ssh $single_tpcc_host \
+    "cd $tpcc_path && ./tpccbenchmark --merge-results=true --dir=$remote_temp_dir --warehouses=$warehouses" \
+    | tee $results_dir/aggregate.log 2>&1
+
+if [[ -n "$remote_temp_dir" ]]; then
+    ssh $single_tpcc_host "rm -rf $remote_temp_dir"
+fi
