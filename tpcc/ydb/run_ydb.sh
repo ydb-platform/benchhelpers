@@ -72,6 +72,26 @@ cleanup() {
     exit 1
 }
 
+# not real function, because depends on env
+run_compaction() {
+    compaction_start=$SECONDS
+    log "Compacting tables"
+    for table in oorder district item warehouse customer order_line new_order stock history; do
+        $table_full_compact --all \
+            --viewer-url "$viewer_url" \
+            $compaction_auth_args \
+            --threads $compaction_threads \
+            ${database}/${table} 1>/dev/null
+        if [[ $? -ne 0 ]]; then
+            log "Failed to compact table $table"
+            exit 1
+        fi
+    done
+
+    elapsed=$(( SECONDS - compaction_start ))
+    log "Compaction done in $elapsed seconds"
+}
+
 trap cleanup SIGINT SIGTERM
 
 if ! which parallel-ssh >/dev/null; then
@@ -140,6 +160,9 @@ while [[ "$#" > 0 ]]; do case $1 in
     --skip-compaction)
         skip_compaction=1
         ;;
+    --compact)
+        compact_tables=1
+        ;;
     --no-run)
         no_run=1
         ;;
@@ -205,6 +228,10 @@ esac; shift; done
 
 if [ -n "$only_run" ]; then
     no_load=1
+    no_drop_create=1
+fi
+
+if [ -n "$no_load" ]; then
     no_drop_create=1
 fi
 
@@ -556,22 +583,8 @@ if [ -z "$no_load" ]; then
     fi
 
     if [[ -z "$skip_compaction" ]]; then
-        compaction_start=$SECONDS
-        log "Compacting tables"
-        for table in oorder district item warehouse customer order_line new_order stock history; do
-            $table_full_compact --all \
-                --viewer-url "$viewer_url" \
-                $compaction_auth_args \
-                --threads $compaction_threads \
-                ${database}/${table} 1>/dev/null
-            if [[ $? -ne 0 ]]; then
-                log "Failed to compact table $table"
-                exit 1
-            fi
-        done
-
-        elapsed=$(( SECONDS - compaction_start ))
-        log "Compaction done in $elapsed seconds"
+        run_compaction
+        skip_compaction=1
     fi
 
     # When we use bulk upsert, we have to add index after loading the data,
@@ -598,6 +611,10 @@ if [ -z "$no_load" ]; then
     # we have some issue with reporting OK and having index available
     log "Sleeping 5m after building index"
     sleep 5m
+fi
+
+if [[ -n "$compact_tables" && -z "$skip_compaction" ]]; then
+    run_compaction
 fi
 
 if [ -n "$no_run" ]; then
