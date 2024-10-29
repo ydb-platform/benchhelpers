@@ -13,6 +13,8 @@
 #include "build/ydb.pb.h"
 #include "ydb.pb.h"
 
+constexpr size_t NewOrderSubQueriesCount = 11;
+
 void displayHelp() {
     std::cout << "Usage: client [options] <file>\n"
               << "Options:\n"
@@ -209,7 +211,7 @@ public:
         : SessionId(session_id)
         , StartTs(ts)
     {
-        RequestLatencies.reserve(11); // our NewOrder has 10 queries + Commit
+        RequestLatencies.reserve(NewOrderSubQueriesCount); // our NewOrder has 10 queries + Commit
 
         // note, that transaction is started by regular execute data query request
         DEBUG("Transaction started in session " << SessionId << " with streamId " << streamId);
@@ -473,10 +475,15 @@ struct PacketParser {
             std::sort(ClientLatencies.begin(), ClientLatencies.end());
 
             ServerLatencies.reserve(FinishedTransactions.size());
+            ServerQueryLatencies.reserve(FinishedTransactions.size() * NewOrderSubQueriesCount);
             for (const auto& transaction: FinishedTransactions) {
                 ServerLatencies.push_back(transaction->get_server_time());
+                for (auto latency: transaction->get_request_latencies()) {
+                    ServerQueryLatencies.push_back(latency);
+                }
             }
             std::sort(ServerLatencies.begin(), ServerLatencies.end());
+            std::sort(ServerQueryLatencies.begin(), ServerQueryLatencies.end());
         }
 
         void print(std::ostream& os, long top_n) const {
@@ -508,6 +515,13 @@ struct PacketParser {
                 size_t index = (size_t)(ServerLatencies.size() * percentile);
                 os << (int)(percentile * 100) << "%: "
                    << microsec_to_ms_str(ServerLatencies[index]) << std::endl;
+            }
+
+            os << "Server time query percentiles: " << std::endl;
+            for (double percentile: percentiles) {
+                size_t index = (size_t)(ServerQueryLatencies.size() * percentile);
+                os << (int)(percentile * 100) << "%: "
+                   << microsec_to_ms_str(ServerQueryLatencies[index]) << std::endl;
             }
 
             if (top_n == std::numeric_limits<long>::max()) {
@@ -655,6 +669,7 @@ struct PacketParser {
         std::vector<TrasnactionStatePtr> FinishedTransactions;
         std::vector<long> ClientLatencies;
         std::vector<long> ServerLatencies;
+        std::vector<long> ServerQueryLatencies;
 
         size_t RequestResponsesProcessed = 0;
         size_t RequestResponsesSkipped = 0;
