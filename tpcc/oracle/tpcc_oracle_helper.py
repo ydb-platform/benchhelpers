@@ -78,6 +78,20 @@ class GenerateConfig:
 
                 host_to_monport[host] = host_to_monport[host] + 1
 
+class GetCreateArgs:
+    def run(self, args):
+        s = f"--create=true --load=false --execute=false"
+        print(s)
+
+class GetLoadArgs:
+    def run(self, args):
+        host_config = HostConfig(
+            args.warehouse_count,
+            args.node_count,
+            args.node_num)
+
+        s = f"--create=false --load=true --execute=false --start-from-id {host_config.start_warehouse}"
+        print(s)
 
 class GetStartArgs:
     def run(self, args):
@@ -86,7 +100,7 @@ class GetStartArgs:
             args.node_count,
             args.node_num)
 
-        s = "--start-from-id {start_from} ".format(
+        s = "--create=false --load=false --execute=true --start-from-id {start_from} ".format(
             start_from=host_config.start_warehouse,
         )
         print(s)
@@ -120,6 +134,16 @@ def main():
                                         required=True, help="Max connections per TPC-C instance")
 
     generate_config_parser.set_defaults(func=GenerateConfig().run)
+
+    load_args_parser = subparsers.add_parser('get-create-args')
+    load_args_parser.add_argument("--node-num", dest="node_num", required=True, type=int,
+                             default=1, help="TPCC host number (1-based)")
+    load_args_parser.set_defaults(func=GetCreateArgs().run)
+
+    load_args_parser = subparsers.add_parser('get-load-args')
+    load_args_parser.add_argument("--node-num", dest="node_num", required=True, type=int,
+                             default=1, help="TPCC host number (1-based)")
+    load_args_parser.set_defaults(func=GetLoadArgs().run)
 
     start_args_parser = subparsers.add_parser("get-start-args")
     start_args_parser.add_argument("--node-num", dest="node_num", required=True, type=int,

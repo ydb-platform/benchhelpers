@@ -26,13 +26,13 @@ usage() {
     echo "    [--log-dir <log_dir>] \\"
     echo "    [--time <time> --warmup <warmup>] \\"
     echo "    [--loader-threads <loader_threads>] \\"
-    echo "    [--tpcc-path </path/to/Postgres/benchbase>] \\"
+    echo "    [--tpcc-path </path/to/Oracle/benchbase>] \\"
     echo "    [--max-connections $max_connections] \\"
     echo "    [--no-load] [--no-run] [--no-drop-create] \\"
 }
 
 log() {
-    echo "`date '+%Y-%m-%d %H:%M UTC'` tpcc_ydb: $@"
+    echo "`date '+%Y-%m-%d %H:%M:%S UTC'` tpcc_ydb: $@"
 }
 
 kill_tpcc() {
@@ -48,7 +48,6 @@ kill_tpcc() {
     done
 
     wait
-    log "Killer done"
 }
 
 cleanup() {
@@ -83,7 +82,7 @@ generate_configs() {
         config="config.$node_num.xml"
         node_num=$((node_num + 1))
 
-        scp $config ${host}:$tpcc_path/$config &
+        scp -q $config ${host}:$tpcc_path/$config &
         scp_pids+=($!)
         log "Uploading config '$config' to $host, pid: ${scp_pids[-1]}"
     done
@@ -201,12 +200,6 @@ if [ ! -r "$hosts_file" ]; then
     exit 1
 fi
 
-# we need this hack to not force
-# user accept manually cluster hosts
-for host in `cat "$hosts_file" | sort -u`; do
-    ssh -o StrictHostKeyChecking=no $host &>/dev/null &
-done
-
 this_dir=`dirname $0`
 this_path=`readlink -f $this_dir`
 tpcc_helper="$this_path/tpcc_oracle_helper.py"
@@ -221,23 +214,22 @@ fi
 host_count=`cat $hosts_file | wc -l | awk '{print $1}'`
 
 tpcc_script="$tpcc_path/scripts/tpcc.sh"
-pids=()
 cat $hosts_file | sort -u | while read hname; do
-    ssh -h $hosts_file "test -e $tpcc_script || (echo 'tpcc.sh does not exist' && exit 1)" \
-      < /dev/null > /dev/null 2>&1 &
-    pids+=($!)
-done
-for pid in "${pids[@]}"; do
-    wait $pid
+    ssh -o StrictHostKeyChecking=no $hname "test -e $tpcc_script || (echo 'tpcc.sh does not exist' && exit 1)" \
+      < /dev/null > /dev/null 2>&1
     if [ $? -ne 0 ]; then
-        echo "$tpcc_script not found on some/all hosts, install benchbase (check our build and README)"
         exit 1
     fi
 done
+if [ $? -ne 0 ]; then
+    log "$tpcc_script not found on some/all hosts, install benchbase (check our build and README)"
+    exit 1
+fi
 
 kill_tpcc
 
 if [[ -n "$no_load" && -n "$no_run" ]]; then
+    log "Nothing to do, terminating"
     exit 0
 fi
 
@@ -281,82 +273,58 @@ if [ -z "$no_drop_create" ]; then
     args=`$tpcc_helper \
         -w $warehouses \
         -n 1 \
-        get-load-args \
+        get-create-args \
         --node-num 1`
-    args="$args --create=true --load=false --execute=false"
 
     log "Running tpcc DDL on $host (host_num=1) with args: $args"
 
     ssh $host "cd $tpcc_path && ./scripts/tpcc.sh --memory $java_memory -c $config $args" \
-        < /dev/null > $results_dir/$host.$host_num.ddl.log 2>&1
+        < /dev/null > $results_dir/$host.1.ddl.log 2>&1
 
     if [ $? -ne 0 ]; then
-        log "Failed to execute DDL on host $host"
+        log "Failed to execute DDL on host $host, check the collected logs"
         exit 1
     fi
 fi
 
-exit 0
-
 if [ -z "$no_load" ]; then
-
-    args="$args --load=true --execute=false"
-
-    host=`head -1 $hosts_file`
 
     load_start=$SECONDS
     log "Loading data"
 
-    ssh $host "cd $tpcc_path && ./scripts/tpcc.sh --memory $java_memory -c config.1.xml $args" \
-        &> $results_dir/$host.load.log
-    if [ $? -ne 0 ]; then
-        echo "Failed to load data"
-        exit 1
-    fi
+    pids=()
+    host_num=1
+    for host in `cat $hosts_file`; do
+        config="config.$host_num.xml"
+        args=`$tpcc_helper \
+            -w $warehouses \
+            -n $host_count \
+            get-load-args \
+            --node-num $host_num`
+
+        log "Running tpcc initial load on $host (host_num=$host_num) with args: $args"
+
+        ssh $host "cd $tpcc_path && ./scripts/tpcc.sh --memory $java_memory -c $config $args" \
+            > $results_dir/$host.$host_num.load.log 2>&1 &
+        pids+=($!)
+
+        host_num=`expr $host_num + 1`
+    done
+
+    for pid in "${pids[@]}"; do
+        wait $pid
+        if [ $? -ne 0 ]; then
+            log "Failed to load data on some/all hosts"
+            exit 1
+        fi
+    done
 
     elapsed=$(( SECONDS - load_start ))
     log "Loading data done in $elapsed seconds"
 
-    if [ -z "$force_tpcc_ddl" ]; then
-        postload_start=$SECONDS
-        log "Postload started"
-        if [ -n "$max_maintenance_work_mem" ]; then
-            post_args="--max-maintenance-work-mem  $max_maintenance_work_mem"
-        fi
-        $tpcc_helper \
-            postload \
-            $postgres_host_args \
-            $post_args \
-            --tpcc-config $config_template
-
-        if [ $? -ne 0 ]; then
-            echo "Failed to alter tables and create indexes"
-            exit 1
-        fi
-
-        elapsed=$(( SECONDS - postload_start ))
-        log "Postload done in $elapsed seconds"
-
-        analyze_start=$SECONDS
-        log "Analyze started"
-        $tpcc_helper \
-            vacuum-analyze \
-            $postgres_host_args \
-            $post_args \
-            --tpcc-config $config_template
-
-        if [ $? -ne 0 ]; then
-            echo "Failed to analyze tables and create indexes"
-            exit 1
-        fi
-
-        elapsed=$(( SECONDS - analyze_start ))
-        log "Analyze done in $elapsed seconds"
-    fi
-
-    elapsed=$(( SECONDS - load_start ))
-    log "Full loading time is $elapsed seconds"
 fi
+
+exit 0
 
 if [ -n "$no_run" ]; then
     exit 0
@@ -407,7 +375,7 @@ log "Running benchmark done, copying results from the hosts"
 for host in `cat $hosts_file | sort -u`; do
     host_results="$results_dir/$host"
     cd "$host_results"
-    scp -r $host:$tpcc_path/results_* ./
+    scp -q -r $host:$tpcc_path/results_* ./
     cd -
 done
 

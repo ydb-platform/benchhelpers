@@ -24,6 +24,7 @@
         <work>
             <time>{execute_time_seconds}</time>
             <warmup>{warmup_time_seconds}</warmup>
+            <rate>unlimited</rate>
             <weights>45,43,4,4,4</weights>
         </work>
     </works>

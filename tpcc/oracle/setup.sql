@@ -8,3 +8,7 @@ alter user tpcc quota unlimited on tpcc1;
 grant connect, create session, create table to tpcc;
 -- optional, not needed for tpcc test
 grant select_catalog_role to tpcc;
+
+-- command examples:
+-- 1. just create the TPCC tables:
+--    ./run_oracle.sh --warehouses 100 --config sample.xml --hosts sample-hosts.txt --no-load --no-run
