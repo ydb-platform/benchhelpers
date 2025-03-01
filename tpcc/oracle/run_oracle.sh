@@ -289,6 +289,9 @@ fi
 
 if [ -z "$no_load" ]; then
 
+    log "Generating TPC-C configs and uploading to the hosts"
+    generate_configs $hosts_file
+
     load_start=$SECONDS
     log "Loading data"
 
@@ -305,7 +308,7 @@ if [ -z "$no_load" ]; then
         log "Running tpcc initial load on $host (host_num=$host_num) with args: $args"
 
         ssh $host "cd $tpcc_path && ./scripts/tpcc.sh --memory $java_memory -c $config $args" \
-            > $results_dir/$host.$host_num.load.log 2>&1 &
+            < /dev/null > $results_dir/$host.$host_num.load.log 2>&1 &
         pids+=($!)
 
         host_num=`expr $host_num + 1`
@@ -324,9 +327,8 @@ if [ -z "$no_load" ]; then
 
 fi
 
-exit 0
-
 if [ -n "$no_run" ]; then
+    log "Skipping benchmark execution"
     exit 0
 fi
 
@@ -342,7 +344,7 @@ for host in `cat $hosts_file`; do
     ssh $host "cd $tpcc_path && rm -rf results_*"
 done
 
-log "Running benchmark"
+log "Running the benchmark"
 
 pids=()
 host_num=1
