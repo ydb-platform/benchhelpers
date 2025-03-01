@@ -3,6 +3,7 @@
 ## Prerequisites
 
 The TPC-C setup involves the following components:
+
 1. Helper scripts located in this directory. Execute them on any random machine.
 2. TPC-C clients, which can be executed on the same machine as the helper scripts. However, for a reasonable PostgreSQL cluster, it is recommended to have multiple machines running the TPC-C client. Please, check hardware [requirements](https://github.com/ydb-platform/tpcc#hardware-requirements) for TPC-C clients.
 3. A running PostgreSQL cluster. While it can be on the same machines where the TPC-C client is executed, we strongly advise having separate machines for the PostgreSQL cluster.

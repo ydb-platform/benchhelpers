@@ -6,7 +6,7 @@ export LC_ALL=en_US.UTF-8
 execute_time_seconds=60
 warmup_time_seconds=60
 loader_threads=16
-java_memory="2G"
+java_memory="4G"
 log_dir="$HOME/tpcc_logs/oracle"
 tpcc_path="$HOME/benchbase-oracle"
 
@@ -110,11 +110,6 @@ if ! which parallel-ssh >/dev/null; then
     exit 1
 fi
 
-if ! which pg_config; then
-    echo "pg_config not found, you should install libpq-dev (e.g. sudo apt-get install libpq-dev)"
-    exit 1
-fi
-
 for module in numpy requests; do
     if ! python3 -c "import $module" 2>/dev/null; then
         echo "Python3 module $module not found, you should install it, execute: pip3 install $module)"
@@ -175,12 +170,6 @@ while [[ "$#" > 0 ]]; do case $1 in
     --force-load-port)
         force_load_port=$2
         shift;;
-    --max-maintenance-work-mem)
-        max_maintenance_work_mem=$2
-        shift;;
-    --unlogged-tables)
-        unlogged_tables=1
-        ;;
     --help|-h)
         usage
         exit;;
@@ -279,49 +268,42 @@ if [ ! -e $results_dir ]; then
     fi
 fi
 
-if [ -z "$no_load" ]; then
+if [ -z "$no_drop_create" ]; then
+    log "Drop and create tables"
+
     single_hosts=`mktemp`
     head -1 $hosts_file > $single_hosts
 
-    # hack to load everything from one instance
+    # ddl commands should run from single instance
     generate_configs $single_hosts
     rm -f $single_hosts
+
+    config="config.1.xml"
+    args=`$tpcc_helper \
+        -w $warehouses \
+        -n $host_count \
+        get-load-args \
+        --node-num 1`
+    args="$args --create=true --load=false --execute=false"
+
+    log "Running tpcc DDL on $host (host_num=1) with args: $args"
+
+    ssh $host "cd $tpcc_path && ./scripts/tpcc.sh --memory $java_memory -c $config $args" \
+        > $results_dir/$host.$host_num.ddl.log 2>&1
+
+    if [ $? -ne 0 ]; then
+        log "Failed to execute DDL on some/all hosts"
+        exit 1
+    fi
+fi
+
+exit 0
+
+if [ -z "$no_load" ]; then
 
     args="$args --load=true --execute=false"
 
     host=`head -1 $hosts_file`
-
-    if [ -n "$force_load_host" ]; then
-        postgres_host_args="$postgres_host_args --force-host $force_load_host"
-    fi
-
-    if [ -n "$force_load_port" ]; then
-        postgres_host_args="$postgres_host_args --force-port $force_load_port"
-    fi
-
-    if [ -z "$no_drop_create" ]; then
-        log "Drop and create tables"
-
-        if [ -z "$force_tpcc_ddl" ]; then
-            if [[ -n "$unlogged_tables" ]]; then
-                create_args="$create_args --unlogged-tables"
-            fi
-            $tpcc_helper \
-                create \
-                $postgres_host_args \
-                $create_args \
-                --tpcc-config $config_template
-
-            if [ $? -ne 0 ]; then
-                echo "Failed to create tables"
-                exit 1
-            fi
-        else
-            args="$args --create=true"
-        fi
-    else
-        args="$args --create=false"
-    fi
 
     load_start=$SECONDS
     log "Loading data"

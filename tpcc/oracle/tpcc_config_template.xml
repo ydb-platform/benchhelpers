@@ -2,15 +2,16 @@
 <parameters>
 
     <!-- Connection details -->
-    <type>POSTGRES</type>
-    <driver>org.postgresql.Driver</driver>
-    <url>jdbc:postgresql://PUT_YOUR_CONNECTION_STRING_HERE?targetServerType=master&amp;ssl=true&amp;sslmode=verify-full&amp;ApplicationName=tpcc&amp;reWriteBatchedInserts=true</url>
+    <type>ORACLE</type>
+    <driver>oracle.jdbc.OracleDriver</driver>
+    <url>jdbc:oracle:thin:@localhost:1521/xepdb1</url>
     <username>PUT_USERNAME_HERE</username>
     <password>PUT_PASSWORD_HERE</password>
 
     <maxConnections>{max_connections}</maxConnections>
-    <newConnectionPerTxn>true</newConnectionPerTxn>
-    <isolation>TRANSACTION_REPEATABLE_READ</isolation>
+
+    <!-- TRANSACTION_SERIALIZABLE/TRANSACTION_READ_COMMITTED -->
+    <isolation>TRANSACTION_SERIALIZABLE</isolation>
 
     <!-- Scale factor is the number of warehouses in TPCC -->
     <scalefactor>{warehouse}</scalefactor>
