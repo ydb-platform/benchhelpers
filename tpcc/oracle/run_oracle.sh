@@ -42,12 +42,13 @@ kill_tpcc() {
         return
     fi
 
-    unique_hosts=`mktemp`
-    sort -u $hosts_file > $unique_hosts
+    cat $hosts_file | sort -u | while read hname; do
+      ssh $hname 'pkill -9 -f "^/bin/bash.*tpcc.sh"; pkill -9 -f "^java.*benchbase.jar -b tpcc"' \
+         < /dev/null &
+    done
 
-    parallel-ssh -h $unique_hosts -i 'pkill -9 -f "^/bin/bash.*tpcc.sh"; pkill -9 -f "^java.*benchbase.jar -b tpcc"' &>/dev/null
-
-    rm -f $unique_hosts
+    wait
+    log "Killer done"
 }
 
 cleanup() {
@@ -105,11 +106,6 @@ generate_configs() {
 
 trap cleanup SIGINT SIGTERM
 
-if ! which parallel-ssh >/dev/null; then
-    echo "parallel-ssh not found, you should install pssh"
-    exit 1
-fi
-
 for module in numpy requests; do
     if ! python3 -c "import $module" 2>/dev/null; then
         echo "Python3 module $module not found, you should install it, execute: pip3 install $module)"
@@ -164,12 +160,6 @@ while [[ "$#" > 0 ]]; do case $1 in
     --force-tpcc-ddl)
         force_tpcc_ddl=1
         ;;
-    --force-load-host)
-        force_load_host=$2
-        shift;;
-    --force-load-port)
-        force_load_port=$2
-        shift;;
     --help|-h)
         usage
         exit;;
@@ -231,12 +221,19 @@ fi
 host_count=`cat $hosts_file | wc -l | awk '{print $1}'`
 
 tpcc_script="$tpcc_path/scripts/tpcc.sh"
-parallel-ssh -h $hosts_file -i 'test -e $tpcc_script || (echo tpcc.sh does not exist && exit 1)'
-if [ $? -ne 0 ]; then
-    echo "$tpcc_script not found on some/all hosts, install benchbase (check our build and README)"
-    rm -f $unique_hosts
-    exit 1
-fi
+pids=()
+cat $hosts_file | sort -u | while read hname; do
+    ssh -h $hosts_file "test -e $tpcc_script || (echo 'tpcc.sh does not exist' && exit 1)" \
+      < /dev/null > /dev/null 2>&1 &
+    pids+=($!)
+done
+for pid in "${pids[@]}"; do
+    wait $pid
+    if [ $? -ne 0 ]; then
+        echo "$tpcc_script not found on some/all hosts, install benchbase (check our build and README)"
+        exit 1
+    fi
+done
 
 kill_tpcc
 
@@ -271,8 +268,10 @@ fi
 if [ -z "$no_drop_create" ]; then
     log "Drop and create tables"
 
+    host=`head -1 $hosts_file`
+
     single_hosts=`mktemp`
-    head -1 $hosts_file > $single_hosts
+    echo "$host" > $single_hosts
 
     # ddl commands should run from single instance
     generate_configs $single_hosts
@@ -281,7 +280,7 @@ if [ -z "$no_drop_create" ]; then
     config="config.1.xml"
     args=`$tpcc_helper \
         -w $warehouses \
-        -n $host_count \
+        -n 1 \
         get-load-args \
         --node-num 1`
     args="$args --create=true --load=false --execute=false"
@@ -289,10 +288,10 @@ if [ -z "$no_drop_create" ]; then
     log "Running tpcc DDL on $host (host_num=1) with args: $args"
 
     ssh $host "cd $tpcc_path && ./scripts/tpcc.sh --memory $java_memory -c $config $args" \
-        > $results_dir/$host.$host_num.ddl.log 2>&1
+        < /dev/null > $results_dir/$host.$host_num.ddl.log 2>&1
 
     if [ $? -ne 0 ]; then
-        log "Failed to execute DDL on some/all hosts"
+        log "Failed to execute DDL on host $host"
         exit 1
     fi
 fi
