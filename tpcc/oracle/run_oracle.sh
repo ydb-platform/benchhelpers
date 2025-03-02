@@ -105,13 +105,6 @@ generate_configs() {
 
 trap cleanup SIGINT SIGTERM
 
-for module in numpy requests; do
-    if ! python3 -c "import $module" 2>/dev/null; then
-        echo "Python3 module $module not found, you should install it, execute: pip3 install $module)"
-        exit 1
-    fi
-done
-
 while [[ "$#" > 0 ]]; do case $1 in
     --warehouses)
         warehouses=$2
@@ -203,7 +196,7 @@ fi
 this_dir=`dirname $0`
 this_path=`readlink -f $this_dir`
 tpcc_helper="$this_path/tpcc_oracle_helper.py"
-tpcc_ydb_helper="$this_path/../ydb/tpcc_helper.py"
+aggregate_results="$this_path/../ydb/aggregate_results.py"
 
 cd $this_path
 if [[ $? -ne 0 ]]; then
@@ -228,7 +221,7 @@ fi
 
 kill_tpcc
 
-if [[ -n "$no_load" && -n "$no_run" ]]; then
+if [[ -n "$no_load" && -n "$no_run" && -n "$no_drop_create" ]]; then
     log "Nothing to do, terminating"
     exit 0
 fi
@@ -276,7 +269,7 @@ if [ -z "$no_drop_create" ]; then
         get-create-args \
         --node-num 1`
 
-    log "Running tpcc DDL on $host (host_num=1) with args: $args"
+    log "Running TPC-C DDL on $host (host_num=1) with args: $args"
 
     ssh $host "cd $tpcc_path && ./scripts/tpcc.sh --memory $java_memory -c $config $args" \
         < /dev/null > $results_dir/$host.1.ddl.log 2>&1
@@ -332,12 +325,15 @@ if [ -n "$no_run" ]; then
     exit 0
 fi
 
+if [ -n "$no_load" ]; then
+    # Config files are probably missing or incorrect, as load phase has not been run
+    log "Generating TPC-C configs and uploading to the hosts"
+    generate_configs $hosts_file
+fi
+
 for host in `cat $hosts_file`; do
     mkdir -p "$results_dir/$host"
 done
-
-log "Generating TPC-C configs and uploading to the hosts"
-generate_configs $hosts_file
 
 log "Cleaning up previous results"
 for host in `cat $hosts_file`; do
@@ -383,4 +379,4 @@ done
 
 log "Aggregating total result"
 
-$tpcc_ydb_helper aggregate $results_dir
+$aggregate_results aggregate $results_dir
