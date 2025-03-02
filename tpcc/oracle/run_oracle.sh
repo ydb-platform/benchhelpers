@@ -262,6 +262,9 @@ if [ -z "$no_drop_create" ]; then
     generate_configs $single_hosts
     rm -f $single_hosts
 
+    # Copy the DDL script to the target host
+    scp -q ddl-oracle.sql "$host":"$tpcc_path"/"tpcc-recreate.sql"
+
     config="config.1.xml"
     args=`$tpcc_helper \
         -w $warehouses \

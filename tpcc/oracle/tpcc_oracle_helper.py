@@ -38,8 +38,6 @@ class HostConfig:
 
 class GenerateConfig:
     def run(self, args):
-        host_to_monport = collections.defaultdict(lambda: 8080)
-
         with open(args.hosts_file) as f:
             num_nodes = 0
             for line in f:
@@ -62,8 +60,8 @@ class GenerateConfig:
                     "execute_time_seconds": args.execute_time,
                     "warmup_time_seconds": args.warmup_time,
                     "max_connections": args.max_connections,
-                    "mport": host_to_monport[host],
                     "mname": f"node_{node_num}",
+                    "ddl_path": "tpcc-recreate.sql",
                 }
 
                 host_config = HostConfig(
@@ -75,8 +73,6 @@ class GenerateConfig:
                 output = f"config.{node_num}.xml"
                 with open(output, "w") as f:
                     f.write(config)
-
-                host_to_monport[host] = host_to_monport[host] + 1
 
 class GetCreateArgs:
     def run(self, args):
@@ -120,19 +116,14 @@ def main():
     generate_config_parser = subparsers.add_parser("generate-configs")
     generate_config_parser.add_argument("--hosts", dest="hosts_file", required=True, help="File with hosts")
     generate_config_parser.add_argument("-i", "--input", dest="input", required=True, help="Input template file")
-
     generate_config_parser.add_argument("--loader-threads", dest="loader_threads",
                                         required=True, type=int, help="Loader threads per host")
-
     generate_config_parser.add_argument("--execute-time", dest="execute_time",
                                         required=True, help="Execute time in seconds")
-
     generate_config_parser.add_argument("--warmup-time", dest="warmup_time",
                                         required=True, help="Warmup time in seconds")
-
     generate_config_parser.add_argument("--max-connections", dest="max_connections",
                                         required=True, help="Max connections per TPC-C instance")
-
     generate_config_parser.set_defaults(func=GenerateConfig().run)
 
     load_args_parser = subparsers.add_parser('get-create-args')

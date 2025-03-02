@@ -20,6 +20,8 @@
     <loaderThreads>{loader_threads}</loaderThreads>
     <batchsize>1000</batchsize>
 
+    <ddlpath>{ddl_path}</ddlpath>
+
     <works>
         <work>
             <time>{execute_time_seconds}</time>
