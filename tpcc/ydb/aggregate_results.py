@@ -313,23 +313,11 @@ Result: {self.name}
 
         return result
 
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-e", "--endpoint", help="YDB endpoint")
-    parser.add_argument("-d", "--database", help="YDB database")
-    parser.add_argument("--token", help="YDB token file", required=False)
-    parser.add_argument("-w", "--warehouses", dest="warehouse_count",
-                        type=int, default=10,
-                        help="Number of warehouses")
-    parser.add_argument("-n", "--nodes", dest="node_count",
-                        type=int, default=1,
-                        help="Number of TPCC nodes")
-
-    subparsers = parser.add_subparsers(dest='action', help="Action to perform")
-
-    aggregate_parser = subparsers.add_parser('aggregate')
-    aggregate_parser.add_argument('results_dir', help="Directory with results")
-    aggregate_parser.set_defaults(func=Aggregator().run)
+    parser.add_argument('results_dir', help="Directory with results")
+    parser.set_defaults(func=Aggregator().run)
 
     args = parser.parse_args()
     args.func(args)

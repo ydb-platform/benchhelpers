@@ -379,4 +379,4 @@ done
 
 log "Aggregating total result"
 
-$aggregate_results aggregate $results_dir
+$aggregate_results $results_dir
