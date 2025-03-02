@@ -340,7 +340,7 @@ for host in `cat $hosts_file`; do
     ssh $host "cd $tpcc_path && rm -rf results_*"
 done
 
-log "Running the benchmark"
+log "Running the benchmark, warmup $warmup_time_seconds seconds, execution $execute_time_seconds seconds"
 
 pids=()
 host_num=1
