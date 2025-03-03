@@ -11,7 +11,7 @@
     <maxConnections>{max_connections}</maxConnections>
 
     <!-- TRANSACTION_SERIALIZABLE/TRANSACTION_READ_COMMITTED -->
-    <isolation>TRANSACTION_SERIALIZABLE</isolation>
+    <isolation>TRANSACTION_READ_COMMITTED</isolation>
 
     <!-- Scale factor is the number of warehouses in TPCC -->
     <scalefactor>{warehouse}</scalefactor>
