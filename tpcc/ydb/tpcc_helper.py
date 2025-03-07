@@ -6,7 +6,6 @@ import collections
 import concurrent.futures
 import datetime
 import json
-import numpy as np
 import os
 import re
 import subprocess
