@@ -487,6 +487,11 @@ struct PacketParser {
         }
 
         void print(std::ostream& os, long top_n) const {
+            if (FinishedTransactions.empty()) {
+                os << "No transactions finished";
+                return;
+            }
+
             os << "Processed " << RequestResponsesProcessed << " requests and responses, skipped "
                << RequestResponsesSkipped << std::endl
                << "Total transactions aborted: " << TransactionsAborted << std::endl
