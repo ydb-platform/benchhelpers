@@ -10,7 +10,7 @@ frequency=199
 
 
 usage() {
-    echo "Usage: $0 <host> [-t <duration>] [-f <frequency>] [--only-storage] [-o <output file>]"
+    echo "Usage: $0 <host> [-t <duration>] [-f <frequency>] [--only-storage|--only-compute] [-o <output file>]"
 }
 
 while [[ "$#" > 0 ]]; do case $1 in
@@ -25,6 +25,8 @@ while [[ "$#" > 0 ]]; do case $1 in
         shift;;
     --only-storage)
         only_storage=1;;
+    --only-compute)
+        only_compute=1;;
     -h|--help)
         usage
         exit 0;;
@@ -70,6 +72,8 @@ flamegraph_script="$flamegraph_dir/flamegraph.pl"
 
 if [[ -n "$only_storage" ]]; then
     perf_record_cmd="sudo perf record -F $frequency -o $perf_data_file -a -g -p \`pgrep -f ydbd.*static | head -1\` -- sleep $duration"
+elif [[ -n "$only_compute" ]]; then
+    perf_record_cmd="sudo perf record -F $frequency -o $perf_data_file -a -g -p \`pgrep -f ydbd.*tenant | head -1\` -- sleep $duration"
 else
     perf_record_cmd="sudo perf record -F $frequency -o $perf_data_file -a -g -- sleep $duration"
 fi
@@ -93,4 +97,4 @@ fi
 
 ssh $host "sudo rm -f $perf_data_file"
 
-echo "Flamegraph: `hostname`:${output}"
+echo "Flamegraph: `hostname`:`pwd`/${output}"
