@@ -188,6 +188,7 @@ fi
 
 host_count=`wc -l $hosts_file | awk '{print $1}'`
 warehouses_per_host=`expr $warehouses / $host_count`
+remaining_warehouses=$((warehouses % host_count))
 
 parallel-ssh -h $unique_hosts -i "test -e $tpcc_path/tpccbenchmark || (echo $tpcc_path/tpccbenchmark does not exist && exit 1)"
 if [ $? -ne 0 ]; then
@@ -233,7 +234,13 @@ if [ -z "$no_load" ]; then
     start_warehouse_id=1
 
     for host in `cat $hosts_file`; do
-        cmd="./tpccbenchmark --load=true --nodes=$yb_nodes --warehouses $warehouses_per_host \
+        if [ $host_num -eq $host_count ]; then
+            warehouses_for_host=$((warehouses_per_host + remaining_warehouses))
+        else
+            warehouses_for_host=$warehouses_per_host
+        fi
+
+        cmd="./tpccbenchmark --load=true --nodes=$yb_nodes --warehouses $warehouses_for_host \
             --start-warehouse-id $start_warehouse_id --total-warehouses=$warehouses \
             --loaderthreads $loader_threads"
 
@@ -244,7 +251,7 @@ if [ -z "$no_load" ]; then
         pids+=($!)
 
         host_num=`expr $host_num + 1`
-        start_warehouse_id=`expr $start_warehouse_id + $warehouses_per_host`
+        start_warehouse_id=`expr $start_warehouse_id + $warehouses_for_host`
     done
 
     for pid in "${pids[@]}"; do
@@ -343,9 +350,15 @@ single_instance_warmup_time_seconds=`expr $warmup_time_seconds / $host_count`
 sessions_per_host=`expr $max_sessions / $host_count`
 
 for host in `cat $hosts_file`; do
+    if [ $host_num -eq $host_count ]; then
+        warehouses_for_host=$((warehouses_per_host + remaining_warehouses))
+    else
+        warehouses_for_host=$warehouses_per_host
+    fi
+
     cmd="./tpccbenchmark --execute=true \
         --nodes=$yb_nodes \
-        --warehouses $warehouses_per_host \
+        --warehouses $warehouses_for_host \
         --num-connections $sessions_per_host\
         --start-warehouse-id $start_warehouse_id \
         --total-warehouses=$warehouses \
@@ -359,7 +372,7 @@ for host in `cat $hosts_file`; do
     pids+=($!)
 
     host_num=`expr $host_num + 1`
-    start_warehouse_id=`expr $start_warehouse_id + $warehouses_per_host`
+    start_warehouse_id=`expr $start_warehouse_id + $warehouses_for_host`
     current_warmup_time_seconds=`expr $current_warmup_time_seconds - $single_instance_warmup_time_seconds`
     current_delay_seconds=`expr $current_delay_seconds + $single_instance_warmup_time_seconds`
 done
