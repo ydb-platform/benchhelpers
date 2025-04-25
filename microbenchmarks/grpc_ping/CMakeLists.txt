@@ -79,3 +79,25 @@ target_link_libraries(grpc_ping_client PRIVATE
     pthread
     dl
 )
+
+add_executable(grpc_ping_server
+    grpc_ping_server.cpp
+    ${PROTO_GEN_DIR}/debug.pb.cc
+    ${PROTO_GEN_DIR}/debug.grpc.pb.cc
+)
+
+add_dependencies(grpc_ping_server proto_gen)
+
+target_include_directories(grpc_ping_server PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${Protobuf_INCLUDE_DIRS}
+    ${GRPC_INCLUDE_DIRS}
+    ${PROTO_GEN_DIR}
+)
+
+target_link_libraries(grpc_ping_server PRIVATE
+    protobuf::libprotobuf
+    ${GRPC_LIBRARIES}
+    pthread
+    dl
+)
