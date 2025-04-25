@@ -11,93 +11,118 @@ set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g")
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Protobuf REQUIRED)
+include(FetchContent)
 
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(GRPC REQUIRED grpc++ grpc)
+# 1. fetch GRPC (and protobuf as well)
 
-# Find the gRPC plugin
-find_program(GRPC_CPP_PLUGIN grpc_cpp_plugin
-    HINTS /usr/bin
-    DOC "The gRPC C++ plugin"
+set(gRPC_BUILD_TESTS OFF)
+set(gRPC_BUILD_GRPC_CPP_PLUGIN ON)
+set(protobuf_INSTALL OFF CACHE INTERNAL "")
+
+FetchContent_Declare(
+    gRPC
+    GIT_REPOSITORY https://github.com/grpc/grpc
+    GIT_TAG v1.54.0
+    GIT_SUBMODULES "third_party/protobuf"
 )
 
-if(NOT GRPC_CPP_PLUGIN)
-    message(FATAL_ERROR "gRPC C++ plugin not found")
-endif()
+FetchContent_MakeAvailable(gRPC)
+
+add_library(gRPC::grpc++ ALIAS grpc++)
+add_executable(gRPC::grpc_cpp_plugin ALIAS grpc_cpp_plugin)
+
+# 2. generate proto stuff
 
 set(PROTOS_PATH ${CMAKE_CURRENT_SOURCE_DIR}/proto)
 set(PROTO_FILES ${PROTOS_PATH}/debug.proto)
+set(PROTO_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/proto)
 
-# Create build directory for generated proto files
-set(PROTO_GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/proto)
-file(MAKE_DIRECTORY ${PROTO_GEN_DIR})
+file(MAKE_DIRECTORY ${PROTO_BINARY_DIR})
 
 add_custom_command(
     OUTPUT
-        ${PROTO_GEN_DIR}/debug.pb.cc
-        ${PROTO_GEN_DIR}/debug.pb.h
-        ${PROTO_GEN_DIR}/debug.grpc.pb.cc
-        ${PROTO_GEN_DIR}/debug.grpc.pb.h
-    COMMAND protoc
+        ${PROTO_BINARY_DIR}/debug.pb.cc
+        ${PROTO_BINARY_DIR}/debug.pb.h
+        ${PROTO_BINARY_DIR}/debug.grpc.pb.cc
+        ${PROTO_BINARY_DIR}/debug.grpc.pb.h
+    COMMAND protobuf::protoc
     ARGS
-        --grpc_out=${PROTO_GEN_DIR}
-        --cpp_out=${PROTO_GEN_DIR}
-        -I ${PROTOS_PATH}
-        --plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN}
+        --proto_path=${PROTOS_PATH}
+        --cpp_out=${PROTO_BINARY_DIR}
+        --grpc_out=${PROTO_BINARY_DIR}
+        --plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>
         ${PROTO_FILES}
-    DEPENDS ${PROTO_FILES}
-    COMMENT "Generating gRPC and Protobuf files"
+    DEPENDS
+        ${PROTO_FILES}
+        protobuf::protoc
+        gRPC::grpc_cpp_plugin
+    VERBATIM
 )
 
-add_custom_target(proto_gen
+# generate a dummy target to trigger generation
+add_custom_target(proto-generated
     DEPENDS
-        ${PROTO_GEN_DIR}/debug.pb.cc
-        ${PROTO_GEN_DIR}/debug.pb.h
-        ${PROTO_GEN_DIR}/debug.grpc.pb.cc
-        ${PROTO_GEN_DIR}/debug.grpc.pb.h
+        ${PROTO_BINARY_DIR}/debug.pb.cc
+        ${PROTO_BINARY_DIR}/debug.pb.h
+        ${PROTO_BINARY_DIR}/debug.grpc.pb.cc
+        ${PROTO_BINARY_DIR}/debug.grpc.pb.h
 )
+
+# create proto object library
+add_library(proto-objects OBJECT
+    ${PROTO_BINARY_DIR}/debug.pb.cc
+    ${PROTO_BINARY_DIR}/debug.grpc.pb.cc
+)
+
+add_dependencies(proto-objects proto-generated)
+
+target_include_directories(proto-objects PUBLIC
+    ${PROTO_BINARY_DIR}
+)
+
+target_link_libraries(proto-objects PUBLIC
+    protobuf::libprotobuf
+    gRPC::grpc++
+)
+
+# 3. grpc_ping_client
 
 add_executable(grpc_ping_client
     grpc_ping_client.cpp
-    ${PROTO_GEN_DIR}/debug.pb.cc
-    ${PROTO_GEN_DIR}/debug.grpc.pb.cc
 )
 
-add_dependencies(grpc_ping_client proto_gen)
+add_dependencies(grpc_ping_client proto-generated)
+
+target_link_libraries(grpc_ping_client PRIVATE
+    proto-objects
+    protobuf::libprotobuf
+    gRPC::grpc++
+    pthread
+    dl
+)
 
 target_include_directories(grpc_ping_client PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${Protobuf_INCLUDE_DIRS}
-    ${GRPC_INCLUDE_DIRS}
-    ${PROTO_GEN_DIR}
+    ${PROTO_BINARY_DIR}
 )
 
-target_link_libraries(grpc_ping_client PRIVATE
-    protobuf::libprotobuf
-    ${GRPC_LIBRARIES}
-    pthread
-    dl
-)
+# 4. grpc_ping_server
 
 add_executable(grpc_ping_server
     grpc_ping_server.cpp
-    ${PROTO_GEN_DIR}/debug.pb.cc
-    ${PROTO_GEN_DIR}/debug.grpc.pb.cc
 )
 
-add_dependencies(grpc_ping_server proto_gen)
+add_dependencies(grpc_ping_server proto-generated)
+
+target_link_libraries(grpc_ping_server PRIVATE
+    proto-objects
+    protobuf::libprotobuf
+    gRPC::grpc++
+    pthread
+    dl
+)
 
 target_include_directories(grpc_ping_server PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${Protobuf_INCLUDE_DIRS}
-    ${GRPC_INCLUDE_DIRS}
-    ${PROTO_GEN_DIR}
-)
-
-target_link_libraries(grpc_ping_server PRIVATE
-    protobuf::libprotobuf
-    ${GRPC_LIBRARIES}
-    pthread
-    dl
+    ${PROTO_BINARY_DIR}
 )
