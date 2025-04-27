@@ -52,7 +52,7 @@ public:
 
         server_ = builder.BuildAndStart();
         std::cout << "Server listening on " << address_ << std::endl;
-        std::cout << "Configuration: " << num_cqs_ << " CQs, " 
+        std::cout << "Configuration: " << num_cqs_ << " CQs, "
                   << workers_per_cq_ << " workers per CQ, "
                   << callbacks_per_cq_ << " callbacks per CQ" << std::endl;
 
@@ -184,4 +184,4 @@ int main(int argc, char** argv) {
     server.Run();
 
     return 0;
-} 
+}

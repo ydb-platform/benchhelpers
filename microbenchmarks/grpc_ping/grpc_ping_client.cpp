@@ -31,7 +31,7 @@ public:
         ClientContext context;
 
         // Set a timeout of 1 second
-        std::chrono::system_clock::time_point deadline = 
+        std::chrono::system_clock::time_point deadline =
             std::chrono::system_clock::now() + std::chrono::seconds(1);
         context.set_deadline(deadline);
 
@@ -51,17 +51,17 @@ public:
         auto end = std::chrono::high_resolution_clock::now();
 
         if (!status.ok()) {
-            std::cerr << "RPC failed: " 
-                      << "code=" << status.error_code() 
+            std::cerr << "RPC failed: "
+                      << "code=" << status.error_code()
                       << " message=\"" << status.error_message() << "\""
                       << " details=\"" << status.error_details() << "\""
                       << std::endl;
-            
+
             std::cerr << "Channel state: " << channel_->GetState(false) << std::endl;
             std::cerr << "Service name: Ydb.Debug.V1.DebugService" << std::endl;
             std::cerr << "Method name: PingPlainGrpc" << std::endl;
             std::cerr << "Full method path: /Ydb.Debug.V1.DebugService/PingPlainGrpc" << std::endl;
-            
+
             if (status.error_code() == grpc::StatusCode::DEADLINE_EXCEEDED) {
                 std::cerr << "Error: Request timed out after 1 second" << std::endl;
             } else if (status.error_code() == grpc::StatusCode::UNIMPLEMENTED) {
@@ -83,10 +83,20 @@ struct alignas(64) PerThreadResult {
     std::vector<uint64_t> latencies;
 };
 
+struct BenchmarkResult {
+    int inflight;
+    double throughput;
+    uint64_t p50;
+    uint64_t p90;
+    uint64_t p99;
+};
+
 void Worker(std::string host, int port, std::stop_token stop_token, std::atomic<bool>& startMeasure, PerThreadResult& result) {
     std::string target = host + ":" + std::to_string(port);
-    
-    auto channel = grpc::CreateChannel(target, grpc::InsecureChannelCredentials());
+
+    grpc::ChannelArguments args;
+    //args.SetInt("grpc.use_local_subchannel_pool", 1);
+    auto channel = grpc::CreateCustomChannel(target, grpc::InsecureChannelCredentials(), args);
     DebugServiceClient client(channel);
 
     // warmup
@@ -125,6 +135,28 @@ void PrintStats(const std::vector<uint64_t>& latencies, int total_requests, int 
     std::cout << "  99th: " << percentile(0.99) << std::endl;
 }
 
+BenchmarkResult CalculateStats(const std::vector<uint64_t>& latencies, int total_requests, int interval_seconds) {
+    BenchmarkResult result;
+    if (latencies.empty()) {
+        return result;
+    }
+
+    std::vector<uint64_t> sorted_latencies = latencies;
+    std::sort(sorted_latencies.begin(), sorted_latencies.end());
+
+    auto percentile = [&](double p) -> uint64_t {
+        size_t index = static_cast<size_t>(p * sorted_latencies.size());
+        return sorted_latencies[index];
+    };
+
+    result.throughput = static_cast<double>(total_requests) / interval_seconds;
+    result.p50 = percentile(0.50);
+    result.p90 = percentile(0.90);
+    result.p99 = percentile(0.99);
+
+    return result;
+}
+
 void PrintUsage(const char* program_name) {
     std::cout << "Usage: " << program_name << " [options]" << std::endl;
     std::cout << "Options:" << std::endl;
@@ -132,48 +164,25 @@ void PrintUsage(const char* program_name) {
     std::cout << "  --host <hostname>    Server hostname (default: localhost)" << std::endl;
     std::cout << "  --port <port>        Server port (default: 2137)" << std::endl;
     std::cout << "  --inflight <N>       Number of concurrent requests (default: 32)" << std::endl;
+    std::cout << "  --min-inflight <N>   Minimum number of concurrent requests (default: 1)" << std::endl;
+    std::cout << "  --max-inflight <N>   Maximum number of concurrent requests (default: 32)" << std::endl;
     std::cout << "  --interval <seconds> Benchmark duration in seconds (default: 10)" << std::endl;
     std::cout << "  --warmup <seconds>   Warmup duration in seconds (default: 1)" << std::endl;
+    std::cout << "  --with-csv           Output results in CSV format" << std::endl;
 }
 
-int main(int argc, char** argv) {
-    std::string host = "localhost";
-    int port = 2137;
-    int inflight = 32;
-    int interval_seconds = 10;
-    int warmup_seconds = 1;
-
-    for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
-        if (arg == "-h" || arg == "--help") {
-            PrintUsage(argv[0]);
-            return 0;
-        } else if (arg == "--host" && i + 1 < argc) {
-            host = argv[++i];
-        } else if (arg == "--port" && i + 1 < argc) {
-            port = std::stoi(argv[++i]);
-        } else if (arg == "--inflight" && i + 1 < argc) {
-            inflight = std::stoi(argv[++i]);
-        } else if (arg == "--interval" && i + 1 < argc) {
-            interval_seconds = std::stoi(argv[++i]);
-        } else if (arg == "--warmup" && i + 1 < argc) {
-            warmup_seconds = std::stoi(argv[++i]);
-        } else {
-            std::cerr << "Unknown option: " << arg << std::endl;
-            PrintUsage(argv[0]);
-            return 1;
-        }
-    }
-
+BenchmarkResult RunBenchmark(const std::string& host, int port, int inflight, int interval_seconds, int warmup_seconds) {
     std::vector<std::jthread> threads;
     std::vector<PerThreadResult> thread_results(inflight);
     std::stop_source stop_source;
     std::atomic<bool> startMeasure{false};
 
+    std::cout << "\nRunning benchmark with " << inflight << " concurrent requests..." << std::endl;
+
     // Start worker threads
     for (int i = 0; i < inflight; ++i) {
-        threads.emplace_back(Worker, 
-            std::string(host), // Pass by value
+        threads.emplace_back(Worker,
+            std::string(host),
             port,
             stop_source.get_token(),
             std::ref(startMeasure),
@@ -207,6 +216,126 @@ int main(int argc, char** argv) {
     std::cout << "Total requests: " << all_latencies.size() << std::endl;
     std::cout << "Total time: " << total_time << " us" << std::endl;
     PrintStats(all_latencies, all_latencies.size(), interval_seconds);
+
+    BenchmarkResult result = CalculateStats(all_latencies, all_latencies.size(), interval_seconds);
+    result.inflight = inflight;
+    return result;
+}
+
+void PrintResultsTable(const std::vector<BenchmarkResult>& results) {
+    if (results.empty()) {
+        return;
+    }
+
+    // Calculate column widths
+    size_t inflight_width = std::max(strlen("Inflight"),
+        std::to_string(results.back().inflight).length());
+    size_t throughput_width = std::max(strlen("Throughput (req/s)"),
+        std::to_string(static_cast<int>(results.back().throughput)).length() + 3); // +3 for decimal places
+    size_t p50_width = std::max(strlen("P50 (us)"),
+        std::to_string(results.back().p50).length());
+    size_t p90_width = std::max(strlen("P90 (us)"),
+        std::to_string(results.back().p90).length());
+    size_t p99_width = std::max(strlen("P99 (us)"),
+        std::to_string(results.back().p99).length());
+
+    // Print header
+    std::cout << "\nBenchmark Results Summary:" << std::endl;
+    std::cout << std::setw(inflight_width) << "Inflight" << " | "
+              << std::setw(throughput_width) << "Throughput (req/s)" << " | "
+              << std::setw(p50_width) << "P50 (us)" << " | "
+              << std::setw(p90_width) << "P90 (us)" << " | "
+              << std::setw(p99_width) << "P99 (us)" << std::endl;
+
+    // Print separator line
+    std::cout << std::string(inflight_width, '-') << "-+-"
+              << std::string(throughput_width, '-') << "-+-"
+              << std::string(p50_width, '-') << "-+-"
+              << std::string(p90_width, '-') << "-+-"
+              << std::string(p99_width, '-') << std::endl;
+
+    // Print data rows
+    for (const auto& result : results) {
+        std::cout << std::setw(inflight_width) << result.inflight << " | "
+                  << std::setw(throughput_width) << std::fixed << std::setprecision(2) << result.throughput << " | "
+                  << std::setw(p50_width) << result.p50 << " | "
+                  << std::setw(p90_width) << result.p90 << " | "
+                  << std::setw(p99_width) << result.p99 << std::endl;
+    }
+}
+
+void PrintResultsCSV(const std::vector<BenchmarkResult>& results) {
+    std::cout << "\nCSV Results:" << std::endl;
+    std::cout << "inflight,throughput,p50,p90,p99" << std::endl;
+    for (const auto& result : results) {
+        std::cout << std::fixed << std::setprecision(2)
+                  << result.inflight << ","
+                  << result.throughput << ","
+                  << result.p50 << ","
+                  << result.p90 << ","
+                  << result.p99 << std::endl;
+    }
+}
+
+int main(int argc, char** argv) {
+    std::string host = "localhost";
+    int port = 2137;
+    int min_inflight = 1;
+    int max_inflight = 32;
+    int inflight = 32;  // Shortcut for single inflight test
+    int interval_seconds = 10;
+    int warmup_seconds = 1;
+    bool use_range = false;
+    bool with_csv = false;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "-h" || arg == "--help") {
+            PrintUsage(argv[0]);
+            return 0;
+        } else if (arg == "--host" && i + 1 < argc) {
+            host = argv[++i];
+        } else if (arg == "--port" && i + 1 < argc) {
+            port = std::stoi(argv[++i]);
+        } else if (arg == "--inflight" && i + 1 < argc) {
+            inflight = std::stoi(argv[++i]);
+        } else if (arg == "--min-inflight" && i + 1 < argc) {
+            min_inflight = std::stoi(argv[++i]);
+            use_range = true;
+        } else if (arg == "--max-inflight" && i + 1 < argc) {
+            max_inflight = std::stoi(argv[++i]);
+            use_range = true;
+        } else if (arg == "--interval" && i + 1 < argc) {
+            interval_seconds = std::stoi(argv[++i]);
+        } else if (arg == "--warmup" && i + 1 < argc) {
+            warmup_seconds = std::stoi(argv[++i]);
+        } else if (arg == "--with-csv") {
+            with_csv = true;
+        } else {
+            std::cerr << "Unknown option: " << arg << std::endl;
+            PrintUsage(argv[0]);
+            return 1;
+        }
+    }
+
+    std::vector<BenchmarkResult> results;
+
+    if (use_range) {
+        if (min_inflight > max_inflight) {
+            std::cerr << "Error: min-inflight cannot be greater than max-inflight" << std::endl;
+            return 1;
+        }
+        for (int current_inflight = min_inflight; current_inflight <= max_inflight; ++current_inflight) {
+            results.push_back(RunBenchmark(host, port, current_inflight, interval_seconds, warmup_seconds));
+        }
+    } else {
+        results.push_back(RunBenchmark(host, port, inflight, interval_seconds, warmup_seconds));
+    }
+
+    PrintResultsTable(results);
+    std::cout << std::endl;
+
+    PrintResultsCSV(results);
 
     return 0;
 }

@@ -6,6 +6,8 @@ Consists of two tools:
 * `grpc_ping_server` provided for testing purpose and to debug gRPC performance
 * `grpc_ping_clinet` can be used to ping gRPC layer in YDB or with `grpc_ping_server`.
 
+Disclaimer: this code is not well polished and is primarily written just to better understand gRPC performance and test some hypotheses.
+
 ## Dependencies
 
 - CMake (>= 3.13)
