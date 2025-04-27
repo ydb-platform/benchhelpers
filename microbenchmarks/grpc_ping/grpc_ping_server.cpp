@@ -98,7 +98,6 @@ private:
                 status_ = FINISH;
                 responder_.Finish(response_, Status::OK, this);
             } else {
-                GPR_ASSERT(status_ == FINISH);
                 delete this;
             }
         }

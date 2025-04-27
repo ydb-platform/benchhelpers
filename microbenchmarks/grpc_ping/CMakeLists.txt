@@ -19,13 +19,18 @@ set(gRPC_BUILD_TESTS OFF)
 set(gRPC_BUILD_GRPC_CPP_PLUGIN ON)
 set(protobuf_INSTALL OFF CACHE INTERNAL "")
 
+set(gRPC_SSL_PROVIDER "package")
+set(gRPC_CARES_PROVIDER "package")
+set(gRPC_ABSL_PROVIDER "package")
+set(gRPC_RE2_PROVIDER "package")
+set(gRPC_ZLIB_PROVIDER "package")
+
 FetchContent_Declare(
     gRPC
     GIT_REPOSITORY https://github.com/grpc/grpc
-    GIT_TAG v1.54.0
-    GIT_SUBMODULES "third_party/protobuf"
+    GIT_TAG v1.72.0
+    GIT_SHALLOW TRUE
 )
-
 FetchContent_MakeAvailable(gRPC)
 
 add_library(gRPC::grpc++ ALIAS grpc++)
