@@ -20,6 +20,7 @@ using grpc::ServerBuilder;
 using grpc::ServerCompletionQueue;
 using grpc::ServerContext;
 using grpc::Status;
+using grpc::ServerAsyncReaderWriter;
 
 using Ydb::Debug::V1::DebugService;
 using Ydb::Debug::V1::PlainGrpcRequest;
@@ -63,55 +64,131 @@ public:
             }
         }
 
-        // Create initial CallData instances for each CQ
+        // Create initial CallData and StreamCallData callback instances for each CQ
         for (int i = 0; i < num_cqs_; i++) {
             for (int j = 0; j < callbacks_per_cq_; j++) {
                 new CallData(&service_, cqs_[i].get());
+                new StreamCallData(&service_, cqs_[i].get());
             }
         }
 
-        // Wait for all threads to complete
         for (auto& thread : threads_) {
             thread.join();
         }
     }
 
 private:
-    class CallData {
+    class RequestCallback {
     public:
-        CallData(DebugService::AsyncService* service, ServerCompletionQueue* cq)
+        RequestCallback(DebugService::AsyncService* service, ServerCompletionQueue* cq)
             : service_(service)
-            , cq_(cq)
-            , responder_(&ctx_)
-            , status_(CREATE) {
-            Proceed();
-        }
+            , cq_(cq) {}
 
-        void Proceed() {
-            if (status_ == CREATE) {
-                status_ = PROCESS;
-                service_->RequestPingPlainGrpc(&ctx_, &request_, &responder_, cq_, cq_, this);
-            } else if (status_ == PROCESS) {
-                // Create a new CallData instance to handle the next request
-                new CallData(service_, cq_);
+        virtual ~RequestCallback() = default;
+        virtual void Proceed() = 0;
 
-                status_ = FINISH;
-                responder_.Finish(response_, Status::OK, this);
-            } else {
-                delete this;
-            }
-        }
+    protected:
 
-    private:
         DebugService::AsyncService* service_;
         ServerCompletionQueue* cq_;
         ServerContext ctx_;
+    };
+
+    class CallData : public RequestCallback {
+    public:
+        CallData(DebugService::AsyncService* service, ServerCompletionQueue* cq)
+            : RequestCallback(service, cq)
+            , responder_(&ctx_)
+        {
+            Proceed();
+        }
+
+        void Proceed() override {
+            switch (status_) {
+                case CallStatus::CREATE:
+                    status_ = CallStatus::PROCESS;
+                    service_->RequestPingPlainGrpc(&ctx_, &request_, &responder_, cq_, cq_, this);
+                    break;
+
+                case CallStatus::PROCESS:
+                    // Create a new CallData instance to handle the next request
+                    new CallData(service_, cq_);
+
+                    status_ = CallStatus::FINISH;
+                    responder_.Finish(response_, Status::OK, this);
+                    break;
+
+                case CallStatus::FINISH:
+                    delete this;
+                    break;
+            }
+        }
+
+    protected:
+        enum class CallStatus { CREATE, PROCESS, FINISH };
+
         PlainGrpcRequest request_;
         PlainGrpcResponse response_;
         ServerAsyncResponseWriter<PlainGrpcResponse> responder_;
+        CallStatus status_ = CallStatus::CREATE;
+    };
 
-        enum CallStatus { CREATE, PROCESS, FINISH };
-        CallStatus status_;
+    class StreamCallData : public RequestCallback {
+    public:
+        StreamCallData(DebugService::AsyncService* service, ServerCompletionQueue* cq)
+            : RequestCallback(service, cq)
+            , stream_(&ctx_)
+            , stream_status_(StreamStatus::CREATE)
+        {
+            Proceed();
+        }
+
+        void Proceed() override {
+            switch (stream_status_) {
+                case StreamStatus::CREATE:
+                    stream_status_ = StreamStatus::PROCESS;
+                    service_->RequestPingStream(&ctx_, &stream_, cq_, cq_, this);
+                    break;
+
+                case StreamStatus::PROCESS:
+                    // Create a new StreamCallData instance to handle the next request
+                    new StreamCallData(service_, cq_);
+
+                    stream_status_ = StreamStatus::READ;
+                    [[fallthrough]];
+                case StreamStatus::READ:
+                    stream_status_ = StreamStatus::WRITE;
+                    stream_.Read(&request_, this);
+                    break;
+
+                case StreamStatus::WRITE: {
+                    stream_status_ = StreamStatus::READ;
+                    response_.set_callbackts(std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count());
+                    stream_.Write(response_, this);
+                    break;
+                }
+
+                case StreamStatus::FINISH:
+                    delete this;
+                    return;
+            }
+        }
+
+        void SetStreamClosed() {
+            if (stream_status_ == StreamStatus::READ || stream_status_ == StreamStatus::WRITE) {
+                stream_status_ = StreamStatus::FINISH;
+                stream_.Finish(Status::OK, this);
+            }
+        }
+
+    protected:
+        enum class StreamStatus { CREATE, PROCESS, READ, WRITE, FINISH };
+
+        PlainGrpcRequest request_;
+        PlainGrpcResponse response_;
+        ServerAsyncReaderWriter<PlainGrpcResponse, PlainGrpcRequest> stream_;
+        StreamStatus stream_status_;
     };
 
     void HandleRpcs(int cq_index) {
@@ -123,9 +200,15 @@ private:
                 break;
             }
 
-            if (ok) {
-                static_cast<CallData*>(tag)->Proceed();
+            auto* callback = static_cast<RequestCallback*>(tag);
+            if (!ok) {
+                // Handle stream closure
+                if (auto* stream_callback = dynamic_cast<StreamCallData*>(callback)) {
+                    stream_callback->SetStreamClosed();
+                    continue;
+                }
             }
+            callback->Proceed();
         }
     }
 

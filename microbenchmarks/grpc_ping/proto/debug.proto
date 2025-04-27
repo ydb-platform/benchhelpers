@@ -4,7 +4,11 @@ package Ydb.Debug.V1;
 option java_package = "com.yandex.ydb.debug.v1";
 
 service DebugService {
+    // as in YDB
     rpc PingPlainGrpc(PlainGrpcRequest) returns (PlainGrpcResponse);
+
+    // for additional test
+    rpc PingStream(stream PlainGrpcRequest) returns (stream PlainGrpcResponse);
 }
 
 message PlainGrpcRequest {

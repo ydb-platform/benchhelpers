@@ -74,9 +74,47 @@ public:
         return std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
     }
 
+    void StartStream() {
+        stream_ = stub_->PingStream(&stream_context_);
+    }
+
+    uint64_t PingStream() {
+        PlainGrpcRequest request;
+        PlainGrpcResponse response;
+
+        auto start = std::chrono::high_resolution_clock::now();
+        if (!stream_->Write(request)) {
+            std::cerr << "Failed to write to stream" << std::endl;
+            std::exit(1);
+        }
+
+        if (!stream_->Read(&response)) {
+            std::cerr << "Failed to read from stream" << std::endl;
+            std::exit(1);
+        }
+
+        auto end = std::chrono::high_resolution_clock::now();
+        return std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+    }
+
+    void StopStream() {
+        stream_->WritesDone();
+        Status status = stream_->Finish();
+        if (!status.ok()) {
+            std::cerr << "Stream RPC failed: "
+                      << "code=" << status.error_code()
+                      << " message=\"" << status.error_message() << "\""
+                      << " details=\"" << status.error_details() << "\""
+                      << std::endl;
+            std::exit(1);
+        }
+    }
+
 private:
     std::unique_ptr<DebugService::Stub> stub_;
     std::shared_ptr<Channel> channel_;
+    std::unique_ptr<grpc::ClientReaderWriter<PlainGrpcRequest, PlainGrpcResponse>> stream_;
+    ClientContext stream_context_;
 };
 
 struct alignas(64) PerThreadResult {
@@ -91,7 +129,7 @@ struct BenchmarkResult {
     uint64_t p99;
 };
 
-void Worker(std::string host, int port, std::stop_token stop_token, std::atomic<bool>& startMeasure, PerThreadResult& result) {
+void Worker(std::string host, int port, std::stop_token stop_token, std::atomic<bool>& startMeasure, PerThreadResult& result, bool use_streaming) {
     std::string target = host + ":" + std::to_string(port);
 
     grpc::ChannelArguments args;
@@ -99,15 +137,27 @@ void Worker(std::string host, int port, std::stop_token stop_token, std::atomic<
     auto channel = grpc::CreateCustomChannel(target, grpc::InsecureChannelCredentials(), args);
     DebugServiceClient client(channel);
 
+    if (use_streaming) {
+        client.StartStream();
+    }
+
     // warmup
     while (!startMeasure.load(std::memory_order_relaxed) && !stop_token.stop_requested()) {
-        client.Ping();
+        if (use_streaming) {
+            client.PingStream();
+        } else {
+            client.Ping();
+        }
     }
 
     // measure
     while (!stop_token.stop_requested()) {
-        uint64_t latency = client.Ping();
+        uint64_t latency = use_streaming ? client.PingStream() : client.Ping();
         result.latencies.push_back(latency);
+    }
+
+    if (use_streaming) {
+        client.StopStream();
     }
 }
 
@@ -169,9 +219,10 @@ void PrintUsage(const char* program_name) {
     std::cout << "  --interval <seconds> Benchmark duration in seconds (default: 10)" << std::endl;
     std::cout << "  --warmup <seconds>   Warmup duration in seconds (default: 1)" << std::endl;
     std::cout << "  --with-csv           Output results in CSV format" << std::endl;
+    std::cout << "  --streaming          Use bidirectional streaming RPC" << std::endl;
 }
 
-BenchmarkResult RunBenchmark(const std::string& host, int port, int inflight, int interval_seconds, int warmup_seconds) {
+BenchmarkResult RunBenchmark(const std::string& host, int port, int inflight, int interval_seconds, int warmup_seconds, bool use_streaming) {
     std::vector<std::jthread> threads;
     std::vector<PerThreadResult> thread_results(inflight);
     std::stop_source stop_source;
@@ -186,7 +237,8 @@ BenchmarkResult RunBenchmark(const std::string& host, int port, int inflight, in
             port,
             stop_source.get_token(),
             std::ref(startMeasure),
-            std::ref(thread_results[i])
+            std::ref(thread_results[i]),
+            use_streaming
         );
     }
 
@@ -287,6 +339,7 @@ int main(int argc, char** argv) {
     int warmup_seconds = 1;
     bool use_range = false;
     bool with_csv = false;
+    bool use_streaming = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -311,6 +364,8 @@ int main(int argc, char** argv) {
             warmup_seconds = std::stoi(argv[++i]);
         } else if (arg == "--with-csv") {
             with_csv = true;
+        } else if (arg == "--streaming") {
+            use_streaming = true;
         } else {
             std::cerr << "Unknown option: " << arg << std::endl;
             PrintUsage(argv[0]);
@@ -326,10 +381,10 @@ int main(int argc, char** argv) {
             return 1;
         }
         for (int current_inflight = min_inflight; current_inflight <= max_inflight; ++current_inflight) {
-            results.push_back(RunBenchmark(host, port, current_inflight, interval_seconds, warmup_seconds));
+            results.push_back(RunBenchmark(host, port, current_inflight, interval_seconds, warmup_seconds, use_streaming));
         }
     } else {
-        results.push_back(RunBenchmark(host, port, inflight, interval_seconds, warmup_seconds));
+        results.push_back(RunBenchmark(host, port, inflight, interval_seconds, warmup_seconds, use_streaming));
     }
 
     PrintResultsTable(results);

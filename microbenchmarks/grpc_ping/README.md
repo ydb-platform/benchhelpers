@@ -28,7 +28,7 @@ cmake [-DCMAKE_BUILD_TYPE=Release] [-DCMAKE_CXX_COMPILER=/usr/bin/clang++-18] ..
 cmake --build . [-- -j N]
 ```
 
-## Running
+## Running client
 
 Run it with:
 
@@ -42,11 +42,46 @@ Run it with:
 - `--host <hostname>`    Server hostname (default: localhost)
 - `--port <port>`        Server port (default: 2137)
 - `--inflight <N>`       Number of concurrent requests (default: 32)
+- `--min-inflight <N>`   Minimum number of concurrent requests (default: 1)
+- `--max-inflight <N>`   Maximum number of concurrent requests (default: 32)
 - `--interval <seconds>` Benchmark duration in seconds (default: 10)
 - `--warmup <seconds>`   Warmup duration in seconds (default: 1)
+- `--streaming`          Use streaming RPC instead of unary RPC (default: false)
 
 ### Example
 
 ```bash
+# Basic usage with fixed inflight
 ./grpc_ping_client --host myserver --port 2137 --inflight 64 --interval 30 --warmup 5
+
+# Using streaming RPC
+./grpc_ping_client --host myserver --port 2137 --inflight 64 --interval 30 --warmup 5 --streaming
+
+# Using min and max inflight to test different concurrency levels
+./grpc_ping_client --host myserver --port 2137 --min-inflight 1 --max-inflight 64 --interval 30 --warmup 5
+
+# Using min and max inflight with streaming
+./grpc_ping_client --host myserver --port 2137 --min-inflight 1 --max-inflight 64 --interval 30 --warmup 5 --streaming
+```
+
+## Running server
+
+Run it with:
+
+```bash
+./grpc_ping_server [options]
+```
+
+### Command-line Options
+
+- `-h, --help`           Show help message
+- `--port <port>`        Server port (default: 2137)
+- `--num-cqs <N>`        Number of completion queues (default: 1)
+- `--workers-per-cq <N>` Number of worker threads per completion queue (default: 1)
+- `--callbacks-per-cq <N>` Number of callbacks per completion queue (default: 100)
+
+### Example
+
+```bash
+./grpc_ping_server --port 2137 --num-cqs 8 --workers-per-cq 2 --callbacks-per-cq 10
 ```
