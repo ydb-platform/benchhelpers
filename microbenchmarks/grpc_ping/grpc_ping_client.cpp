@@ -129,12 +129,26 @@ struct BenchmarkResult {
     uint64_t p99;
 };
 
-void Worker(std::string host, int port, std::stop_token stop_token, std::atomic<bool>& startMeasure, PerThreadResult& result, bool use_streaming) {
-    std::string target = host + ":" + std::to_string(port);
+struct BenchmarkSettings {
+    std::string host = "localhost";
+    int port = 2137;
+    int inflight = 32;
+    int max_channels = 1;
+    int interval_seconds = 10;
+    int warmup_seconds = 1;
+    bool use_local_pool = false;
+    bool use_streaming = false;
+};
 
-    grpc::ChannelArguments args;
-    //args.SetInt("grpc.use_local_subchannel_pool", 1);
-    auto channel = grpc::CreateCustomChannel(target, grpc::InsecureChannelCredentials(), args);
+struct BenchmarkFlags {
+    bool use_range = false;
+    bool with_csv = false;
+    bool user_specified_max_channels = false;
+    int min_inflight = 1;
+    int max_inflight = 32;
+};
+
+void Worker(std::shared_ptr<grpc::Channel> channel, std::stop_token stop_token, std::atomic<bool>& startMeasure, PerThreadResult& result, bool use_streaming) {
     DebugServiceClient client(channel);
 
     if (use_streaming) {
@@ -208,49 +222,68 @@ BenchmarkResult CalculateStats(const std::vector<uint64_t>& latencies, int total
 }
 
 void PrintUsage(const char* program_name) {
+    BenchmarkSettings defaults;
     std::cout << "Usage: " << program_name << " [options]" << std::endl;
     std::cout << "Options:" << std::endl;
     std::cout << "  -h, --help           Show this help message" << std::endl;
-    std::cout << "  --host <hostname>    Server hostname (default: localhost)" << std::endl;
-    std::cout << "  --port <port>        Server port (default: 2137)" << std::endl;
-    std::cout << "  --inflight <N>       Number of concurrent requests (default: 32)" << std::endl;
-    std::cout << "  --min-inflight <N>   Minimum number of concurrent requests (default: 1)" << std::endl;
-    std::cout << "  --max-inflight <N>   Maximum number of concurrent requests (default: 32)" << std::endl;
-    std::cout << "  --interval <seconds> Benchmark duration in seconds (default: 10)" << std::endl;
-    std::cout << "  --warmup <seconds>   Warmup duration in seconds (default: 1)" << std::endl;
+    std::cout << "  --host <hostname>    Server hostname (default: " << defaults.host << ")" << std::endl;
+    std::cout << "  --port <port>        Server port (default: " << defaults.port << ")" << std::endl;
+    std::cout << "  --inflight <N>       Number of concurrent requests (default: " << defaults.inflight << ")" << std::endl;
+    std::cout << "  --min-inflight <N>   Minimum number of concurrent requests for range test" << std::endl;
+    std::cout << "  --max-inflight <N>   Maximum number of concurrent requests for range test" << std::endl;
+    std::cout << "  --max-channels <N>   Maximum number of gRPC channels (default: " << defaults.max_channels << ")" << std::endl;
+    std::cout << "  --interval <seconds> Benchmark duration in seconds (default: " << defaults.interval_seconds << ")" << std::endl;
+    std::cout << "  --warmup <seconds>   Warmup duration in seconds (default: " << defaults.warmup_seconds << ")" << std::endl;
     std::cout << "  --with-csv           Output results in CSV format" << std::endl;
     std::cout << "  --streaming          Use bidirectional streaming RPC" << std::endl;
+    std::cout << "  --local-pool         Use local subchannel pool for connection reuse" << std::endl;
 }
 
-BenchmarkResult RunBenchmark(const std::string& host, int port, int inflight, int interval_seconds, int warmup_seconds, bool use_streaming) {
+BenchmarkResult RunBenchmark(const BenchmarkSettings& settings, int inflight) {
     std::vector<std::jthread> threads;
     std::vector<PerThreadResult> thread_results(inflight);
     std::stop_source stop_source;
     std::atomic<bool> startMeasure{false};
 
-    std::cout << "\nRunning benchmark with " << inflight << " concurrent requests..." << std::endl;
+    // don't create extra channels: worker can use at most one
+    int max_channels = std::min(inflight, settings.max_channels);
+
+    // Create channels
+    std::vector<std::shared_ptr<grpc::Channel>> channels;
+    std::string target = settings.host + ":" + std::to_string(settings.port);
+    grpc::ChannelArguments args;
+
+    if (settings.use_local_pool) {
+        args.SetInt(GRPC_ARG_USE_LOCAL_SUBCHANNEL_POOL, 1);
+    }
+
+    for (int i = 0; i < max_channels; ++i) {
+        channels.push_back(grpc::CreateCustomChannel(target, grpc::InsecureChannelCredentials(), args));
+    }
+
+    std::cout << "\nRunning benchmark with " << inflight << " concurrent requests using " << max_channels << " channels..." << std::endl;
 
     // Start worker threads
     for (int i = 0; i < inflight; ++i) {
+        auto channel = channels[i % max_channels];
         threads.emplace_back(Worker,
-            std::string(host),
-            port,
+            channel,
             stop_source.get_token(),
             std::ref(startMeasure),
             std::ref(thread_results[i]),
-            use_streaming
+            settings.use_streaming
         );
     }
 
     // Wait for all threads to start and warmup
     std::cout << "Warmup phase started..." << std::endl;
-    std::this_thread::sleep_for(std::chrono::seconds(warmup_seconds));
+    std::this_thread::sleep_for(std::chrono::seconds(settings.warmup_seconds));
     std::cout << "Warmup phase completed, measuring..." << std::endl;
 
     startMeasure.store(true, std::memory_order_relaxed);
 
     auto start = std::chrono::high_resolution_clock::now();
-    std::this_thread::sleep_for(std::chrono::seconds(interval_seconds));
+    std::this_thread::sleep_for(std::chrono::seconds(settings.interval_seconds));
 
     stop_source.request_stop();
     for (auto& thread : threads) {
@@ -267,9 +300,9 @@ BenchmarkResult RunBenchmark(const std::string& host, int port, int inflight, in
 
     std::cout << "Total requests: " << all_latencies.size() << std::endl;
     std::cout << "Total time: " << total_time << " us" << std::endl;
-    PrintStats(all_latencies, all_latencies.size(), interval_seconds);
+    PrintStats(all_latencies, all_latencies.size(), settings.interval_seconds);
 
-    BenchmarkResult result = CalculateStats(all_latencies, all_latencies.size(), interval_seconds);
+    BenchmarkResult result = CalculateStats(all_latencies, all_latencies.size(), settings.interval_seconds);
     result.inflight = inflight;
     return result;
 }
@@ -330,16 +363,8 @@ void PrintResultsCSV(const std::vector<BenchmarkResult>& results) {
 }
 
 int main(int argc, char** argv) {
-    std::string host = "localhost";
-    int port = 2137;
-    int min_inflight = 1;
-    int max_inflight = 32;
-    int inflight = 32;  // Shortcut for single inflight test
-    int interval_seconds = 10;
-    int warmup_seconds = 1;
-    bool use_range = false;
-    bool with_csv = false;
-    bool use_streaming = false;
+    BenchmarkSettings settings;
+    BenchmarkFlags flags;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -347,25 +372,30 @@ int main(int argc, char** argv) {
             PrintUsage(argv[0]);
             return 0;
         } else if (arg == "--host" && i + 1 < argc) {
-            host = argv[++i];
+            settings.host = argv[++i];
         } else if (arg == "--port" && i + 1 < argc) {
-            port = std::stoi(argv[++i]);
+            settings.port = std::stoi(argv[++i]);
         } else if (arg == "--inflight" && i + 1 < argc) {
-            inflight = std::stoi(argv[++i]);
+            settings.inflight = std::stoi(argv[++i]);
         } else if (arg == "--min-inflight" && i + 1 < argc) {
-            min_inflight = std::stoi(argv[++i]);
-            use_range = true;
+            flags.min_inflight = std::stoi(argv[++i]);
+            flags.use_range = true;
         } else if (arg == "--max-inflight" && i + 1 < argc) {
-            max_inflight = std::stoi(argv[++i]);
-            use_range = true;
+            flags.max_inflight = std::stoi(argv[++i]);
+            flags.use_range = true;
+        } else if (arg == "--max-channels" && i + 1 < argc) {
+            settings.max_channels = std::stoi(argv[++i]);
+            flags.user_specified_max_channels = true;
         } else if (arg == "--interval" && i + 1 < argc) {
-            interval_seconds = std::stoi(argv[++i]);
+            settings.interval_seconds = std::stoi(argv[++i]);
         } else if (arg == "--warmup" && i + 1 < argc) {
-            warmup_seconds = std::stoi(argv[++i]);
+            settings.warmup_seconds = std::stoi(argv[++i]);
         } else if (arg == "--with-csv") {
-            with_csv = true;
+            flags.with_csv = true;
         } else if (arg == "--streaming") {
-            use_streaming = true;
+            settings.use_streaming = true;
+        } else if (arg == "--local-pool") {
+            settings.use_local_pool = true;
         } else {
             std::cerr << "Unknown option: " << arg << std::endl;
             PrintUsage(argv[0]);
@@ -373,24 +403,30 @@ int main(int argc, char** argv) {
         }
     }
 
+    if (!flags.user_specified_max_channels) {
+        settings.max_channels = flags.use_range ? flags.max_inflight : settings.inflight;
+    }
+
     std::vector<BenchmarkResult> results;
 
-    if (use_range) {
-        if (min_inflight > max_inflight) {
+    if (flags.use_range) {
+        if (flags.min_inflight > flags.max_inflight) {
             std::cerr << "Error: min-inflight cannot be greater than max-inflight" << std::endl;
             return 1;
         }
-        for (int current_inflight = min_inflight; current_inflight <= max_inflight; ++current_inflight) {
-            results.push_back(RunBenchmark(host, port, current_inflight, interval_seconds, warmup_seconds, use_streaming));
+        for (int current_inflight = flags.min_inflight; current_inflight <= flags.max_inflight; ++current_inflight) {
+            results.push_back(RunBenchmark(settings, current_inflight));
         }
     } else {
-        results.push_back(RunBenchmark(host, port, inflight, interval_seconds, warmup_seconds, use_streaming));
+        results.push_back(RunBenchmark(settings, settings.inflight));
     }
 
     PrintResultsTable(results);
     std::cout << std::endl;
 
-    PrintResultsCSV(results);
+    if (flags.with_csv) {
+        PrintResultsCSV(results);
+    }
 
     return 0;
 }

@@ -44,6 +44,7 @@ Run it with:
 - `--inflight <N>`       Number of concurrent requests (default: 32)
 - `--min-inflight <N>`   Minimum number of concurrent requests (default: 1)
 - `--max-inflight <N>`   Maximum number of concurrent requests (default: 32)
+- `--max-channels <N>`   Maximum number of gRPC channels (default: 1)
 - `--interval <seconds>` Benchmark duration in seconds (default: 10)
 - `--warmup <seconds>`   Warmup duration in seconds (default: 1)
 - `--streaming`          Use streaming RPC instead of unary RPC (default: false)
@@ -62,6 +63,12 @@ Run it with:
 
 # Using min and max inflight with streaming
 ./grpc_ping_client --host myserver --port 2137 --min-inflight 1 --max-inflight 64 --interval 30 --warmup 5 --streaming
+
+# Using multiple channels
+./grpc_ping_client --host myserver --port 2137 --inflight 64 --max-channels 4 --interval 30 --warmup 5
+
+# Using multiple channels with streaming
+./grpc_ping_client --host myserver --port 2137 --inflight 64 --max-channels 4 --interval 30 --warmup 5 --streaming
 ```
 
 ## Running server
