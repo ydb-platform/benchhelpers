@@ -133,6 +133,8 @@ struct BenchmarkResult {
     uint64_t p50;
     uint64_t p90;
     uint64_t p99;
+    uint64_t p99_9;
+    uint64_t p100;
 };
 
 struct BenchmarkSettings {
@@ -150,6 +152,7 @@ struct BenchmarkFlags {
     bool use_range = false;
     bool with_csv = false;
     bool user_specified_max_channels = false;
+    bool per_worker_stats = false;
     int min_inflight = 1;
     int max_inflight = 32;
 };
@@ -187,12 +190,9 @@ void PrintStats(const std::vector<uint64_t>& latencies, int total_requests, int 
         return;
     }
 
-    std::vector<uint64_t> sorted_latencies = latencies;
-    std::sort(sorted_latencies.begin(), sorted_latencies.end());
-
     auto percentile = [&](double p) -> uint64_t {
-        size_t index = static_cast<size_t>(p * sorted_latencies.size());
-        return sorted_latencies[index];
+        size_t index = static_cast<size_t>(p * latencies.size());
+        return latencies[index];
     };
 
     double throughput = static_cast<double>(total_requests) / interval_seconds;
@@ -203,6 +203,8 @@ void PrintStats(const std::vector<uint64_t>& latencies, int total_requests, int 
     std::cout << "  50th: " << percentile(0.50) << std::endl;
     std::cout << "  90th: " << percentile(0.90) << std::endl;
     std::cout << "  99th: " << percentile(0.99) << std::endl;
+    std::cout << "  99.9th: " << percentile(0.999) << std::endl;
+    std::cout << "  100th: " << latencies.back() << std::endl;
 }
 
 BenchmarkResult CalculateStats(const std::vector<uint64_t>& latencies, int total_requests, int interval_seconds) {
@@ -211,18 +213,17 @@ BenchmarkResult CalculateStats(const std::vector<uint64_t>& latencies, int total
         return result;
     }
 
-    std::vector<uint64_t> sorted_latencies = latencies;
-    std::sort(sorted_latencies.begin(), sorted_latencies.end());
-
     auto percentile = [&](double p) -> uint64_t {
-        size_t index = static_cast<size_t>(p * sorted_latencies.size());
-        return sorted_latencies[index];
+        size_t index = static_cast<size_t>(p * latencies.size());
+        return latencies[index];
     };
 
     result.throughput = static_cast<double>(total_requests) / interval_seconds;
     result.p50 = percentile(0.50);
     result.p90 = percentile(0.90);
     result.p99 = percentile(0.99);
+    result.p99_9 = percentile(0.999);
+    result.p100 = latencies.back();
 
     return result;
 }
@@ -243,9 +244,15 @@ void PrintUsage(const char* program_name) {
     std::cout << "  --with-csv           Output results in CSV format" << std::endl;
     std::cout << "  --streaming          Use bidirectional streaming RPC" << std::endl;
     std::cout << "  --local-pool         Use local subchannel pool for connection reuse" << std::endl;
+    std::cout << "  --per-worker-stats   Show per-worker throughput statistics" << std::endl;
 }
 
-BenchmarkResult RunBenchmark(const BenchmarkSettings& settings, int inflight) {
+struct BenchmarkRunResult {
+    BenchmarkResult stats;
+    std::vector<PerThreadResult> thread_results;
+};
+
+BenchmarkRunResult RunBenchmark(const BenchmarkSettings& settings, int inflight) {
     std::vector<std::jthread> threads;
     std::vector<PerThreadResult> thread_results(inflight);
     std::stop_source stop_source;
@@ -303,6 +310,7 @@ BenchmarkResult RunBenchmark(const BenchmarkSettings& settings, int inflight) {
     for (const auto& result: thread_results) {
         all_latencies.insert(all_latencies.end(), result.latencies.begin(), result.latencies.end());
     }
+    std::sort(all_latencies.begin(), all_latencies.end());
 
     std::cout << "Total requests: " << all_latencies.size() << std::endl;
     std::cout << "Total time: " << total_time << " us" << std::endl;
@@ -310,7 +318,8 @@ BenchmarkResult RunBenchmark(const BenchmarkSettings& settings, int inflight) {
 
     BenchmarkResult result = CalculateStats(all_latencies, all_latencies.size(), settings.interval_seconds);
     result.inflight = inflight;
-    return result;
+
+    return BenchmarkRunResult{result, thread_results};
 }
 
 void PrintResultsTable(const std::vector<BenchmarkResult>& results) {
@@ -329,6 +338,10 @@ void PrintResultsTable(const std::vector<BenchmarkResult>& results) {
         std::to_string(results.back().p90).length());
     size_t p99_width = std::max(strlen("P99 (us)"),
         std::to_string(results.back().p99).length());
+    size_t p99_9_width = std::max(strlen("P99.9 (us)"),
+        std::to_string(results.back().p99_9).length());
+    size_t p100_width = std::max(strlen("P100 (us)"),
+        std::to_string(results.back().p100).length());
 
     // Print header
     std::cout << "\nBenchmark Results Summary:" << std::endl;
@@ -336,14 +349,18 @@ void PrintResultsTable(const std::vector<BenchmarkResult>& results) {
               << std::setw(throughput_width) << "Throughput (req/s)" << " | "
               << std::setw(p50_width) << "P50 (us)" << " | "
               << std::setw(p90_width) << "P90 (us)" << " | "
-              << std::setw(p99_width) << "P99 (us)" << std::endl;
+              << std::setw(p99_width) << "P99 (us)" << " | "
+              << std::setw(p99_9_width) << "P99.9 (us)" << " | "
+              << std::setw(p100_width) << "P100 (us)" << std::endl;
 
     // Print separator line
     std::cout << std::string(inflight_width, '-') << "-+-"
               << std::string(throughput_width, '-') << "-+-"
               << std::string(p50_width, '-') << "-+-"
               << std::string(p90_width, '-') << "-+-"
-              << std::string(p99_width, '-') << std::endl;
+              << std::string(p99_width, '-') << "-+-"
+              << std::string(p99_9_width, '-') << "-+-"
+              << std::string(p100_width, '-') << std::endl;
 
     // Print data rows
     for (const auto& result : results) {
@@ -351,20 +368,51 @@ void PrintResultsTable(const std::vector<BenchmarkResult>& results) {
                   << std::setw(throughput_width) << std::fixed << std::setprecision(2) << result.throughput << " | "
                   << std::setw(p50_width) << result.p50 << " | "
                   << std::setw(p90_width) << result.p90 << " | "
-                  << std::setw(p99_width) << result.p99 << std::endl;
+                  << std::setw(p99_width) << result.p99 << " | "
+                  << std::setw(p99_9_width) << result.p99_9 << " | "
+                  << std::setw(p100_width) << result.p100 << std::endl;
     }
 }
 
 void PrintResultsCSV(const std::vector<BenchmarkResult>& results) {
     std::cout << "\nCSV Results:" << std::endl;
-    std::cout << "inflight,throughput,p50,p90,p99" << std::endl;
+    std::cout << "inflight,throughput,p50,p90,p99,p99_9,p100" << std::endl;
     for (const auto& result : results) {
         std::cout << std::fixed << std::setprecision(2)
                   << result.inflight << ","
                   << result.throughput << ","
                   << result.p50 << ","
                   << result.p90 << ","
-                  << result.p99 << std::endl;
+                  << result.p99 << ","
+                  << result.p99_9 << ","
+                  << result.p100 << std::endl;
+    }
+}
+
+void PrintWorkerThroughputTable(const std::vector<PerThreadResult>& thread_results, int interval_seconds) {
+    if (thread_results.empty()) {
+        return;
+    }
+
+    // Calculate column widths
+    size_t worker_width = std::max(strlen("Worker ID"),
+        std::to_string(thread_results.size() - 1).length());
+    size_t throughput_width = std::max(strlen("Throughput (req/s)"), size_t(12)); // reasonable minimum width for float
+
+    // Print header
+    std::cout << "\nPer-Worker Throughput Statistics:" << std::endl;
+    std::cout << std::setw(worker_width) << "Worker ID" << " | "
+              << std::setw(throughput_width) << "Throughput (req/s)" << std::endl;
+
+    // Print separator line
+    std::cout << std::string(worker_width, '-') << "-+-"
+              << std::string(throughput_width, '-') << std::endl;
+
+    // Print data rows
+    for (size_t i = 0; i < thread_results.size(); ++i) {
+        double throughput = static_cast<double>(thread_results[i].latencies.size()) / interval_seconds;
+        std::cout << std::setw(worker_width) << i << " | "
+                  << std::setw(throughput_width) << std::fixed << std::setprecision(2) << throughput << std::endl;
     }
 }
 
@@ -507,6 +555,8 @@ int main(int argc, char** argv) {
             settings.use_streaming = true;
         } else if (arg == "--local-pool") {
             settings.use_local_pool = true;
+        } else if (arg == "--per-worker-stats") {
+            flags.per_worker_stats = true;
         } else {
             std::cerr << "Unknown option: " << arg << std::endl;
             PrintUsage(argv[0]);
@@ -520,7 +570,7 @@ int main(int argc, char** argv) {
         settings.max_channels = flags.use_range ? flags.max_inflight : settings.inflight;
     }
 
-    std::vector<BenchmarkResult> results;
+    std::vector<BenchmarkRunResult> results;
 
     if (flags.use_range) {
         if (flags.min_inflight > flags.max_inflight) {
@@ -534,11 +584,26 @@ int main(int argc, char** argv) {
         results.push_back(RunBenchmark(settings, settings.inflight));
     }
 
-    PrintResultsTable(results);
-    std::cout << std::endl;
+    // Convert results for table printing
+    std::vector<BenchmarkResult> stats_results;
+    for (const auto& result : results) {
+        stats_results.push_back(result.stats);
+    }
+
+    if (!flags.per_worker_stats) {
+        PrintResultsTable(stats_results);
+        std::cout << std::endl;
+    }
 
     if (flags.with_csv) {
-        PrintResultsCSV(results);
+        PrintResultsCSV(stats_results);
+    }
+
+    if (flags.per_worker_stats) {
+        // Print per-worker stats for the last run only
+        if (!results.empty()) {
+            PrintWorkerThroughputTable(results.back().thread_results, settings.interval_seconds);
+        }
     }
 
     return 0;
