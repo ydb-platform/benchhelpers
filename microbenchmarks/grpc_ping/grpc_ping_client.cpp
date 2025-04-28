@@ -10,6 +10,12 @@
 
 #include <grpcpp/grpcpp.h>
 
+// XXX
+#include "build/_deps/grpc-src/src/core/lib/iomgr/socket_mutator.h"
+
+#include <sys/socket.h>
+#include <netinet/tcp.h>
+
 #include "debug.pb.h"
 #include "debug.grpc.pb.h"
 
@@ -362,6 +368,111 @@ void PrintResultsCSV(const std::vector<BenchmarkResult>& results) {
     }
 }
 
+class TGRpcInterceptSocketMutator : public grpc_socket_mutator {
+public:
+    TGRpcInterceptSocketMutator()
+    {
+        grpc_socket_mutator_init(this, &VTable);
+    }
+
+    void Test() {
+        if (Intercepted_fd1 == -1 && Intercepted_fd2 == -1) {
+            std::cout << "Failed to intercept descriptord and test for Nagle" << std::endl;
+        }
+
+        if (Intercepted_fd1 != -1) {
+            int flag = 0;
+            socklen_t len = sizeof(flag);
+            if (getsockopt(Intercepted_fd1, IPPROTO_TCP, TCP_NODELAY, &flag, &len) == -1) {
+                perror("getsockopt TCP_NODELAY for fd1");
+                return;
+            }
+            if (flag) {
+                std::cout << "TCP_NODELAY is ENABLED (Nagle OFF)\n";
+            } else {
+                std::cout << "TCP_NODELAY is DISABLED (Nagle ON)\n";
+            }
+        }
+
+        if (Intercepted_fd2 != -1) {
+            int flag = 0;
+            socklen_t len = sizeof(flag);
+            if (getsockopt(Intercepted_fd2, IPPROTO_TCP, TCP_NODELAY, &flag, &len) == -1) {
+                perror("getsockopt TCP_NODELAY for fd2");
+                return;
+            }
+            if (flag) {
+                std::cout << "TCP_NODELAY is ENABLED (Nagle OFF)\n";
+            } else {
+                std::cout << "TCP_NODELAY is DISABLED (Nagle ON)\n";
+            }
+        }
+    }
+
+private:
+    static TGRpcInterceptSocketMutator* Cast(grpc_socket_mutator* mutator) {
+        return static_cast<TGRpcInterceptSocketMutator*>(mutator);
+    }
+
+    static bool Mutate(int fd, grpc_socket_mutator* mutator) {
+        Intercepted_fd1 = fd;
+        return true;
+    }
+
+    static int Compare(grpc_socket_mutator* a, grpc_socket_mutator* b) {
+        return 0;
+    }
+
+    static void Destroy(grpc_socket_mutator* mutator) {
+        delete Cast(mutator);
+    }
+
+    static bool Mutate2(const grpc_mutate_socket_info* info, grpc_socket_mutator* mutator) {
+        Intercepted_fd2 = info->fd;
+        return true;
+    }
+
+    static grpc_socket_mutator_vtable VTable;
+
+    static int Intercepted_fd1;
+    static int Intercepted_fd2;
+};
+
+int TGRpcInterceptSocketMutator::Intercepted_fd1 = -1;
+int TGRpcInterceptSocketMutator::Intercepted_fd2 = -1;
+
+grpc_socket_mutator_vtable TGRpcInterceptSocketMutator::VTable =
+{
+    &TGRpcInterceptSocketMutator::Mutate,
+    &TGRpcInterceptSocketMutator::Compare,
+    &TGRpcInterceptSocketMutator::Destroy,
+    &TGRpcInterceptSocketMutator::Mutate2
+};
+
+void TestNagleAlgorithm(const std::string& target) {
+    using namespace grpc;
+
+    ChannelArguments args;
+
+    auto* mutator = new TGRpcInterceptSocketMutator();
+    args.SetSocketMutator(mutator);
+
+    auto channel = CreateCustomChannel(target, InsecureChannelCredentials(), args);
+
+    // Force connection
+    auto state = channel->GetState(false);
+    if (state != GRPC_CHANNEL_READY) {
+        channel->WaitForConnected(std::chrono::system_clock::now() + std::chrono::seconds(1));
+        state = channel->GetState(false);
+        if (state != GRPC_CHANNEL_READY) {
+            std::cerr << "Failed to connect to server. Channel state: " << state << std::endl;
+            std::exit(1);
+        }
+    }
+
+    mutator->Test();
+}
+
 int main(int argc, char** argv) {
     BenchmarkSettings settings;
     BenchmarkFlags flags;
@@ -402,6 +513,8 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
+
+    TestNagleAlgorithm(settings.host + ":" + std::to_string(settings.port));
 
     if (!flags.user_specified_max_channels) {
         settings.max_channels = flags.use_range ? flags.max_inflight : settings.inflight;

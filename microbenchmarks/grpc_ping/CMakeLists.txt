@@ -21,7 +21,7 @@ set(protobuf_INSTALL OFF CACHE INTERNAL "")
 
 set(gRPC_SSL_PROVIDER "package")
 set(gRPC_CARES_PROVIDER "package")
-set(gRPC_ABSL_PROVIDER "package")
+set(gRPC_ABSL_PROVIDER "module")
 set(gRPC_RE2_PROVIDER "package")
 set(gRPC_ZLIB_PROVIDER "package")
 
@@ -102,6 +102,7 @@ target_link_libraries(grpc_ping_client PRIVATE
     proto-objects
     protobuf::libprotobuf
     gRPC::grpc++
+    grpc
     pthread
     dl
 )
@@ -109,6 +110,7 @@ target_link_libraries(grpc_ping_client PRIVATE
 target_include_directories(grpc_ping_client PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${PROTO_BINARY_DIR}
+    ${_deps/grpc-src_SOURCE_DIR}/src/core/lib/iomgr
 )
 
 # 4. grpc_ping_server
@@ -123,6 +125,7 @@ target_link_libraries(grpc_ping_server PRIVATE
     proto-objects
     protobuf::libprotobuf
     gRPC::grpc++
+    grpc
     pthread
     dl
 )
@@ -130,4 +133,5 @@ target_link_libraries(grpc_ping_server PRIVATE
 target_include_directories(grpc_ping_server PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${PROTO_BINARY_DIR}
+    ${_deps/grpc-src_SOURCE_DIR}/src/core/lib/iomgr
 )
