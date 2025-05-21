@@ -40,6 +40,42 @@ if [ ! -f "$hosts" ]; then
     exit 1
 fi
 
+function setup_python {
+    if ! which pip3 >/dev/null; then
+        sudo apt-get install -yyq python3-pip
+        if [[ $? -ne 0 ]]; then
+            echo "Failed to install pip3 using apt-get. Please install it manually"
+            return 1
+        fi
+    else
+        echo "pip3 already installed"
+    fi
+
+    venv_dir="$script_dir/venv"
+
+    if [ ! -d $venv_dir ]; then
+        python3 -m venv $venv_dir
+        if [[ $? -ne 0 ]]; then
+            echo "Faild to create virtual environment $venv_dir"
+            return 1
+        fi
+    else
+        echo "$venv_dir already exists. Skipping virtual environment creation"
+    fi
+
+    source "$venv_dir/bin/activate"
+    if [[ $? -ne 0 ]]; then
+        echo "Faild to activate virtual environment $venv_dir"
+        return 1
+    fi
+
+    pip3 install ydb ydb[yc] numpy requests
+    if [[ $? -ne 0 ]]; then
+        echo "Failed to install python packages: ydb, numpy, requests. Please install it manually"
+        return 1
+    fi
+}
+
 unique_hosts=`mktemp`
 sort -u $hosts > $unique_hosts
 
@@ -48,26 +84,17 @@ script_dir=`dirname "$script_path"`
 common_dir="$script_dir/../../common"
 
 if which apt-get >/dev/null; then
-    sudo apt-get install -yyq python3-pip pssh
+    sudo apt-get install -yyq pssh
     if [[ $? -ne 0 ]]; then
-        echo "Failed to install python3-pip pssh on. Please install it manually"
+        echo "Failed to install pssh. Please install it manually"
         some_failed=1
     fi
 else
-    echo "apt-get not found. Please install python3-pip pssh manually"
+    echo "apt-get not found. Please install pssh manually"
     some_failed=1
 fi
 
-if which pip3 >/dev/null; then
-    pip3 install ydb numpy requests
-    if [[ $? -ne 0 ]]; then
-        echo "Failed to install python packages: ydb, numpy, requests. Please install it manually"
-        some_failed=1
-    fi
-else
-    echo "pip3 not found. Please install ydb, numpy and requests packages manually"
-    some_failed=1
-fi
+setup_python
 
 curl -sSL https://storage.yandexcloud.net/yandexcloud-ydb/install.sh | bash
 if [[ $? -ne 0 ]]; then
