@@ -3,6 +3,8 @@
 export TZ=UTC
 export LC_ALL=en_US.UTF-8
 
+source ./venv/bin/activate
+
 execute_time_seconds=300
 warmup_time_seconds=60
 
