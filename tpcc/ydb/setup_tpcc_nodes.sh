@@ -41,14 +41,10 @@ if [ ! -f "$hosts" ]; then
 fi
 
 function setup_python {
-    if ! which pip3 >/dev/null; then
-        sudo apt-get install -yyq python3-pip
-        if [[ $? -ne 0 ]]; then
-            echo "Failed to install pip3 using apt-get. Please install it manually"
-            return 1
-        fi
-    else
-        echo "pip3 already installed"
+    sudo apt-get install -yyq python3-pip python3-venv
+    if [[ $? -ne 0 ]]; then
+        echo "Failed to install pip3 or venv using apt-get. Please install it manually"
+        return 1
     fi
 
     venv_dir="$script_dir/venv"
