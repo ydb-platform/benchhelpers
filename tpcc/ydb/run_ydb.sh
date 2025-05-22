@@ -3,7 +3,7 @@
 export TZ=UTC
 export LC_ALL=en_US.UTF-8
 
-if [[ -x ./venv/bin/activate ]]; then
+if [[ -f ./venv/bin/activate ]]; then
     source ./venv/bin/activate
 else
     echo "No venv found"
