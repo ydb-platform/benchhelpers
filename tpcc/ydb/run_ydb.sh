@@ -9,7 +9,6 @@ else
     echo "No venv found"
 fi
 
-
 execute_time_seconds=300
 warmup_time_seconds=60
 

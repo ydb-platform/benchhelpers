@@ -8,7 +8,7 @@ usage() {
 unique_hosts=
 
 cleanup() {
-    if [[ -n "$unique_hosts" ]]; then
+    if [[ -n $unique_hosts ]]; then
         rm -f $unique_hosts
     fi
 }
@@ -117,7 +117,7 @@ if [[ $? -ne 0 ]]; then
     some_failed=1
 fi
 
-if [[ -n "$some_failed" ]]; then
+if [[ -n $some_failed ]]; then
     echo "Some steps failed. Please fix the issues manually"
     exit 1
 fi
