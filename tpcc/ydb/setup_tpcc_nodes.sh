@@ -8,14 +8,14 @@ usage() {
 unique_hosts=
 
 cleanup() {
-    if [ -n "$unique_hosts" ]; then
+    if [[ -n "$unique_hosts" ]]; then
         rm -f $unique_hosts
     fi
 }
 
 trap cleanup EXIT
 
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
     case "$1" in
         --hosts)
             shift
@@ -29,13 +29,13 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-if [ -z "$hosts" ]; then
+if [[ -z $hosts ]]; then
     echo "Hosts file not specified"
     usage
     exit 1
 fi
 
-if [ ! -f "$hosts" ]; then
+if [[ ! -f $hosts ]]; then
     echo "Hosts file $hosts not found"
     exit 1
 fi
@@ -49,7 +49,7 @@ function setup_python {
 
     venv_dir="$script_dir/venv"
 
-    if [ ! -d $venv_dir ]; then
+    if [[ ! -d $venv_dir ]]; then
         python3 -m venv $venv_dir
         if [[ $? -ne 0 ]]; then
             echo "Faild to create virtual environment $venv_dir"
@@ -64,6 +64,8 @@ function setup_python {
         echo "Faild to activate virtual environment $venv_dir"
         return 1
     fi
+
+    echo "Virtial environment $venv_dir activated"
 
     pip3 install ydb ydb[yc] numpy requests
     if [[ $? -ne 0 ]]; then
@@ -91,6 +93,11 @@ else
 fi
 
 setup_python
+if [[ $? -ne 0 ]]; then
+    # Error message is generated in the function
+    some_failed=1
+fi
+
 
 curl -sSL https://storage.yandexcloud.net/yandexcloud-ydb/install.sh | bash
 if [[ $? -ne 0 ]]; then
@@ -110,7 +117,7 @@ if [[ $? -ne 0 ]]; then
     some_failed=1
 fi
 
-if [ -n "$some_failed" ]; then
+if [[ -n "$some_failed" ]]; then
     echo "Some steps failed. Please fix the issues manually"
     exit 1
 fi

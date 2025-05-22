@@ -3,7 +3,12 @@
 export TZ=UTC
 export LC_ALL=en_US.UTF-8
 
-source ./venv/bin/activate
+if [[ -x ./venv/bin/activate ]]; then
+    source ./venv/bin/activate
+else
+    echo "No venv found"
+fi
+
 
 execute_time_seconds=300
 warmup_time_seconds=60
