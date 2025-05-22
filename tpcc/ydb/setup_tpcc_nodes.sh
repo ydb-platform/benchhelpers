@@ -8,14 +8,14 @@ usage() {
 unique_hosts=
 
 cleanup() {
-    if [ -n "$unique_hosts" ]; then
+    if [[ -n $unique_hosts ]]; then
         rm -f $unique_hosts
     fi
 }
 
 trap cleanup EXIT
 
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
     case "$1" in
         --hosts)
             shift
@@ -29,16 +29,50 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-if [ -z "$hosts" ]; then
+if [[ -z $hosts ]]; then
     echo "Hosts file not specified"
     usage
     exit 1
 fi
 
-if [ ! -f "$hosts" ]; then
+if [[ ! -f $hosts ]]; then
     echo "Hosts file $hosts not found"
     exit 1
 fi
+
+function setup_python {
+    sudo apt-get install -yyq python3-pip python3-venv
+    if [[ $? -ne 0 ]]; then
+        echo "Failed to install pip3 or venv using apt-get. Please install it manually"
+        return 1
+    fi
+
+    venv_dir="$script_dir/venv"
+
+    if [[ ! -d $venv_dir ]]; then
+        python3 -m venv $venv_dir
+        if [[ $? -ne 0 ]]; then
+            echo "Faild to create virtual environment $venv_dir"
+            return 1
+        fi
+    else
+        echo "$venv_dir already exists. Skipping virtual environment creation"
+    fi
+
+    source "$venv_dir/bin/activate"
+    if [[ $? -ne 0 ]]; then
+        echo "Faild to activate virtual environment $venv_dir"
+        return 1
+    fi
+
+    echo "Virtial environment $venv_dir activated"
+
+    pip3 install ydb ydb[yc] numpy requests
+    if [[ $? -ne 0 ]]; then
+        echo "Failed to install python packages: ydb, numpy, requests. Please install it manually"
+        return 1
+    fi
+}
 
 unique_hosts=`mktemp`
 sort -u $hosts > $unique_hosts
@@ -48,26 +82,22 @@ script_dir=`dirname "$script_path"`
 common_dir="$script_dir/../../common"
 
 if which apt-get >/dev/null; then
-    sudo apt-get install -yyq python3-pip pssh
+    sudo apt-get install -yyq pssh
     if [[ $? -ne 0 ]]; then
-        echo "Failed to install python3-pip pssh on. Please install it manually"
+        echo "Failed to install pssh. Please install it manually"
         some_failed=1
     fi
 else
-    echo "apt-get not found. Please install python3-pip pssh manually"
+    echo "apt-get not found. Please install pssh manually"
     some_failed=1
 fi
 
-if which pip3 >/dev/null; then
-    pip3 install ydb numpy requests
-    if [[ $? -ne 0 ]]; then
-        echo "Failed to install python packages: ydb, numpy, requests. Please install it manually"
-        some_failed=1
-    fi
-else
-    echo "pip3 not found. Please install ydb, numpy and requests packages manually"
+setup_python
+if [[ $? -ne 0 ]]; then
+    # Error message is generated in the function
     some_failed=1
 fi
+
 
 curl -sSL https://storage.yandexcloud.net/yandexcloud-ydb/install.sh | bash
 if [[ $? -ne 0 ]]; then
@@ -87,7 +117,7 @@ if [[ $? -ne 0 ]]; then
     some_failed=1
 fi
 
-if [ -n "$some_failed" ]; then
+if [[ -n $some_failed ]]; then
     echo "Some steps failed. Please fix the issues manually"
     exit 1
 fi
