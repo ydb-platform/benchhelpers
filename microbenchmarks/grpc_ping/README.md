@@ -39,7 +39,7 @@ Run it with:
 ### Command-line Options
 
 - `-h, --help`           Show help message
-- `--host <hostname>`    Server hostname (default: localhost)
+- `--host <hostname>`    Server hostname(s) with port, comma-separated (default: localhost:2137)
 - `--port <port>`        Server port (default: 2137)
 - `--inflight <N>`       Number of concurrent requests (default: 32)
 - `--min-inflight <N>`   Minimum number of concurrent requests (default: 1)
@@ -53,22 +53,22 @@ Run it with:
 
 ```bash
 # Basic usage with fixed inflight
-./grpc_ping_client --host myserver --port 2137 --inflight 64 --interval 30 --warmup 5
+./grpc_ping_client --host myserver:2137 --inflight 64 --interval 30 --warmup 5
 
 # Using streaming RPC
-./grpc_ping_client --host myserver --port 2137 --inflight 64 --interval 30 --warmup 5 --streaming
+./grpc_ping_client --host myserver:2137 --inflight 64 --interval 30 --warmup 5 --streaming
 
 # Using min and max inflight to test different concurrency levels
-./grpc_ping_client --host myserver --port 2137 --min-inflight 1 --max-inflight 64 --interval 30 --warmup 5
+./grpc_ping_client --host myserver:2137 --min-inflight 1 --max-inflight 64 --interval 30 --warmup 5
 
 # Using min and max inflight with streaming
-./grpc_ping_client --host myserver --port 2137 --min-inflight 1 --max-inflight 64 --interval 30 --warmup 5 --streaming
+./grpc_ping_client --host myserver:2137 --min-inflight 1 --max-inflight 64 --interval 30 --warmup 5 --streaming
 
 # Using multiple channels
-./grpc_ping_client --host myserver --port 2137 --inflight 64 --max-channels 4 --interval 30 --warmup 5
+./grpc_ping_client --host myserver:2137 --inflight 64 --max-channels 4 --interval 30 --warmup 5
 
 # Using multiple channels with streaming
-./grpc_ping_client --host myserver --port 2137 --inflight 64 --max-channels 4 --interval 30 --warmup 5 --streaming
+./grpc_ping_client --host myserver:2137 --inflight 64 --max-channels 4 --interval 30 --warmup 5 --streaming
 ```
 
 ## Running server

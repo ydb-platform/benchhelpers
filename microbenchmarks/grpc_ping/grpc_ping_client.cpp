@@ -138,8 +138,7 @@ struct BenchmarkResult {
 };
 
 struct BenchmarkSettings {
-    std::string host = "localhost";
-    int port = 2137;
+    std::vector<std::string> hosts = {"localhost:2137"};
     int inflight = 32;
     int max_channels = 1;
     int interval_seconds = 10;
@@ -233,8 +232,7 @@ void PrintUsage(const char* program_name) {
     std::cout << "Usage: " << program_name << " [options]" << std::endl;
     std::cout << "Options:" << std::endl;
     std::cout << "  -h, --help           Show this help message" << std::endl;
-    std::cout << "  --host <hostname>    Server hostname (default: " << defaults.host << ")" << std::endl;
-    std::cout << "  --port <port>        Server port (default: " << defaults.port << ")" << std::endl;
+    std::cout << "  --host <hostname>    Server hostname(s) with port, comma-separated (default: " << defaults.hosts[0] << ")" << std::endl;
     std::cout << "  --inflight <N>       Number of concurrent requests (default: " << defaults.inflight << ")" << std::endl;
     std::cout << "  --min-inflight <N>   Minimum number of concurrent requests for range test" << std::endl;
     std::cout << "  --max-inflight <N>   Maximum number of concurrent requests for range test" << std::endl;
@@ -263,14 +261,13 @@ BenchmarkRunResult RunBenchmark(const BenchmarkSettings& settings, int inflight)
 
     // Create channels
     std::vector<std::shared_ptr<grpc::Channel>> channels;
-    std::string target = settings.host + ":" + std::to_string(settings.port);
-    grpc::ChannelArguments args;
-
-    if (settings.use_local_pool) {
-        args.SetInt(GRPC_ARG_USE_LOCAL_SUBCHANNEL_POOL, 1);
-    }
-
+    // Spread hosts evenly between channels
     for (int i = 0; i < max_channels; ++i) {
+        const std::string& target = settings.hosts[i % settings.hosts.size()];
+        grpc::ChannelArguments args;
+        if (settings.use_local_pool) {
+            args.SetInt(GRPC_ARG_USE_LOCAL_SUBCHANNEL_POOL, 1);
+        }
         channels.push_back(grpc::CreateCustomChannel(target, grpc::InsecureChannelCredentials(), args));
     }
 
@@ -531,9 +528,15 @@ int main(int argc, char** argv) {
             PrintUsage(argv[0]);
             return 0;
         } else if (arg == "--host" && i + 1 < argc) {
-            settings.host = argv[++i];
-        } else if (arg == "--port" && i + 1 < argc) {
-            settings.port = std::stoi(argv[++i]);
+            // Support comma-separated hosts, each must include port
+            std::string hosts_arg = argv[++i];
+            settings.hosts.clear();
+            size_t start = 0, end = 0;
+            while ((end = hosts_arg.find(',', start)) != std::string::npos) {
+                settings.hosts.push_back(hosts_arg.substr(start, end - start));
+                start = end + 1;
+            }
+            settings.hosts.push_back(hosts_arg.substr(start));
         } else if (arg == "--inflight" && i + 1 < argc) {
             settings.inflight = std::stoi(argv[++i]);
         } else if (arg == "--min-inflight" && i + 1 < argc) {
@@ -564,7 +567,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    TestNagleAlgorithm(settings.host + ":" + std::to_string(settings.port));
+    TestNagleAlgorithm(settings.hosts[0]);
 
     if (!flags.user_specified_max_channels) {
         settings.max_channels = flags.use_range ? flags.max_inflight : settings.inflight;
