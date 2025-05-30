@@ -1,5 +1,8 @@
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <functional>
+#include <future>
 #include <iomanip>
 #include <iostream>
 #include <numeric>
@@ -20,11 +23,14 @@
 #include "debug.grpc.pb.h"
 
 using grpc::Channel;
+using grpc::ClientAsyncResponseReader;
 using grpc::ClientContext;
 using grpc::Status;
 using Ydb::Debug::V1::DebugService;
 using Ydb::Debug::V1::PlainGrpcRequest;
 using Ydb::Debug::V1::PlainGrpcResponse;
+
+//-----------------------------------------------------------------------------
 
 class DebugServiceClient {
 public:
@@ -123,6 +129,156 @@ private:
     ClientContext stream_context_;
 };
 
+//-----------------------------------------------------------------------------
+
+class AsyncDebugServiceClient {
+public:
+    AsyncDebugServiceClient(std::shared_ptr<Channel> channel)
+        : stub_(DebugService::NewStub(channel))
+        , channel_(std::move(channel))
+        , cq_(new grpc::CompletionQueue)
+        , running_(true)
+    {
+        cq_thread_ = std::thread([this] { this->ProcessCQ(); });
+    }
+
+    ~AsyncDebugServiceClient() {
+        running_ = false;
+        cq_->Shutdown();
+        if (cq_thread_.joinable()) {
+            cq_thread_.join();
+        }
+    }
+
+    // we assume, that worker stops calling us before ~AsyncDebugServiceClient(),
+    // so that there is no race here
+    std::future<uint64_t> AsyncPing() {
+        auto* call = new AsyncPingCall(*this);
+        return call->Start();
+    }
+
+private:
+    struct AsyncPingCall {
+        AsyncPingCall(AsyncDebugServiceClient& client)
+            : client(client)
+        {
+        }
+
+        std::future<uint64_t> Start() {
+            auto future = promise.get_future();
+            start = std::chrono::high_resolution_clock::now();
+            auto deadline = std::chrono::system_clock::now() + std::chrono::seconds(1);
+            context.set_deadline(deadline);
+            rpc = client.stub_->AsyncPingPlainGrpc(&context, request, client.cq_.get());
+            rpc->Finish(&response, &status, this);
+
+            return future;
+        }
+
+        void OnComplete(bool ok) {
+            auto end = std::chrono::high_resolution_clock::now();
+            if (ok && status.ok()) {
+                uint64_t latency = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+                promise.set_value(latency);
+            } else {
+                promise.set_value(0);
+            }
+            delete this;
+        }
+
+        AsyncDebugServiceClient& client;
+        std::promise<uint64_t> promise;
+
+        ClientContext context;
+        PlainGrpcRequest request;
+        PlainGrpcResponse response;
+        Status status;
+        std::unique_ptr<ClientAsyncResponseReader<PlainGrpcResponse> > rpc;
+
+        std::chrono::high_resolution_clock::time_point start;
+    };
+
+    void ProcessCQ() {
+        void* tag;
+        bool ok;
+        while (running_ && cq_->Next(&tag, &ok)) {
+            static_cast<AsyncPingCall*>(tag)->OnComplete(ok);
+        }
+    }
+
+    std::unique_ptr<DebugService::Stub> stub_;
+    std::shared_ptr<Channel> channel_;
+    std::unique_ptr<grpc::CompletionQueue> cq_;
+    std::thread cq_thread_;
+    std::atomic<bool> running_;
+};
+
+//-----------------------------------------------------------------------------
+
+class AsyncCallbackDebugServiceClient {
+public:
+    AsyncCallbackDebugServiceClient(std::shared_ptr<Channel> channel)
+        : stub_(DebugService::NewStub(channel))
+        , channel_(std::move(channel))
+    {
+    }
+
+    ~AsyncCallbackDebugServiceClient() {
+    }
+
+    // we assume, that worker stops calling us before ~AsyncDebugServiceClient(),
+    // so that there is no race here
+    std::future<uint64_t> AsyncPing() {
+        auto* call = new AsyncPingCallbackCall(*this);
+        return call->Start();
+    }
+
+private:
+    struct AsyncPingCallbackCall : public grpc::ClientUnaryReactor {
+        AsyncPingCallbackCall(AsyncCallbackDebugServiceClient& client)
+            : client(client)
+        {
+        }
+
+        std::future<uint64_t> Start() {
+            auto future = promise.get_future();
+            start = std::chrono::high_resolution_clock::now();
+            auto deadline = std::chrono::system_clock::now() + std::chrono::seconds(1);
+            context.set_deadline(deadline);
+
+            client.stub_->async()->PingPlainGrpc(&context, &request, &response, this);
+            StartCall();
+
+            return future;
+        }
+
+        void OnDone(const grpc::Status& s) override {
+            auto end = std::chrono::high_resolution_clock::now();
+            if (s.ok()) {
+                uint64_t latency = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+                promise.set_value(latency);
+            } else {
+                promise.set_value(0);
+            }
+            delete this;
+        }
+
+        AsyncCallbackDebugServiceClient& client;
+        std::promise<uint64_t> promise;
+
+        ClientContext context;
+        PlainGrpcRequest request;
+        PlainGrpcResponse response;
+
+        std::chrono::high_resolution_clock::time_point start;
+    };
+
+    std::unique_ptr<DebugService::Stub> stub_;
+    std::shared_ptr<Channel> channel_;
+};
+
+//-----------------------------------------------------------------------------
+
 struct alignas(64) PerThreadResult {
     std::vector<uint64_t> latencies;
 };
@@ -141,10 +297,13 @@ struct BenchmarkSettings {
     std::vector<std::string> hosts = {"localhost:2137"};
     int inflight = 32;
     int max_channels = 1;
+    int max_async_clients = 0; // 0 means auto (equal to inflight)
     int interval_seconds = 10;
     int warmup_seconds = 1;
     bool use_local_pool = false;
     bool use_streaming = false;
+    bool use_async = false;
+    bool use_async_callback = false;
 };
 
 struct BenchmarkFlags {
@@ -156,8 +315,16 @@ struct BenchmarkFlags {
     int max_inflight = 32;
 };
 
-void Worker(std::shared_ptr<grpc::Channel> channel, std::stop_token stop_token, std::atomic<bool>& startMeasure, PerThreadResult& result, bool use_streaming) {
-    DebugServiceClient client(channel);
+//-----------------------------------------------------------------------------
+
+void Worker(
+    std::shared_ptr<grpc::Channel> channel,
+    std::stop_token stop_token,
+    std::atomic<bool>& startMeasure,
+    PerThreadResult& result,
+    bool use_streaming)
+{
+    DebugServiceClient client(std::move(channel));
 
     if (use_streaming) {
         client.StartStream();
@@ -183,6 +350,56 @@ void Worker(std::shared_ptr<grpc::Channel> channel, std::stop_token stop_token, 
     }
 }
 
+//-----------------------------------------------------------------------------
+
+void AsyncWorker(
+    AsyncDebugServiceClient& client,
+    std::stop_token stop_token,
+    std::atomic<bool>& startMeasure,
+    PerThreadResult& result,
+    bool use_streaming)
+{
+    // warmup
+    while (!startMeasure.load(std::memory_order_relaxed) && !stop_token.stop_requested()) {
+        auto future = client.AsyncPing();
+        future.wait();
+    }
+
+    // measure
+    while (!stop_token.stop_requested()) {
+        uint64_t latency = client.AsyncPing().get();
+        if (latency) {
+            result.latencies.push_back(latency);
+        }
+    }
+}
+
+//-----------------------------------------------------------------------------
+
+void AsyncCallbackWorker(
+    AsyncCallbackDebugServiceClient& client,
+    std::stop_token stop_token,
+    std::atomic<bool>& startMeasure,
+    PerThreadResult& result,
+    bool use_streaming)
+{
+    // warmup
+    while (!startMeasure.load(std::memory_order_relaxed) && !stop_token.stop_requested()) {
+        auto future = client.AsyncPing();
+        future.wait();
+    }
+
+    // measure
+    while (!stop_token.stop_requested()) {
+        uint64_t latency = client.AsyncPing().get();
+        if (latency) {
+            result.latencies.push_back(latency);
+        }
+    }
+}
+
+//-----------------------------------------------------------------------------
+
 void PrintStats(const std::vector<uint64_t>& latencies, int total_requests, int interval_seconds) {
     if (latencies.empty()) {
         std::cout << "No successful requests" << std::endl;
@@ -206,6 +423,8 @@ void PrintStats(const std::vector<uint64_t>& latencies, int total_requests, int 
     std::cout << "  100th: " << latencies.back() << std::endl;
 }
 
+//-----------------------------------------------------------------------------
+
 BenchmarkResult CalculateStats(const std::vector<uint64_t>& latencies, int total_requests, int interval_seconds) {
     BenchmarkResult result;
     if (latencies.empty()) {
@@ -227,6 +446,8 @@ BenchmarkResult CalculateStats(const std::vector<uint64_t>& latencies, int total
     return result;
 }
 
+//-----------------------------------------------------------------------------
+
 void PrintUsage(const char* program_name) {
     BenchmarkSettings defaults;
     std::cout << "Usage: " << program_name << " [options]" << std::endl;
@@ -237,13 +458,18 @@ void PrintUsage(const char* program_name) {
     std::cout << "  --min-inflight <N>   Minimum number of concurrent requests for range test" << std::endl;
     std::cout << "  --max-inflight <N>   Maximum number of concurrent requests for range test" << std::endl;
     std::cout << "  --max-channels <N>   Maximum number of gRPC channels (default: " << defaults.max_channels << ")" << std::endl;
+    std::cout << "  --max-async-clients <N> Maximum number of async workers (default: auto)" << std::endl;
     std::cout << "  --interval <seconds> Benchmark duration in seconds (default: " << defaults.interval_seconds << ")" << std::endl;
     std::cout << "  --warmup <seconds>   Warmup duration in seconds (default: " << defaults.warmup_seconds << ")" << std::endl;
     std::cout << "  --with-csv           Output results in CSV format" << std::endl;
     std::cout << "  --streaming          Use bidirectional streaming RPC" << std::endl;
     std::cout << "  --local-pool         Use local subchannel pool for connection reuse" << std::endl;
     std::cout << "  --per-worker-stats   Show per-worker throughput statistics" << std::endl;
+    std::cout << "  --async              Use asynchronous RPC (CQ)" << std::endl;
+    std::cout << "  --async-callback     Use asynchronous RPC (Callback)" << std::endl;
 }
+
+//-----------------------------------------------------------------------------
 
 struct BenchmarkRunResult {
     BenchmarkResult stats;
@@ -256,12 +482,8 @@ BenchmarkRunResult RunBenchmark(const BenchmarkSettings& settings, int inflight)
     std::stop_source stop_source;
     std::atomic<bool> startMeasure{false};
 
-    // don't create extra channels: worker can use at most one
     int max_channels = std::min(inflight, settings.max_channels);
-
-    // Create channels
     std::vector<std::shared_ptr<grpc::Channel>> channels;
-    // Spread hosts evenly between channels
     for (int i = 0; i < max_channels; ++i) {
         const std::string& target = settings.hosts[i % settings.hosts.size()];
         grpc::ChannelArguments args;
@@ -273,16 +495,51 @@ BenchmarkRunResult RunBenchmark(const BenchmarkSettings& settings, int inflight)
 
     std::cout << "\nRunning benchmark with " << inflight << " concurrent requests using " << max_channels << " channels..." << std::endl;
 
-    // Start worker threads
+    std::vector<std::unique_ptr<AsyncDebugServiceClient>> async_clients;
+    std::vector<std::unique_ptr<AsyncCallbackDebugServiceClient>> async_clients_callback;
+    if (settings.use_async || settings.use_async_callback) {
+        int max_async_clients = settings.max_async_clients > 0 ? settings.max_async_clients : inflight;
+        max_async_clients = std::min(max_async_clients, inflight);
+        std::cout << "Using " << max_async_clients << " async clients..." << std::endl;
+
+        for (int i = 0; i < max_async_clients; ++i) {
+            if (settings.use_async) {
+                async_clients.emplace_back(std::make_unique<AsyncDebugServiceClient>(channels[i % channels.size()]));
+            } else {
+                async_clients_callback.emplace_back(std::make_unique<AsyncCallbackDebugServiceClient>(channels[i % channels.size()]));
+            }
+        }
+    }
+
     for (int i = 0; i < inflight; ++i) {
-        auto channel = channels[i % max_channels];
-        threads.emplace_back(Worker,
-            channel,
-            stop_source.get_token(),
-            std::ref(startMeasure),
-            std::ref(thread_results[i]),
-            settings.use_streaming
-        );
+        if (settings.use_async) {
+            auto& client = *async_clients[i % async_clients.size()].get();
+            threads.emplace_back(AsyncWorker,
+                std::ref(client),
+                stop_source.get_token(),
+                std::ref(startMeasure),
+                std::ref(thread_results[i]),
+                settings.use_streaming
+            );
+        } else if (settings.use_async_callback) {
+            auto& client = *async_clients_callback[i % async_clients_callback.size()].get();
+            threads.emplace_back(AsyncCallbackWorker,
+                std::ref(client),
+                stop_source.get_token(),
+                std::ref(startMeasure),
+                std::ref(thread_results[i]),
+                settings.use_streaming
+            );
+        } else {
+            auto channel = channels[i % max_channels];
+            threads.emplace_back(Worker,
+                channel,
+                stop_source.get_token(),
+                std::ref(startMeasure),
+                std::ref(thread_results[i]),
+                settings.use_streaming
+            );
+        }
     }
 
     // Wait for all threads to start and warmup
@@ -318,6 +575,8 @@ BenchmarkRunResult RunBenchmark(const BenchmarkSettings& settings, int inflight)
 
     return BenchmarkRunResult{result, thread_results};
 }
+
+//-----------------------------------------------------------------------------
 
 void PrintResultsTable(const std::vector<BenchmarkResult>& results) {
     if (results.empty()) {
@@ -371,6 +630,8 @@ void PrintResultsTable(const std::vector<BenchmarkResult>& results) {
     }
 }
 
+//-----------------------------------------------------------------------------
+
 void PrintResultsCSV(const std::vector<BenchmarkResult>& results) {
     std::cout << "\nCSV Results:" << std::endl;
     std::cout << "inflight,throughput,p50,p90,p99,p99_9,p100" << std::endl;
@@ -385,6 +646,8 @@ void PrintResultsCSV(const std::vector<BenchmarkResult>& results) {
                   << result.p100 << std::endl;
     }
 }
+
+//-----------------------------------------------------------------------------
 
 void PrintWorkerThroughputTable(const std::vector<PerThreadResult>& thread_results, int interval_seconds) {
     if (thread_results.empty()) {
@@ -412,6 +675,8 @@ void PrintWorkerThroughputTable(const std::vector<PerThreadResult>& thread_resul
                   << std::setw(throughput_width) << std::fixed << std::setprecision(2) << throughput << std::endl;
     }
 }
+
+//-----------------------------------------------------------------------------
 
 class TGRpcInterceptSocketMutator : public grpc_socket_mutator {
 public:
@@ -494,6 +759,8 @@ grpc_socket_mutator_vtable TGRpcInterceptSocketMutator::VTable =
     &TGRpcInterceptSocketMutator::Mutate2
 };
 
+//-----------------------------------------------------------------------------
+
 void TestNagleAlgorithm(const std::string& target) {
     using namespace grpc;
 
@@ -517,6 +784,8 @@ void TestNagleAlgorithm(const std::string& target) {
 
     mutator->Test();
 }
+
+//-----------------------------------------------------------------------------
 
 int main(int argc, char** argv) {
     BenchmarkSettings settings;
@@ -548,6 +817,8 @@ int main(int argc, char** argv) {
         } else if (arg == "--max-channels" && i + 1 < argc) {
             settings.max_channels = std::stoi(argv[++i]);
             flags.user_specified_max_channels = true;
+        } else if (arg == "--max-async-clients" && i + 1 < argc) {
+            settings.max_async_clients = std::stoi(argv[++i]);
         } else if (arg == "--interval" && i + 1 < argc) {
             settings.interval_seconds = std::stoi(argv[++i]);
         } else if (arg == "--warmup" && i + 1 < argc) {
@@ -560,6 +831,10 @@ int main(int argc, char** argv) {
             settings.use_local_pool = true;
         } else if (arg == "--per-worker-stats") {
             flags.per_worker_stats = true;
+        } else if (arg == "--async") {
+            settings.use_async = true;
+        } else if (arg == "--async-callback") {
+            settings.use_async_callback = true;
         } else {
             std::cerr << "Unknown option: " << arg << std::endl;
             PrintUsage(argv[0]);
