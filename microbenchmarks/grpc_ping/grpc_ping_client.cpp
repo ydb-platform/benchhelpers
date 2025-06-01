@@ -19,6 +19,10 @@
 #include <sys/socket.h>
 #include <netinet/tcp.h>
 
+#ifdef __linux__
+#include <pthread.h>
+#endif
+
 #include "debug.pb.h"
 #include "debug.grpc.pb.h"
 
@@ -199,6 +203,9 @@ private:
     };
 
     void ProcessCQ() {
+#ifdef __linux__
+        pthread_setname_np(pthread_self(), "grpc_client");
+#endif
         void* tag;
         bool ok;
         while (running_ && cq_->Next(&tag, &ok)) {
