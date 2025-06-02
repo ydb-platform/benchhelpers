@@ -15,9 +15,13 @@
 
 // XXX
 #include "build/_deps/grpc-src/src/core/lib/iomgr/socket_mutator.h"
+#include "build/_deps/grpc-src/src/core/lib/iomgr/port.h"
+
 
 #include <sys/socket.h>
 #include <netinet/tcp.h>
+#include <netinet/in.h>
+#include <netinet/ip.h> /* superset of previous */
 
 #ifdef __linux__
 #include <pthread.h>
@@ -792,6 +796,183 @@ void TestNagleAlgorithm(const std::string& target) {
     mutator->Test();
 }
 
+void PrintGrpcFlags() {
+    std::cout << "=== GRPC Linux-related Flags ===" << std::endl;
+
+    // Linux-specific defines
+#ifdef GRPC_HAVE_ARPA_NAMESER
+    std::cout << "GRPC_HAVE_ARPA_NAMESER: 1" << std::endl;
+#else
+    std::cout << "GRPC_HAVE_ARPA_NAMESER: 0" << std::endl;
+#endif
+
+#ifdef GRPC_HAVE_IFADDRS
+    std::cout << "GRPC_HAVE_IFADDRS: 1" << std::endl;
+#else
+    std::cout << "GRPC_HAVE_IFADDRS: 0" << std::endl;
+#endif
+
+#ifdef GRPC_HAVE_IPV6_RECVPKTINFO
+    std::cout << "GRPC_HAVE_IPV6_RECVPKTINFO: 1" << std::endl;
+#else
+    std::cout << "GRPC_HAVE_IPV6_RECVPKTINFO: 0" << std::endl;
+#endif
+
+#ifdef GRPC_HAVE_IP_PKTINFO
+    std::cout << "GRPC_HAVE_IP_PKTINFO: 1" << std::endl;
+#else
+    std::cout << "GRPC_HAVE_IP_PKTINFO: 0" << std::endl;
+#endif
+
+#ifdef GRPC_HAVE_MSG_NOSIGNAL
+    std::cout << "GRPC_HAVE_MSG_NOSIGNAL: 1" << std::endl;
+#else
+    std::cout << "GRPC_HAVE_MSG_NOSIGNAL: 0" << std::endl;
+#endif
+
+#ifdef GRPC_HAVE_UNIX_SOCKET
+    std::cout << "GRPC_HAVE_UNIX_SOCKET: 1" << std::endl;
+#else
+    std::cout << "GRPC_HAVE_UNIX_SOCKET: 0" << std::endl;
+#endif
+
+#ifdef GRPC_HAVE_TCP_INQ
+    std::cout << "GRPC_HAVE_TCP_INQ: 1" << std::endl;
+#else
+    std::cout << "GRPC_HAVE_TCP_INQ: 0" << std::endl;
+#endif
+
+#ifdef GRPC_LINUX_ERRQUEUE
+    std::cout << "GRPC_LINUX_ERRQUEUE: 1" << std::endl;
+#else
+    std::cout << "GRPC_LINUX_ERRQUEUE: 0" << std::endl;
+#endif
+
+#ifdef GRPC_LINUX_MULTIPOLL_WITH_EPOLL
+    std::cout << "GRPC_LINUX_MULTIPOLL_WITH_EPOLL: 1" << std::endl;
+#else
+    std::cout << "GRPC_LINUX_MULTIPOLL_WITH_EPOLL: 0" << std::endl;
+#endif
+
+#ifdef GRPC_LINUX_EPOLL
+    std::cout << "GRPC_LINUX_EPOLL: 1" << std::endl;
+#else
+    std::cout << "GRPC_LINUX_EPOLL: 0" << std::endl;
+#endif
+
+#ifdef GRPC_LINUX_EPOLL_CREATE1
+    std::cout << "GRPC_LINUX_EPOLL_CREATE1: 1" << std::endl;
+#else
+    std::cout << "GRPC_LINUX_EPOLL_CREATE1: 0" << std::endl;
+#endif
+
+#ifdef GRPC_LINUX_EVENTFD
+    std::cout << "GRPC_LINUX_EVENTFD: 1" << std::endl;
+#else
+    std::cout << "GRPC_LINUX_EVENTFD: 0" << std::endl;
+#endif
+
+#ifdef GRPC_LINUX_SOCKETUTILS
+    std::cout << "GRPC_LINUX_SOCKETUTILS: 1" << std::endl;
+#else
+    std::cout << "GRPC_LINUX_SOCKETUTILS: 0" << std::endl;
+#endif
+
+#ifdef GRPC_LINUX_TCP_H
+    std::cout << "GRPC_LINUX_TCP_H: 1" << std::endl;
+#else
+    std::cout << "GRPC_LINUX_TCP_H: 0" << std::endl;
+#endif
+
+#ifdef GRPC_MSG_IOVLEN_TYPE
+    std::cout << "GRPC_MSG_IOVLEN_TYPE: defined" << std::endl;
+#else
+    std::cout << "GRPC_MSG_IOVLEN_TYPE: not defined" << std::endl;
+#endif
+
+    // POSIX-related defines that are also set for Linux
+#ifdef GRPC_POSIX_FORK
+    std::cout << "GRPC_POSIX_FORK: 1" << std::endl;
+#else
+    std::cout << "GRPC_POSIX_FORK: 0" << std::endl;
+#endif
+
+#ifdef GRPC_POSIX_HOST_NAME_MAX
+    std::cout << "GRPC_POSIX_HOST_NAME_MAX: 1" << std::endl;
+#else
+    std::cout << "GRPC_POSIX_HOST_NAME_MAX: 0" << std::endl;
+#endif
+
+#ifdef GRPC_POSIX_SOCKET
+    std::cout << "GRPC_POSIX_SOCKET: 1" << std::endl;
+#else
+    std::cout << "GRPC_POSIX_SOCKET: 0" << std::endl;
+#endif
+
+#ifdef GRPC_POSIX_WAKEUP_FD
+    std::cout << "GRPC_POSIX_WAKEUP_FD: 1" << std::endl;
+#else
+    std::cout << "GRPC_POSIX_WAKEUP_FD: 0" << std::endl;
+#endif
+
+#ifdef GRPC_POSIX_NO_SPECIAL_WAKEUP_FD
+    std::cout << "GRPC_POSIX_NO_SPECIAL_WAKEUP_FD: 1" << std::endl;
+#else
+    std::cout << "GRPC_POSIX_NO_SPECIAL_WAKEUP_FD: 0" << std::endl;
+#endif
+
+#ifdef GRPC_POSIX_SOCKETUTILS
+    std::cout << "GRPC_POSIX_SOCKETUTILS: 1" << std::endl;
+#else
+    std::cout << "GRPC_POSIX_SOCKETUTILS: 0" << std::endl;
+#endif
+
+    // Socket-related defines
+#ifdef GRPC_POSIX_SOCKET_ARES_EV_DRIVER
+    std::cout << "GRPC_POSIX_SOCKET_ARES_EV_DRIVER: 1" << std::endl;
+#else
+    std::cout << "GRPC_POSIX_SOCKET_ARES_EV_DRIVER: 0" << std::endl;
+#endif
+
+#ifdef GRPC_POSIX_SOCKET_EV
+    std::cout << "GRPC_POSIX_SOCKET_EV: 1" << std::endl;
+#else
+    std::cout << "GRPC_POSIX_SOCKET_EV: 0" << std::endl;
+#endif
+
+#ifdef GRPC_POSIX_SOCKET_EV_POLL
+    std::cout << "GRPC_POSIX_SOCKET_EV_POLL: 1" << std::endl;
+#else
+    std::cout << "GRPC_POSIX_SOCKET_EV_POLL: 0" << std::endl;
+#endif
+
+#ifdef GRPC_POSIX_SOCKET_EV_EPOLL1
+    std::cout << "GRPC_POSIX_SOCKET_EV_EPOLL1: 1" << std::endl;
+#else
+    std::cout << "GRPC_POSIX_SOCKET_EV_EPOLL1: 0" << std::endl;
+#endif
+
+#ifdef GRPC_POSIX_SOCKET_IOMGR
+    std::cout << "GRPC_POSIX_SOCKET_IOMGR: 1" << std::endl;
+#else
+    std::cout << "GRPC_POSIX_SOCKET_IOMGR: 0" << std::endl;
+#endif
+
+#ifdef GRPC_POSIX_SOCKET_TCP
+    std::cout << "GRPC_POSIX_SOCKET_TCP: 1" << std::endl;
+#else
+    std::cout << "GRPC_POSIX_SOCKET_TCP: 0" << std::endl;
+#endif
+
+#ifdef GRPC_POSIX_SOCKET_UDP_SERVER
+    std::cout << "GRPC_POSIX_SOCKET_UDP_SERVER: 1" << std::endl;
+#else
+    std::cout << "GRPC_POSIX_SOCKET_UDP_SERVER: 0" << std::endl;
+#endif
+
+    std::cout << "=================================" << std::endl;
+}
+
 //-----------------------------------------------------------------------------
 
 int main(int argc, char** argv) {
@@ -802,6 +983,9 @@ int main(int argc, char** argv) {
         std::string arg = argv[i];
         if (arg == "-h" || arg == "--help") {
             PrintUsage(argv[0]);
+            return 0;
+        } else if (arg == "--print-grpc-flags") {
+            PrintGrpcFlags();
             return 0;
         } else if (arg == "--host" && i + 1 < argc) {
             // Support comma-separated hosts, each must include port

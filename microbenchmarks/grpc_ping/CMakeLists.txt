@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.13)
 project(grpc_ping CXX)
 
+add_compile_options(-D_GLIBCXX_USE_CXX11_ABI=0)
+
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
@@ -28,7 +30,7 @@ set(gRPC_ZLIB_PROVIDER "package")
 FetchContent_Declare(
     gRPC
     GIT_REPOSITORY https://github.com/grpc/grpc
-    GIT_TAG v1.72.0
+    GIT_TAG v1.54.1
     GIT_SHALLOW TRUE
 )
 FetchContent_MakeAvailable(gRPC)
