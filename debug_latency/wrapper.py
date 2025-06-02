@@ -79,7 +79,6 @@ def create_table(session, table_path):
             git_commit_timestamp Timestamp,
             git_branch Utf8,
             kind Utf8,
-            label Utf8,
             throughput Uint32,
             latency_p50 Uint32,
             latency_p90 Uint32,
@@ -145,7 +144,6 @@ def insert_ydb_results_row(session, path, args, results):
                     `git_commit_timestamp`,
                     `git_branch`,
                     `kind`,
-                    `label`,
                     `throughput`,
                     `latency_p50`,
                     `latency_p90`,
@@ -158,7 +156,6 @@ def insert_ydb_results_row(session, path, args, results):
                     DateTime::FromSeconds({args.git_commit_timestamp}),
                     "{args.git_branch}",
                     "{kind}",
-                    "{args.label}",
                     {max_throughput},
                     {p50},
                     {p90},
@@ -218,7 +215,6 @@ def main():
     parser.add_argument("--token", help="YDB token")
     parser.add_argument("--sa-token", help="YDB service account token")
     parser.add_argument("--ydb-version", help="YDB version", required=True)
-    parser.add_argument("--label", help="label", required=True)
     parser.add_argument("--label-cluster", help="cluster label", required=True)
     parser.add_argument("--git-commit-timestamp", help="git commit timestamp", required=True)
     parser.add_argument("--git-repository", help="repository", required=True)
