@@ -1,3 +1,14 @@
+YDB includes [TPC-C implementation](https://ydb.tech/docs/en/reference/ydb-cli/workload-tpcc?version=main) as part of its [CLI](https://ydb.tech/docs/en/reference/ydb-cli/).
+It follows the exact same logic as the BenchBase-based implementation but requires **orders of magnitude less RAM** on the client side.
+It also supports all available authentication schemes, features a built-in TUI, and offers a more polished user experience overall.
+
+**We strongly recommend using implementation provided with the CLI.**
+See the YDB CLI [installation guide](https://ydb.tech/docs/en/reference/ydb-cli/install?version=main) for setup instructions.
+
+<center><img src="img/new_tpcc.png" width="400"></center>
+
+**Below are the instructions for running TPC-C in an outdated and inconvenient way.**
+
 # How to run TPC-C on YDB
 
 Until you have a cluster of a reasonable size, you can easily run a single instance of [TPC-C](https://github.com/ydb-platform/tpcc). Current implementation of TPC-C is relatively [resource](https://github.com/ydb-platform/tpcc#hardware-requirements) greedy, which is why you might need to start multiple instances of TPC-C on different machines, when your YDB cluster contains hundreds of cores. For this purpose we provide `run_ydb.sh`, a tpcc benchhelper, which helps to start the TPC-C instances as well as to aggregate the results.
