@@ -71,9 +71,19 @@ stack_collapse_script="$flamegraph_dir/stackcollapse-perf.pl"
 flamegraph_script="$flamegraph_dir/flamegraph.pl"
 
 if [[ -n "$only_storage" ]]; then
-    perf_record_cmd="sudo perf record -F $frequency -o $perf_data_file -a -g -p \`pgrep -f ydbd.*static | head -1\` -- sleep $duration"
+    pids=$(ssh $host "pgrep -f ydbd.*static | head -n -1 | paste -sd,")
+    if [[ -z "$pids" ]]; then
+        echo "No processes found matching ydbd.*static on $host"
+        exit 1
+    fi
+    perf_record_cmd="sudo perf record -F $frequency -o $perf_data_file -a -g -p $pids -- sleep $duration"
 elif [[ -n "$only_compute" ]]; then
-    perf_record_cmd="sudo perf record -F $frequency -o $perf_data_file -a -g -p \`pgrep -f ydbd.*tenant | head -1\` -- sleep $duration"
+    pids=$(ssh $host "pgrep -f ydbd.*tenant | head -n -1 | paste -sd,")
+    if [[ -z "$pids" ]]; then
+        echo "No processes found matching ydbd.*tenant on $host"
+        exit 1
+    fi
+    perf_record_cmd="sudo perf record -F $frequency -o $perf_data_file -a -g -p $pids -- sleep $duration"
 else
     perf_record_cmd="sudo perf record -F $frequency -o $perf_data_file -a -g -- sleep $duration"
 fi
