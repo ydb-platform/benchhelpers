@@ -139,6 +139,8 @@ if [[ -z "$skip_fill_disk" ]]; then
     fi
 fi
 
+percentile_list="50:90:95:99:99.9"
+
 #
 # write bandwidth test
 #
@@ -153,6 +155,7 @@ sudo fio --name=write_bandwidth_test \
   --rw=write \
   --numjobs=$numjobs \
   --offset_increment=$multi_stream_seq_test_offset \
+  --percentile_list=$percentile_list \
   --output-format=$format \
   --output="$results_dir/write_bandwidth_test.$format"
 
@@ -165,6 +168,7 @@ sudo fio --name=write_iops_test \
   --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
   --bs=4K --iodepth=256 --rw=randwrite \
   --iodepth_batch_submit=256  --iodepth_batch_complete_max=256 \
+  --percentile_list=$percentile_list \
   --output-format=$format \
   --output="$results_dir/write_iops_test.$format"
 
@@ -177,6 +181,7 @@ sudo fio --name=write_iops_test \
   --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
   --bs=8K --iodepth=256 --rw=randwrite \
   --iodepth_batch_submit=256  --iodepth_batch_complete_max=256 \
+  --percentile_list=$percentile_list \
   --output-format=$format \
   --output="$results_dir/write_iops_test_8K.$format"
 
@@ -189,6 +194,7 @@ sudo fio --name=write_latency_test \
   --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
   --bs=4K --iodepth=4 --rw=randwrite --iodepth_batch_submit=4  \
   --iodepth_batch_complete_max=4 \
+  --percentile_list=$percentile_list \
   --output-format=$format \
   --output="$results_dir/write_latency_test.$format"
 
@@ -201,6 +207,7 @@ sudo fio --name=write_latency_test \
   --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
   --bs=8K --iodepth=4 --rw=randwrite --iodepth_batch_submit=4  \
   --iodepth_batch_complete_max=4 \
+  --percentile_list=$percentile_list \
   --output-format=$format \
   --output="$results_dir/write_latency_test_8K.$format"
 
@@ -213,6 +220,7 @@ sudo fio --name=read_bandwidth_test \
   --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
   --bs=1M --iodepth=64 --rw=read --numjobs=$numjobs --offset_increment=100G \
   --iodepth_batch_submit=64  --iodepth_batch_complete_max=64 \
+  --percentile_list=$percentile_list \
   --output-format=$format \
   --output="$results_dir/read_bandwidth_test.$format"
 
@@ -225,6 +233,7 @@ sudo fio --name=read_iops_test \
   --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
   --bs=4K --iodepth=256 --rw=randread \
   --iodepth_batch_submit=256  --iodepth_batch_complete_max=256 \
+  --percentile_list=$percentile_list \
   --output-format=$format \
   --output="$results_dir/read_iops_test.$format"
 
@@ -237,6 +246,7 @@ sudo fio --name=read_iops_test \
   --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
   --bs=8K --iodepth=256 --rw=randread \
   --iodepth_batch_submit=256  --iodepth_batch_complete_max=256 \
+  --percentile_list=$percentile_list \
   --output-format=$format \
   --output="$results_dir/read_iops_test_8K.$format"
 
@@ -249,6 +259,7 @@ sudo fio --name=read_latency_test \
   --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
   --bs=4K --iodepth=4 --rw=randread \
   --iodepth_batch_submit=4  --iodepth_batch_complete_max=4 \
+  --percentile_list=$percentile_list \
   --output-format=$format \
   --output="$results_dir/read_latency_test.$format"
 
@@ -261,6 +272,7 @@ sudo fio --name=read_latency_test \
   --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
   --bs=8K --iodepth=4 --rw=randread \
   --iodepth_batch_submit=4  --iodepth_batch_complete_max=4 \
+  --percentile_list=$percentile_list \
   --output-format=$format \
   --output="$results_dir/read_latency_test_8K.$format"
 

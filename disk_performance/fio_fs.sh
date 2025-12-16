@@ -60,6 +60,8 @@ if [[ ! -d "$fiotest_dir" ]]; then
     exit 1
 fi
 
+percentile_list="50:90:95:99:99.9"
+
 #
 # write bandwidth test
 #
@@ -68,6 +70,7 @@ sudo fio --name=write_bandwidth_test --directory=$fiotest_dir --numjobs=16 \
   --direct=1 --verify=0 --bs=1M --iodepth=64 --rw=write \
   --iodepth_batch_submit=64 \
   --iodepth_batch_complete_max=64 \
+  --percentile_list=$percentile_list \
   --output-format=$format \
   --output="$results_dir/write_bandwidth_test.$format"
 
@@ -78,6 +81,7 @@ sudo fio --name=write_iops_test --directory=$fiotest_dir --size=10G \
   --time_based --runtime=60s --ramp_time=2s --ioengine=libaio --direct=1 \
   --verify=0 --bs=4K --iodepth=256 --rw=randwrite \
   --iodepth_batch_submit=256 --iodepth_batch_complete_max=256 \
+  --percentile_list=$percentile_list \
   --output-format=$format \
   --output="$results_dir/write_iops_test.$format"
 
@@ -88,6 +92,7 @@ sudo fio --name=write_iops_test --directory=$fiotest_dir --size=10G \
   --time_based --runtime=60s --ramp_time=2s --ioengine=libaio --direct=1 \
   --verify=0 --bs=8K --iodepth=256 --rw=randwrite \
   --iodepth_batch_submit=256 --iodepth_batch_complete_max=256 \
+  --percentile_list=$percentile_list \
   --output-format=$format \
   --output="$results_dir/write_iops_test_8K.$format"
 
@@ -98,6 +103,7 @@ sudo fio --name=read_bandwidth_test --directory=$fiotest_dir --numjobs=16 \
   --size=10G --time_based --runtime=60s --ramp_time=2s --ioengine=libaio \
   --direct=1 --verify=0 --bs=1M --iodepth=64 --rw=read \
   --iodepth_batch_submit=64 --iodepth_batch_complete_max=64 \
+  --percentile_list=$percentile_list \
   --output-format=$format \
   --output="$results_dir/read_bandwidth_test.$format"
 
@@ -108,6 +114,7 @@ sudo fio --name=read_iops_test --directory=$fiotest_dir --size=10G \
   --time_based --runtime=60s --ramp_time=2s --ioengine=libaio --direct=1 \
   --verify=0 --bs=4K --iodepth=256 --rw=randread \
   --iodepth_batch_submit=256 --iodepth_batch_complete_max=256 \
+  --percentile_list=$percentile_list \
   --output-format=$format \
   --output="$results_dir/read_iops_test.$format"
 
@@ -118,6 +125,7 @@ sudo fio --name=read_iops_test --directory=$fiotest_dir --size=10G \
   --time_based --runtime=60s --ramp_time=2s --ioengine=libaio --direct=1 \
   --verify=0 --bs=8K --iodepth=256 --rw=randread \
   --iodepth_batch_submit=256 --iodepth_batch_complete_max=256 \
+  --percentile_list=$percentile_list \
   --output-format=$format \
   --output="$results_dir/read_iops_test_8K.$format"
 
