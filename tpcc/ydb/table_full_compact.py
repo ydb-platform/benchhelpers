@@ -21,7 +21,9 @@ RE_FORCED_COMPACTION_STATE = re.compile(r'Forced compaction: (\w+)', re.S)
 
 
 def load_json(url):
-    return requests.get(url, headers=VIEWER_HEADERS, verify=False).json()
+    response = requests.get(url, headers=VIEWER_HEADERS, verify=False)
+    response.raise_for_status()
+    return response.json()
 
 
 def describe_table(path):
@@ -31,7 +33,9 @@ def describe_table(path):
 
 def tablet_internals(tablet_id):
     url = URL_EXECUTOR_INTERNALS.format(url_base=VIEWER_URL_BASE, tablet_id=tablet_id)
-    return requests.get(url, headers=VIEWER_HEADERS, verify=False).text
+    response = requests.get(url, headers=VIEWER_HEADERS, verify=False)
+    response.raise_for_status()
+    return response.text
 
 
 def extract_loaned_parts(text):
@@ -52,7 +56,9 @@ def extract_force_compaction_state(text):
 
 def start_force_compaction(tablet_id, local_table_id=1001):
     url = URL_FORCE_COMPACT.format(url_base=VIEWER_URL_BASE, tablet_id=tablet_id, local_table_id=local_table_id)
-    text = requests.get(url, headers=VIEWER_HEADERS, verify=False).text
+    response = requests.get(url, headers=VIEWER_HEADERS, verify=False)
+    response.raise_for_status()
+    text = response.text
     if 'Table will be compacted in the near future' not in text:
         print(text)
 
