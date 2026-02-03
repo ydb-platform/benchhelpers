@@ -53,15 +53,15 @@ if ! [[ "$PERCENTILE" =~ ^p[0-9]+(\.[0-9]+)?$ ]]; then
 fi
 
 # Get unique sorted InFlight values from all results
-HEADER=$(jq -r '.[].Results[].InFlight | tostring | select(. != "") | tonumber' "$INPUT_FILE" | sort -n | uniq | tr '\n' ',' | sed 's/,$//')
+HEADER=$(jq -r '.[].InFlights[].InFlight | tostring | select(. != "") | tonumber' "$INPUT_FILE" | sort -n | uniq | tr '\n' ',' | sed 's/,$//')
 echo "What,$HEADER"
 
 # Process each result group
 jq -r --arg p "$PERCENTILE" '
     .[] | 
     . as $group |
-    $group.Results | 
-    sort_by(.InFlight | tonumber) | 
-    map(.[$p] | sub(" us"; "")) as $values |
+    $group.InFlights |
+    sort_by(.InFlight | tonumber) |
+    map((.Runs[-1][$p] // "") | tostring | sub(" us$"; "")) as $values |
     [$group.Label + " " + $group.LogMode] + $values | 
     @csv' "$INPUT_FILE" 

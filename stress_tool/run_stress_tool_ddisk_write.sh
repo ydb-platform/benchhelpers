@@ -1,33 +1,49 @@
 #!/bin/bash
 
-# Script to run the stress tool with different configurations
-# Usage: ./run_stress_tool_pdisk_write.sh --tool <ydb_stress_tool_path> [--duration <seconds>] [--label <label>] [--log-mode <LOG_NONE|LOG_SEQUENTIAL>] [--run-count <N>] [--inflight-from <N>] [--inflight-to <N>] [--chunks-count <N>] --disk <disk_path> --output <output_file>
+# Script to run the stress tool with DDiskWriteLoad configuration.
+# Outputs results in the same JSON group format as run_stress_tool_pdisk_write.sh:
+#   [
+#     { Label, LogMode, TestType, Params, InFlights: [...] }
+#   ]
+#
+# Usage:
+#   ./run_stress_tool_ddisk_write.sh --tool <ydb_stress_tool_path> [--duration <seconds>] [--warmup <seconds>] [--label <label>]
+#     [--run-count <N>] [--inflight-from <N>] [--inflight-to <N>] [--areas-count <N>]
+#     [--area-size <bytes>] [--expected-chunk-size <bytes>]
+#     [--node-id <N>] [--pdisk-id <N>] [--ddisk-slot-id <N>]
+#     --disk <disk_path> --output <output_file>
 
 set -e
 
 YDB_STRESS_TOOL=""
-DURATION=120
 LABEL=""
 DISK_PATH=""
 OUTPUT_FILE=""
-LOG_MODE="LOG_NONE"
+
+DURATION=120
+WARMUP_SECONDS=15
 RUN_COUNT=10
 INFLIGHT_FROM=1
-INFLIGHT_TO=32
-CHUNKS_COUNT=""
-CHUNK_SLOTS=32768
-WARMUP_SECONDS=15
+INFLIGHT_TO=128
+
+# Areas behave like chunks: by default Areas count == current inflight.
+AREAS_COUNT=""
+AREA_SIZE=134217728
+EXPECTED_CHUNK_SIZE=134217728
+
+NODE_ID=1
+PDISK_ID=1
+DDISK_SLOT_ID=1
+TAG=1
 
 usage() {
     cat << EOF
-Usage: $0 --tool <ydb_stress_tool_path> [--duration <seconds>] [--label <label>] [--log-mode <LOG_NONE|LOG_SEQUENTIAL>] [--run-count <N>] [--inflight-from <N>] [--inflight-to <N>] [--chunks-count <N>] [--warmup <seconds>] --disk <disk_path> --output <output_file>
+Usage: $0 --tool <ydb_stress_tool_path> [--duration <seconds>] [--warmup <seconds>] [--label <label>] [--run-count <N>] [--inflight-from <N>] [--inflight-to <N>] [--areas-count <N>] [--area-size <bytes>] [--expected-chunk-size <bytes>] [--node-id <N>] [--pdisk-id <N>] [--ddisk-slot-id <N>] --disk <disk_path> --output <output_file>
 
 Examples:
-  $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1 --output ./out.json
-  $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1 --output ./out.json --log-mode LOG_SEQUENTIAL
-  $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1 --output ./out.json --run-count $RUN_COUNT --inflight-from $INFLIGHT_FROM --inflight-to $INFLIGHT_TO
-  $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1 --output ./out.json --inflight-from 1 --inflight-to 32 --chunks-count 32
-  $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1 --output ./out.json --warmup 30
+  $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1p2 --output ./out.json
+  $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1p2 --output ./out.json --run-count $RUN_COUNT --inflight-from $INFLIGHT_FROM --inflight-to $INFLIGHT_TO
+  $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1p2 --output ./out.json --areas-count 32
 EOF
 }
 
@@ -39,6 +55,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --duration)
             DURATION="$2"
+            shift 2
+            ;;
+        --warmup)
+            WARMUP_SECONDS="$2"
             shift 2
             ;;
         --label)
@@ -53,15 +73,6 @@ while [[ $# -gt 0 ]]; do
             OUTPUT_FILE="$2"
             shift 2
             ;;
-        --log-mode)
-            LOG_MODE="$2"
-            shift 2
-            if [ -z "$LOG_MODE" ]; then
-                echo "Error: --log-mode requires a value"
-                usage
-                exit 1
-            fi
-            ;;
         --run-count)
             RUN_COUNT="$2"
             shift 2
@@ -74,12 +85,28 @@ while [[ $# -gt 0 ]]; do
             INFLIGHT_TO="$2"
             shift 2
             ;;
-        --chunks-count)
-            CHUNKS_COUNT="$2"
+        --areas-count)
+            AREAS_COUNT="$2"
             shift 2
             ;;
-        --warmup)
-            WARMUP_SECONDS="$2"
+        --area-size)
+            AREA_SIZE="$2"
+            shift 2
+            ;;
+        --expected-chunk-size)
+            EXPECTED_CHUNK_SIZE="$2"
+            shift 2
+            ;;
+        --node-id)
+            NODE_ID="$2"
+            shift 2
+            ;;
+        --pdisk-id)
+            PDISK_ID="$2"
+            shift 2
+            ;;
+        --ddisk-slot-id)
+            DDISK_SLOT_ID="$2"
             shift 2
             ;;
         *)
@@ -111,7 +138,7 @@ if ! touch "$OUTPUT_FILE" 2>/dev/null; then
     echo "Error: Cannot create output file $OUTPUT_FILE (permission denied)"
     exit 1
 fi
-rm "$OUTPUT_FILE"  # Remove the test file we just created
+rm "$OUTPUT_FILE"
 
 if [ -z "$LABEL" ]; then
     LABEL=$(basename "$YDB_STRESS_TOOL")
@@ -142,8 +169,14 @@ if [ ! -b "$DISK_PATH" ]; then
     exit 1
 fi
 
-if [ "$LOG_MODE" != "LOG_SEQUENTIAL" ] && [ "$LOG_MODE" != "LOG_NONE" ]; then
-    echo "Error: Invalid --log-mode '$LOG_MODE' (allowed: LOG_NONE or LOG_SEQUENTIAL)"
+if ! [[ "$DURATION" =~ ^[0-9]+$ ]] || [ "$DURATION" -lt 1 ]; then
+    echo "Error: --duration must be an integer >= 1 (got '$DURATION')"
+    usage
+    exit 1
+fi
+
+if ! [[ "$WARMUP_SECONDS" =~ ^[0-9]+$ ]] || [ "$WARMUP_SECONDS" -lt 0 ]; then
+    echo "Error: --warmup must be an integer >= 0 (got '$WARMUP_SECONDS')"
     usage
     exit 1
 fi
@@ -172,46 +205,43 @@ if [ "$INFLIGHT_FROM" -gt "$INFLIGHT_TO" ]; then
     exit 1
 fi
 
-if [ -n "$CHUNKS_COUNT" ]; then
-    if ! [[ "$CHUNKS_COUNT" =~ ^[0-9]+$ ]] || [ "$CHUNKS_COUNT" -lt 1 ]; then
-        echo "Error: --chunks-count must be an integer >= 1 (got '$CHUNKS_COUNT')"
+if [ -n "$AREAS_COUNT" ]; then
+    if ! [[ "$AREAS_COUNT" =~ ^[0-9]+$ ]] || [ "$AREAS_COUNT" -lt 1 ]; then
+        echo "Error: --areas-count must be an integer >= 1 (got '$AREAS_COUNT')"
         usage
         exit 1
     fi
 fi
 
-if ! [[ "$WARMUP_SECONDS" =~ ^[0-9]+$ ]] || [ "$WARMUP_SECONDS" -lt 0 ]; then
-    echo "Error: --warmup must be an integer >= 0 (got '$WARMUP_SECONDS')"
-    usage
-    exit 1
-fi
+for v in "$AREA_SIZE" "$EXPECTED_CHUNK_SIZE" "$NODE_ID" "$PDISK_ID" "$DDISK_SLOT_ID" "$TAG"; do
+    if ! [[ "$v" =~ ^[0-9]+$ ]] || [ "$v" -lt 1 ]; then
+        echo "Error: numeric option values must be integers >= 1 (got '$v')"
+        usage
+        exit 1
+    fi
+done
 
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
 generate_config() {
-    local log_mode=$1
-    local chunks_count=$2
-    local config_file=$3
+    local areas_count=$1
+    local config_file=$2
 
     cat > "$config_file" << EOF
-PDiskTestList: {
-    PDiskTestList: {
-        PDiskWriteLoad: {
-            Tag: 7
-            PDiskId: 1
-            PDiskGuid: 12345
-            VDiskId: {
-                GroupID: 1
-                GroupGeneration: 5
-                Ring: 1
-                Domain: 1
-                VDisk: 1
+DDiskTestList: {
+    DDiskTestList: {
+        DDiskWriteLoad: {
+            Tag: $TAG
+            DDiskId: {
+                NodeId: $NODE_ID
+                PDiskId: $PDISK_ID
+                DDiskSlotId: $DDISK_SLOT_ID
             }
 EOF
 
-    for ((i = 0; i < chunks_count; i++)); do
-        echo "            Chunks: { Slots: $CHUNK_SLOTS Weight: 1 }" >> "$config_file"
+    for ((i = 0; i < areas_count; i++)); do
+        echo "            Areas: { AreaSize: $AREA_SIZE Weight: 1 Sequential: false }" >> "$config_file"
     done
 
     cat >> "$config_file" << EOF
@@ -219,26 +249,23 @@ EOF
             DelayBeforeMeasurementsSeconds: $WARMUP_SECONDS
             IntervalMsMin: 0
             IntervalMsMax: 0
-            LogMode: $log_mode
-            Sequential: false
-            IsWardenlessTest: true
+            InFlightWrites: $INFLIGHT_TO
+            ExpectedChunkSize: $EXPECTED_CHUNK_SIZE
         }
     }
-    EnableTrim: true
-    DeviceInFlight: 128
 }
 EOF
 }
 
-EFFECTIVE_CHUNKS="$INFLIGHT_TO"
-if [ -n "$CHUNKS_COUNT" ]; then
-    EFFECTIVE_CHUNKS="$CHUNKS_COUNT"
+EFFECTIVE_AREAS="$INFLIGHT_TO"
+if [ -n "$AREAS_COUNT" ]; then
+    EFFECTIVE_AREAS="$AREAS_COUNT"
 fi
 
-CONFIG_FILE="$TEMP_DIR/config_${LOG_MODE}_chunks_${EFFECTIVE_CHUNKS}.cfg"
-generate_config "$LOG_MODE" "$EFFECTIVE_CHUNKS" "$CONFIG_FILE"
+CONFIG_FILE="$TEMP_DIR/config_ddisk_areas_${EFFECTIVE_AREAS}.cfg"
+generate_config "$EFFECTIVE_AREAS" "$CONFIG_FILE"
 
-echo "Running test with LogMode=$LOG_MODE, InFlights=$INFLIGHT_FROM..$INFLIGHT_TO, RunCount=$RUN_COUNT, ChunksCount=$EFFECTIVE_CHUNKS"
+echo "Running test with InFlights=$INFLIGHT_FROM..$INFLIGHT_TO, RunCount=$RUN_COUNT, AreasCount=$EFFECTIVE_AREAS"
 if ! RESULT=$(sudo "$YDB_STRESS_TOOL" \
     --path "$DISK_PATH" \
     --type NVME \
@@ -253,7 +280,7 @@ if ! RESULT=$(sudo "$YDB_STRESS_TOOL" \
     exit 1
 fi
 
-if ! GROUP_JSON=$(echo "$RESULT" | jq --arg label "$LABEL" --arg log_mode "$LOG_MODE" '. + {Label: $label, LogMode: $log_mode}' 2>&1); then
+if ! GROUP_JSON=$(echo "$RESULT" | jq --arg label "$LABEL" --arg log_mode "DDISK" '. + {Label: $label, LogMode: $log_mode}' 2>&1); then
     echo "Error parsing stress tool output as JSON:"
     echo "jq error: $GROUP_JSON"
     echo "Raw output:"
@@ -262,3 +289,4 @@ if ! GROUP_JSON=$(echo "$RESULT" | jq --arg label "$LABEL" --arg log_mode "$LOG_
 fi
 
 echo "[$GROUP_JSON]" > "$OUTPUT_FILE"
+
