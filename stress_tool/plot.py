@@ -157,12 +157,14 @@ def _plot_min_med_max(
 
     n = max(1, len(groups))
     offsets = [0.0] if n == 1 else [0.12 * (i - (n - 1) / 2.0) for i in range(n)]
+    all_inflights = set()
 
     for idx, group in enumerate(groups):
         name = _group_name(group)
         xs, mins, meds, maxs = _extract_series(group, metric_key, value_parser)
         if not xs:
             continue
+        all_inflights.update(xs)
 
         x_plot = [x + offsets[idx] for x in xs]
         yerr_low = [m - lo for m, lo in zip(meds, mins)]
@@ -184,13 +186,21 @@ def _plot_min_med_max(
     ax.set_ylabel(ylabel)
     ax.grid(True, which="both", axis="both", linestyle="--", linewidth=0.6, alpha=0.6)
 
-    # Force integer ticks for inflight (works well for small ranges).
-    try:
-        from matplotlib.ticker import MaxNLocator
+    # Linear scale: make sure inflight points are visible as ticks, but avoid
+    # "weird" large gaps when values are sparse (e.g. 1,2,4) by using a small
+    # integer range when it stays readable.
+    if all_inflights:
+        xs_sorted = sorted(all_inflights)
+        xmin, xmax = xs_sorted[0], xs_sorted[-1]
+        if (xmax - xmin) <= 12:
+            ax.set_xticks(list(range(xmin, xmax + 1)))
+        else:
+            try:
+                from matplotlib.ticker import MaxNLocator
 
-        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-    except Exception:
-        pass
+                ax.xaxis.set_major_locator(MaxNLocator(integer=True, nbins=10))
+            except Exception:
+                ax.set_xticks(xs_sorted)
 
     if len(groups) > 1:
         ax.legend(loc="best")
@@ -247,6 +257,7 @@ def _plot_latency_percentiles(
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(10, 6))
+    all_inflights = set()
 
     for group in groups:
         name = _group_name(group)
@@ -282,18 +293,26 @@ def _plot_latency_percentiles(
             if not xs:
                 continue
             ax.plot(xs, ys_by_p[p], marker="o", linewidth=1.5, markersize=4, label=f"{name} {p}")
+        all_inflights.update(xs)
 
     ax.set_title("Latency percentiles vs InFlight (median-IOPS run)")
     ax.set_xlabel("InFlight")
     ax.set_ylabel("Latency (us)")
     ax.grid(True, which="both", axis="both", linestyle="--", linewidth=0.6, alpha=0.6)
 
-    try:
-        from matplotlib.ticker import MaxNLocator
+    # Same x-tick policy as min/med/max plots (linear scale).
+    if all_inflights:
+        xs_sorted = sorted(all_inflights)
+        xmin, xmax = xs_sorted[0], xs_sorted[-1]
+        if (xmax - xmin) <= 12:
+            ax.set_xticks(list(range(xmin, xmax + 1)))
+        else:
+            try:
+                from matplotlib.ticker import MaxNLocator
 
-        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-    except Exception:
-        pass
+                ax.xaxis.set_major_locator(MaxNLocator(integer=True, nbins=10))
+            except Exception:
+                ax.set_xticks(xs_sorted)
 
     ax.legend(loc="best", ncols=2)
     fig.tight_layout()
