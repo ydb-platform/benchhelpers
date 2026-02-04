@@ -187,6 +187,41 @@ def _extract_latency_percentiles(
     return out
 
 
+def _extract_runs_table_rows(
+    group: Dict[str, Any], percentiles: Sequence[str]
+) -> List[List[str]]:
+    """
+    One row per run, per inflight. Keeps run order as in JSON.
+    Columns:
+      InFlight, Run, IOPS(kIOPS), Speed(MB/s), <percentiles...>
+    """
+    items = group.get("InFlights", [])
+    if not isinstance(items, list):
+        return []
+
+    rows: List[List[str]] = []
+    for it in sorted(
+        [x for x in items if isinstance(x, dict) and x.get("InFlight") is not None],
+        key=lambda d: int(d.get("InFlight")),
+    ):
+        inflight = int(it.get("InFlight"))
+        runs = it.get("Runs", [])
+        if not isinstance(runs, list):
+            continue
+        for idx, r in enumerate(runs, start=1):
+            if not isinstance(r, dict):
+                continue
+            iops_k = _iops_to_kiops(r.get("IOPS"))
+            speed_mb = _bandwidth_to_mbs(r.get("Speed"))
+            lat_vals = [_latency_to_us(r.get(p)) for p in percentiles]
+
+            rows.append(
+                [str(inflight), str(idx), _fmt_num(iops_k, 1), _fmt_num(speed_mb, 1)]
+                + [_fmt_num(v, 1) for v in lat_vals]
+            )
+    return rows
+
+
 def _render_table(headers: List[str], rows: List[List[str]]) -> str:
     cols = len(headers)
     widths = [len(h) for h in headers]
@@ -266,10 +301,32 @@ def main() -> int:
         lat_sections.append("")
     lat_txt = "\n".join(lat_sections).rstrip() + "\n"
 
+    # 4) Per-run table (all runs)
+    runs_sections: List[str] = [
+        f"Per-run results vs InFlight{title_suffix}",
+        "NOTE: one row per run as returned by the stress tool.",
+        "",
+    ]
+    for g in groups:
+        rows = _extract_runs_table_rows(g, ps)
+        runs_sections.append(f"[{_group_name(g)}]  Runs (IOPS in kIOPS, Speed in MB/s, Latency in us)")
+        if rows:
+            runs_sections.append(
+                _render_table(
+                    ["InFlight", "Run", "IOPS(k)", "Speed"] + ps,
+                    rows,
+                )
+            )
+        else:
+            runs_sections.append("(no runs found)")
+        runs_sections.append("")
+    runs_txt = "\n".join(runs_sections).rstrip() + "\n"
+
     # Print to stdout (human-readable).
     print(speed_txt)
     print(iops_txt)
     print(lat_txt)
+    print(runs_txt)
 
     return 0
 
