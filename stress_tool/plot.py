@@ -169,6 +169,17 @@ def _plot_min_med_max(
         x_plot = [x + offsets[idx] for x in xs]
         yerr_low = [m - lo for m, lo in zip(meds, mins)]
         yerr_high = [hi - m for hi, m in zip(maxs, meds)]
+
+        # Draw thin median line first and capture its color
+        (line,) = ax.plot(
+            x_plot,
+            meds,
+            linewidth=1.0,
+            alpha=0.6,
+            zorder=1,
+        )
+        color = line.get_color()
+
         ax.errorbar(
             x_plot,
             meds,
@@ -178,7 +189,9 @@ def _plot_min_med_max(
             markersize=5,
             capsize=4,
             elinewidth=1.2,
+            color=color,
             label=name,
+            zorder=2,
         )
 
     ax.set_title(title)
@@ -327,22 +340,52 @@ def main() -> int:
     )
     p.add_argument(
         "input_json",
-        help="Path to resulting JSON file (array of groups).",
+        nargs="+",
+        help="Path(s) to resulting JSON file(s) (array of groups).",
     )
     p.add_argument(
         "prefix",
         help="Prefix for output files (e.g. /tmp/pdisk_write).",
     )
+    p.add_argument(
+        "--label",
+        action="append",
+        default=[],
+        help="Optional label for each input file (repeat per file).",
+    )
     args = p.parse_args()
 
-    with open(args.input_json, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    if len(args.label) > len(args.input_json):
+        raise SystemExit(
+            "--label provided more times than input files "
+            f"({len(args.label)} > {len(args.input_json)})"
+        )
 
-    if not isinstance(data, list):
-        raise SystemExit("Input JSON must be an array (list) of result groups.")
+    groups: List[Dict[str, Any]] = []
+    test_types: List[str] = []
 
-    # Filter to dict groups only.
-    groups: List[Dict[str, Any]] = [g for g in data if isinstance(g, dict)]
+    for idx, path in enumerate(args.input_json):
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if not isinstance(data, list):
+            raise SystemExit(
+                f"Input JSON must be an array (list) of result groups: {path}"
+            )
+
+        file_label = args.label[idx] if idx < len(args.label) else ""
+        for g in data:
+            if not isinstance(g, dict):
+                continue
+            if file_label:
+                g = dict(g)
+                g["Label"] = file_label
+            groups.append(g)
+
+        test_type = str(data[0].get("TestType", "")).strip() if data else ""
+        if test_type:
+            test_types.append(test_type)
+
     if not groups:
         raise SystemExit("No result groups found in input JSON.")
 
@@ -350,8 +393,13 @@ def main() -> int:
     out_iops = f"{args.prefix}_iops.png"
     out_latency = f"{args.prefix}_latency.png"
 
-    test_type = str(groups[0].get("TestType", "")).strip()
-    title_suffix = f" ({test_type})" if test_type else ""
+    title_suffix = ""
+    if test_types:
+        unique_types = sorted(set(test_types))
+        if len(unique_types) == 1:
+            title_suffix = f" ({unique_types[0]})"
+        else:
+            title_suffix = " (mixed)"
 
     _plot_min_med_max(
         groups=groups,
