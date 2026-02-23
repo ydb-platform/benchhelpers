@@ -3,7 +3,7 @@
 import argparse
 import json
 import os
-import sys
+import statistics
 
 
 def parse_result(result_file, test_type):
@@ -15,7 +15,7 @@ def parse_result(result_file, test_type):
         "iops": 0,
     }
 
-    # Collect percentile latencies from all jobs
+    # Collect percentile latencies
     percentile_keys = ['50.000000', '90.000000', '95.000000', '99.000000', '99.900000']
     percentile_sums = {k: 0 for k in percentile_keys}
 
@@ -33,145 +33,175 @@ def parse_result(result_file, test_type):
     result['bw'] = int(result['bw'] / 1024)
     result['iops'] = int(result['iops'] / 1000)
 
-    # Average percentiles across jobs, convert ns to us
-    result['p50'] = int(percentile_sums['50.000000'] / num_jobs / 1000) if num_jobs > 0 else 0
-    result['p90'] = int(percentile_sums['90.000000'] / num_jobs / 1000) if num_jobs > 0 else 0
-    result['p95'] = int(percentile_sums['95.000000'] / num_jobs / 1000) if num_jobs > 0 else 0
-    result['p99'] = int(percentile_sums['99.000000'] / num_jobs / 1000) if num_jobs > 0 else 0
-    result['p99.9'] = int(percentile_sums['99.900000'] / num_jobs / 1000) if num_jobs > 0 else 0
+    # Percentiles are meaningful here only for single-job results.
+    if num_jobs == 1:
+        result['p50'] = int(percentile_sums['50.000000'] / 1000)
+        result['p90'] = int(percentile_sums['90.000000'] / 1000)
+        result['p95'] = int(percentile_sums['95.000000'] / 1000)
+        result['p99'] = int(percentile_sums['99.000000'] / 1000)
+        result['p99.9'] = int(percentile_sums['99.900000'] / 1000)
+    else:
+        result['p50'] = None
+        result['p90'] = None
+        result['p95'] = None
+        result['p99'] = None
+        result['p99.9'] = None
 
     return result
+
+
+def collect_run_dirs(results_dir):
+    run_dirs = []
+    numeric_dir_names = []
+    for name in os.listdir(results_dir):
+        path = os.path.join(results_dir, name)
+        if os.path.isdir(path) and name.isdigit():
+            numeric_dir_names.append(name)
+
+    for name in sorted(numeric_dir_names, key=int):
+        run_dirs.append(os.path.join(results_dir, name))
+
+    if run_dirs:
+        return run_dirs
+    return [results_dir]
+
+
+def collect_result_samples(run_dirs, filename, test_type):
+    samples = []
+    for run_dir in run_dirs:
+        result_path = os.path.join(run_dir, filename)
+        if not os.path.exists(result_path):
+            continue
+        parsed = parse_result(result_path, test_type)
+        samples.append(parsed)
+    return samples
+
+
+def metric_median(samples, key):
+    values = [s[key] for s in samples if s.get(key) is not None]
+    if not values:
+        return None
+    return int(statistics.median(values))
+
+
+def make_bw_stats(samples):
+    bw_values = [s["bw"] for s in samples if s.get("bw") is not None]
+    if not bw_values:
+        return {"min": None, "max": None, "median": None, "stddev": None}
+    if len(bw_values) == 1:
+        return {
+            "min": bw_values[0],
+            "max": bw_values[0],
+            "median": bw_values[0],
+            "stddev": 0.0,
+        }
+    return {
+        "min": min(bw_values),
+        "max": max(bw_values),
+        "median": int(statistics.median(bw_values)),
+        "stddev": statistics.pstdev(bw_values),
+    }
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("results_dir", help="results directory")
-
     args = parser.parse_args()
 
-    result = {}
+    run_dirs = collect_run_dirs(args.results_dir)
 
-    write_bandwidth_path = os.path.join(args.results_dir, "write_bandwidth_test.json")
-    result['write_bandwidth'] = parse_result(write_bandwidth_path, 'write')
+    throughput_ops = [
+        ("Random read 4K", 256, "read_iops_test.json", "read"),
+        ("Random write 4K", 256, "write_iops_test.json", "write"),
+        ("Random read 8K", 256, "read_iops_test_8K.json", "read"),
+        ("Random write 8K", 256, "write_iops_test_8K.json", "write"),
+        ("Read 1M", 64, "read_bandwidth_test.json", "read"),
+        ("Write 1M", 64, "write_bandwidth_test.json", "write"),
+    ]
 
-    write_iops_path = os.path.join(args.results_dir, "write_iops_test.json")
-    result['write_iops'] = parse_result(write_iops_path, 'write')
+    latency_ops = [
+        ("Random read 4K", 1, "read_latency_test.json", "read"),
+        ("Random write 4K", 1, "write_latency_test.json", "write"),
+        ("Random read 8K", 1, "read_latency_test_8K.json", "read"),
+        ("Random write 8K", 1, "write_latency_test_8K.json", "write"),
+    ]
 
-    write_iops_path = os.path.join(args.results_dir, "write_iops_test_8K.json")
-    result['write_iops_8K'] = parse_result(write_iops_path, 'write')
+    detailed_row_fmt = "{:<20} {:>8} {:>12} {:>12} {:>10} {:>10} {:>10} {:>10} {:>10}"
+    variance_row_fmt = "{:<20} {:>6} {:>10} {:>10} {:>12} {:>10}"
 
-    write_latency_path = os.path.join(args.results_dir, "write_latency_test.json")
-    if os.path.exists(write_latency_path):
-        result['write_latency'] = parse_result(write_latency_path, 'write')
+    def fmt_num(v):
+        if v is None:
+            return "n/a"
+        if isinstance(v, float):
+            return f"{v:.2f}"
+        return str(v)
 
-    write_latency_path = os.path.join(args.results_dir, "write_latency_test_8K.json")
-    if os.path.exists(write_latency_path):
-        result['write_latency_8K'] = parse_result(write_latency_path, 'write')
+    def build_detailed_table(specs):
+        rows = []
+        for operation, qd, filename, test_type in specs:
+            samples = collect_result_samples(run_dirs, filename, test_type)
+            rows.append({
+                "operation": operation,
+                "qd": qd,
+                "bw": metric_median(samples, "bw"),
+                "iops": metric_median(samples, "iops"),
+                "p50": metric_median(samples, "p50"),
+                "p90": metric_median(samples, "p90"),
+                "p95": metric_median(samples, "p95"),
+                "p99": metric_median(samples, "p99"),
+                "p99.9": metric_median(samples, "p99.9"),
+            })
+        return rows
 
-    read_bandwidth_path = os.path.join(args.results_dir, "read_bandwidth_test.json")
-    result['read_bandwidth'] = parse_result(read_bandwidth_path, 'read')
+    def build_variance_table(specs):
+        rows = []
+        for operation, qd, filename, test_type in specs:
+            samples = collect_result_samples(run_dirs, filename, test_type)
+            rows.append((operation, qd, make_bw_stats(samples)))
+        return rows
 
-    read_iops_path = os.path.join(args.results_dir, "read_iops_test.json")
-    result['read_iops'] = parse_result(read_iops_path, 'read')
+    def print_detailed_table(title, rows):
+        header = detailed_row_fmt.format('Operation', 'QD', 'BW, MiB/s', 'IOPS (K)', 'p50 us', 'p90 us', 'p95 us', 'p99 us', 'p99.9 us')
+        separator = "-" * len(header)
+        print(title)
+        print(header)
+        for row in rows:
+            print(separator)
+            print(detailed_row_fmt.format(
+                row["operation"],
+                row["qd"],
+                fmt_num(row["bw"]),
+                fmt_num(row["iops"]),
+                fmt_num(row["p50"]),
+                fmt_num(row["p90"]),
+                fmt_num(row["p95"]),
+                fmt_num(row["p99"]),
+                fmt_num(row["p99.9"]),
+            ))
 
-    read_iops_path = os.path.join(args.results_dir, "read_iops_test_8K.json")
-    result['read_iops_8K'] = parse_result(read_iops_path, 'read')
+    def print_variance_table(title, rows):
+        header = variance_row_fmt.format("Operation", "QD", "BW min", "BW max", "BW median", "BW stddev")
+        separator = "-" * len(header)
+        print(title)
+        print(header)
+        for operation, qd, stats in rows:
+            print(separator)
+            print(variance_row_fmt.format(
+                operation,
+                qd,
+                fmt_num(stats["min"]),
+                fmt_num(stats["max"]),
+                fmt_num(stats["median"]),
+                fmt_num(stats["stddev"]),
+            ))
 
-    read_latency_path = os.path.join(args.results_dir, "read_latency_test.json")
-    if os.path.exists(read_latency_path):
-        result['read_latency'] = parse_result(read_latency_path, 'read')
-
-    read_latency_path = os.path.join(args.results_dir, "read_latency_test_8K.json")
-    if os.path.exists(read_latency_path):
-        result['read_latency_8K'] = parse_result(read_latency_path, 'read')
-
-    row_fmt = "{:<20} {:>12} {:>12} {:>10} {:>10} {:>10} {:>10} {:>10}"
-    header = row_fmt.format('Test', 'BW, MiB/s', 'IOPS (K)', 'p50 us', 'p90 us', 'p95 us', 'p99 us', 'p99.9 us')
-    separator = "-" * len(header)
-
-    print("RAW RESULTS")
-    print(header)
-    for test_name,r in result.items():
-        print(separator)
-        print(row_fmt.format(
-            test_name,
-            r['bw'],
-            r['iops'],
-            r['p50'],
-            r['p90'],
-            r['p95'],
-            r['p99'],
-            r['p99.9'],))
-
-    # Helper to get percentiles from latency test or None
-    def get_latency_percentiles(lat_result):
-        if lat_result is None:
-            return {'p50': None, 'p90': None, 'p95': None, 'p99': None, 'p99.9': None}
-        return {
-            'p50': lat_result['p50'],
-            'p90': lat_result['p90'],
-            'p95': lat_result['p95'],
-            'p99': lat_result['p99'],
-            'p99.9': lat_result['p99.9'],
-        }
-
-    # we assume defaults
-    summary = {
-        "Random read 4K": {
-            "bw": result['read_iops']['bw'],
-            "iops": result['read_iops']['iops'],
-            **get_latency_percentiles(result.get('read_latency')),
-        },
-
-        "Random write 4K": {
-            "bw": result['write_iops']['bw'],
-            "iops": result['write_iops']['iops'],
-            **get_latency_percentiles(result.get('write_latency')),
-        },
-
-        "Random read 8K": {
-            "bw": result['read_iops_8K']['bw'],
-            "iops": result['read_iops_8K']['iops'],
-            **get_latency_percentiles(result.get('read_latency_8K')),
-        },
-
-        "Random write 8K": {
-            "bw": result['write_iops_8K']['bw'],
-            "iops": result['write_iops_8K']['iops'],
-            **get_latency_percentiles(result.get('write_latency_8K')),
-        },
-
-        "Read 1M": {
-            "bw": result['read_bandwidth']['bw'],
-            "iops": result['read_bandwidth']['iops'],
-            **get_latency_percentiles(result.get('read_bandwidth')),
-        },
-
-        "Write 1M": {
-            "bw": result['write_bandwidth']['bw'],
-            "iops": result['write_bandwidth']['iops'],
-            **get_latency_percentiles(result.get('write_bandwidth')),
-        },
-    }
-
-    print("\n\nSUMMARY")
-
-    def fmt_val(v):
-        return str(v) if v is not None else 'n/a'
-
-    summary_header = row_fmt.format('Operation', 'BW, MiB/s', 'IOPS (K)', 'p50 us', 'p90 us', 'p95 us', 'p99 us', 'p99.9 us')
-    print(summary_header)
-    for operation,r in summary.items():
-        print(separator)
-        print(row_fmt.format(
-            operation,
-            r['bw'],
-            r['iops'],
-            fmt_val(r['p50']),
-            fmt_val(r['p90']),
-            fmt_val(r['p95']),
-            fmt_val(r['p99']),
-            fmt_val(r['p99.9']),))
+    print_detailed_table("THROUGHPUT SUMMARY", build_detailed_table(throughput_ops))
+    print()
+    print_detailed_table("LATENCY SUMMARY", build_detailed_table(latency_ops))
+    print()
+    print_variance_table("THROUGHPUT RUNS VARIANCE", build_variance_table(throughput_ops))
+    print()
+    print_variance_table("LATENCY RUNS VARIANCE", build_variance_table(latency_ops))
 
 
 if __name__ == '__main__':
