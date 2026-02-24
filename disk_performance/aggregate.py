@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import statistics
+import sys
 
 
 def parse_result(result_file, test_type):
@@ -114,10 +115,31 @@ def make_bw_stats(samples):
     }
 
 
+def make_plot_slug(name):
+    slug = "".join(ch.lower() if ch.isalnum() else "_" for ch in name)
+    while "__" in slug:
+        slug = slug.replace("__", "_")
+    return slug.strip("_")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("results_dir", help="results directory")
+    parser.add_argument(
+        "--plot",
+        action="store_true",
+        help="Generate per-latency-operation plots (p50/p90/p99/p99.9) by run",
+    )
+    parser.add_argument(
+        "--prefix",
+        default="latency_runs",
+        help="Image filename prefix for --plot (default: latency_runs)",
+    )
     args = parser.parse_args()
+
+    if not os.path.isdir(args.results_dir):
+        print(f"results dir does not exist: {args.results_dir}", file=sys.stderr)
+        return 1
 
     run_dirs = collect_run_dirs(args.results_dir)
 
@@ -136,8 +158,15 @@ def main():
         ("Random read 8K", 1, "read_latency_test_8K.json", "read"),
         ("Random write 8K", 1, "write_latency_test_8K.json", "write"),
     ]
+    latency_op_order = [
+        "Random read 4K",
+        "Random read 8K",
+        "Random write 4K",
+        "Random write 8K",
+    ]
 
     detailed_row_fmt = "{:<20} {:>8} {:>12} {:>12} {:>10} {:>10} {:>10} {:>10} {:>10}"
+    latency_run_row_fmt = "{:>6} {:<20} {:>6} {:>12} {:>12} {:>10} {:>10} {:>10} {:>10} {:>10}"
     variance_row_fmt = "{:<20} {:>6} {:>10} {:>10} {:>12} {:>10}"
 
     def fmt_num(v):
@@ -169,6 +198,46 @@ def main():
         for operation, qd, filename, test_type in specs:
             samples = collect_result_samples(run_dirs, filename, test_type)
             rows.append((operation, qd, make_bw_stats(samples)))
+        return rows
+
+    def build_latency_run_rows(specs):
+        rows = []
+        op_rank = {op: idx for idx, op in enumerate(latency_op_order)}
+        ordered_specs = sorted(specs, key=lambda s: op_rank.get(s[0], len(op_rank)))
+
+        for operation, qd, filename, test_type in ordered_specs:
+            for idx, run_dir in enumerate(run_dirs, start=1):
+                run_name = os.path.basename(run_dir)
+                run_id = int(run_name) if run_name.isdigit() else idx
+                result_path = os.path.join(run_dir, filename)
+                if os.path.exists(result_path):
+                    parsed = parse_result(result_path, test_type)
+                    row = {
+                        "run": run_id,
+                        "operation": operation,
+                        "qd": qd,
+                        "bw": parsed["bw"],
+                        "iops": parsed["iops"],
+                        "p50": parsed["p50"],
+                        "p90": parsed["p90"],
+                        "p95": parsed["p95"],
+                        "p99": parsed["p99"],
+                        "p99.9": parsed["p99.9"],
+                    }
+                else:
+                    row = {
+                        "run": run_id,
+                        "operation": operation,
+                        "qd": qd,
+                        "bw": None,
+                        "iops": None,
+                        "p50": None,
+                        "p90": None,
+                        "p95": None,
+                        "p99": None,
+                        "p99.9": None,
+                    }
+                rows.append(row)
         return rows
 
     def print_detailed_table(title, rows):
@@ -206,14 +275,119 @@ def main():
                 fmt_num(stats["stddev"]),
             ))
 
+    def print_latency_runs_table(title, rows):
+        header = latency_run_row_fmt.format("Run", "Operation", "QD", "BW, MiB/s", "IOPS (K)", "p50 us", "p90 us", "p95 us", "p99 us", "p99.9 us")
+        separator = "-" * len(header)
+        print(title)
+        print(header)
+        current_operation = None
+        for row in rows:
+            if row["operation"] != current_operation:
+                if current_operation is not None:
+                    print()
+                print(f"# {row['operation']}")
+            current_operation = row["operation"]
+            print(separator)
+            print(latency_run_row_fmt.format(
+                row["run"],
+                row["operation"],
+                row["qd"],
+                fmt_num(row["bw"]),
+                fmt_num(row["iops"]),
+                fmt_num(row["p50"]),
+                fmt_num(row["p90"]),
+                fmt_num(row["p95"]),
+                fmt_num(row["p99"]),
+                fmt_num(row["p99.9"]),
+            ))
+
+    def plot_latency_runs(rows):
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError as exc:
+            raise RuntimeError("plotting requires matplotlib (pip install matplotlib)") from exc
+
+        percentile_fields = [
+            ("p50", "p50"),
+            ("p90", "p90"),
+            ("p99", "p99"),
+            ("p99.9", "p99.9"),
+        ]
+
+        operation_order = [
+            "Random read 4K",
+            "Random write 4K",
+            "Random read 8K",
+            "Random write 8K",
+        ]
+
+        rows_by_operation = {}
+        for row in rows:
+            rows_by_operation.setdefault(row["operation"], []).append(row)
+
+        generated_paths = []
+        for operation in operation_order:
+            op_rows = rows_by_operation.get(operation, [])
+            if not op_rows:
+                continue
+
+            op_rows = sorted(op_rows, key=lambda r: int(r["run"]))
+            x_vals = [int(r["run"]) for r in op_rows]
+
+            fig, ax = plt.subplots(figsize=(10, 6))
+            has_points = False
+            for key, label in percentile_fields:
+                y_vals = [r.get(key) for r in op_rows]
+                if any(v is not None for v in y_vals):
+                    has_points = True
+                    ax.plot(x_vals, y_vals, marker="o", label=label)
+
+            if not has_points:
+                plt.close(fig)
+                continue
+
+            ax.set_xlabel("Run")
+            ax.set_ylabel("Latency (us)")
+            ax.set_title(f"{operation} latency by run")
+            ax.grid(True, linestyle="--", alpha=0.4)
+            ax.legend()
+            fig.tight_layout()
+
+            output_path = os.path.join(
+                args.results_dir, f"{args.prefix}_{make_plot_slug(operation)}.png"
+            )
+            fig.savefig(output_path, dpi=120)
+            plt.close(fig)
+            generated_paths.append(output_path)
+
+        return generated_paths
+
+    latency_run_rows = build_latency_run_rows(latency_ops)
     print_detailed_table("THROUGHPUT SUMMARY", build_detailed_table(throughput_ops))
     print()
     print_detailed_table("LATENCY SUMMARY", build_detailed_table(latency_ops))
+    print()
+    print_latency_runs_table("LATENCY RUNS DETAIL", latency_run_rows)
     print()
     print_variance_table("THROUGHPUT RUNS VARIANCE", build_variance_table(throughput_ops))
     print()
     print_variance_table("LATENCY RUNS VARIANCE", build_variance_table(latency_ops))
 
+    if args.plot:
+        try:
+            plot_paths = plot_latency_runs(latency_run_rows)
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        if not plot_paths:
+            print("plot: no data to plot", file=sys.stderr)
+        else:
+            for path in plot_paths:
+                print(f"plot: {path}", file=sys.stderr)
+
+    return 0
+
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())
