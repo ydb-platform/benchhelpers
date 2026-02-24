@@ -85,33 +85,40 @@ function run_fio {
     local iodepth="$1"
     local rw="$2"
     local fio_test_name="${rw}_latency_test"
-    local clock_args="--clocksource=$clocksource"
+    local clock_arg="--clocksource=$clocksource"
     local result_file="$results_dir/${mode_name}_qd${iodepth}_${rw}.$format"
+    local fio_cmd=(
+        sudo fio
+        --name="$fio_test_name"
+        --filename="$filename" --filesize="$filesize"
+        --time_based --ramp_time="$ramp_time" --runtime="$runtime"
+        --ioengine="$ioengine"
+    )
+
+    if [[ ${#mode_fio_args[@]} -gt 0 ]]; then
+        fio_cmd+=("${mode_fio_args[@]}")
+    fi
+
+    fio_cmd+=(
+        "$clock_arg"
+        --direct=1 --verify=0 --randrepeat=0
+        --bs="$block_size" --iodepth="$iodepth" --rw="rand$rw" --iodepth_batch_submit="$iodepth"
+        --iodepth_batch_complete_max="$iodepth"
+        --percentile_list="10:50:90:95:99:99.9"
+        --output-format="$format"
+        --output="$result_file"
+    )
 
     echo "-------------------------------------------------"
     echo "Running fio test: $mode_name"
-    echo "ioengine=$ioengine ioengine_args='$ioengine_args' clock_args='$clock_args' bs=$block_size iodepth=$iodepth runtime=$runtime rw=$rw output=$result_file"
+    echo "ioengine=$ioengine mode_fio_args='${mode_fio_args[*]}' clock_arg='$clock_arg' bs=$block_size iodepth=$iodepth runtime=$runtime rw=$rw output=$result_file"
     echo "fio command:"
-    echo "  sudo fio --name=\"$fio_test_name\" \\"
-    echo "    --filename=\"$filename\" --filesize=$filesize \\"
-    echo "    --time_based --ramp_time=$ramp_time --runtime=$runtime \\"
-    echo "    --ioengine=$ioengine $ioengine_args $clock_args --direct=1 --verify=0 --randrepeat=0 \\"
-    echo "    --bs=$block_size --iodepth=$iodepth --rw=\"rand$rw\" --iodepth_batch_submit=$iodepth \\"
-    echo "    --iodepth_batch_complete_max=$iodepth \\"
-    echo "    --percentile_list=\"10:50:90:95:99:99.9\" \\"
-    echo "    --output-format=\"$format\" \\"
-    echo "    --output=\"$result_file\""
+    printf "  "
+    printf "%q " "${fio_cmd[@]}"
+    echo
     echo "-------------------------------------------------"
 
-    sudo fio --name="$fio_test_name" \
-    --filename="$filename" --filesize=$filesize \
-    --time_based --ramp_time=$ramp_time --runtime=$runtime \
-    --ioengine=$ioengine $ioengine_args $clock_args --direct=1 --verify=0 --randrepeat=0 \
-    --bs=$block_size --iodepth=$iodepth --rw="rand$rw" --iodepth_batch_submit=$iodepth  \
-    --iodepth_batch_complete_max=$iodepth \
-    --percentile_list="10:50:90:95:99:99.9" \
-    --output-format="$format" \
-    --output="$result_file"
+    "${fio_cmd[@]}"
 
     # Some fio modes may prepend warning lines before JSON payload.
     # Keep only the JSON object so downstream parsers see clean data.
@@ -341,7 +348,7 @@ fi
 for (( iodepth=iodepth_from; iodepth<=iodepth_to; iodepth*=2 )); do
     if [[ "$run_aio" -eq 1 ]]; then
         ioengine=libaio
-        ioengine_args=
+        mode_fio_args=()
         mode_name="aio"
         run_fio "$iodepth" "write"
         if [[ "$run_reads" -eq 1 ]]; then
@@ -351,7 +358,7 @@ for (( iodepth=iodepth_from; iodepth<=iodepth_to; iodepth*=2 )); do
 
     if [[ "$run_uring" -eq 1 ]]; then
         ioengine=io_uring
-        ioengine_args=
+        mode_fio_args=()
         mode_name="uring"
         run_fio "$iodepth" "write"
         if [[ "$run_reads" -eq 1 ]]; then
@@ -361,7 +368,7 @@ for (( iodepth=iodepth_from; iodepth<=iodepth_to; iodepth*=2 )); do
 
     if [[ "$run_uring_cqpoll" -eq 1 ]]; then
         ioengine=io_uring
-        ioengine_args="--hipri"
+        mode_fio_args=(--hipri=1)
         mode_name="uring-cqpoll"
         run_fio "$iodepth" "write"
         if [[ "$run_reads" -eq 1 ]]; then
@@ -371,7 +378,7 @@ for (( iodepth=iodepth_from; iodepth<=iodepth_to; iodepth*=2 )); do
 
     if [[ "$run_uring_sqpoll" -eq 1 ]]; then
         ioengine=io_uring
-        ioengine_args="--sqthread_poll"
+        mode_fio_args=(--sqthread_poll=1)
         mode_name="uring-sqpoll"
         run_fio "$iodepth" "write"
         if [[ "$run_reads" -eq 1 ]]; then
@@ -381,7 +388,7 @@ for (( iodepth=iodepth_from; iodepth<=iodepth_to; iodepth*=2 )); do
 
     if [[ "$run_uring_sqpoll_cqpoll" -eq 1 ]]; then
         ioengine=io_uring
-        ioengine_args="--sqthread_poll --hipri"
+        mode_fio_args=(--sqthread_poll=1 --hipri=1)
         mode_name="uring-sqpoll-cqpoll"
         run_fio "$iodepth" "write"
         if [[ "$run_reads" -eq 1 ]]; then
