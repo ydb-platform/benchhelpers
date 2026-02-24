@@ -7,8 +7,19 @@ import statistics
 
 
 def parse_result(result_file, test_type):
-    with open(result_file, 'r') as f:
-        json_result = json.load(f)
+    with open(result_file, 'r', encoding='utf-8') as f:
+        raw = f.read()
+
+    # fio may prepend warnings (e.g. setaffinity) before JSON output.
+    first_obj = raw.find('{')
+    last_obj = raw.rfind('}')
+    if first_obj == -1 or last_obj == -1 or first_obj > last_obj:
+        raise ValueError(f"{result_file}: JSON object boundaries not found")
+
+    try:
+        json_result = json.loads(raw[first_obj:last_obj + 1])
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{result_file}: malformed JSON payload ({exc})") from exc
 
     result = {
         "bw": 0,
