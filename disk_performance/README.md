@@ -195,7 +195,7 @@ In other words, it runs the following:
 
 It can also be used as a standalone benchmark together with an external disk metrics collector. In particular, after filling an NVMe device and then running random writes, you may observe a dramatic performance drop, as shown below:
 
-![Fill disk run](fill_disk_2026-02-23_23-16-55.png)
+![Fill disk run](img/fill_disk_2026-02-23_23-16-55.png)
 
 
 ## aio vs. uring
