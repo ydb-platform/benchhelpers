@@ -11,7 +11,7 @@ run_reads=0
 clocksource=cpu
 format=json
 results_dir="."
-skip_fill_disk=0
+fill_disk=0
 
 iodepth_from=1
 iodepth_to=128
@@ -35,7 +35,7 @@ Options:
   --ramp-time <time>               fio ramp time (default: $ramp_time)
   --runtime <time>                 fio runtime (default: $runtime)
   --run-type <smoke|normal|long>   run profile (default: $run_type)
-  --skip-fill-disk                 skip preconditioning fill (default: false)
+  --fill-disk                      run preconditioning fill (default: false)
   --results-dir <path>             directory for fio outputs (default: $results_dir)
   --reads                          also run read test (default: write-only)
   --iodepth-from <n>               iodepth start (default: $iodepth_from)
@@ -159,8 +159,8 @@ while [[ "$#" -gt 0 ]]; do
             run_type="$2"
             shift 2
             ;;
-        --skip-fill-disk)
-            skip_fill_disk=1
+        --fill-disk)
+            fill_disk=1
             shift
             ;;
         --results-dir)
@@ -306,7 +306,7 @@ if [[ ! -d "$results_dir" ]]; then
     fi
 fi
 
-if [[ "$skip_fill_disk" -eq 0 ]]; then
+if [[ "$fill_disk" -eq 1 ]]; then
     script_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
     fill_script="$script_dir/../fill_disk.sh"
     echo "Filling disk (preconditioning) using $fill_script..."
@@ -316,6 +316,17 @@ if [[ "$skip_fill_disk" -eq 0 ]]; then
     if [[ $? -ne 0 ]]; then
         echo "fill_disk failed"
         exit 1
+    fi
+else
+    if [[ -b "$filename" ]]; then
+        echo "Skipping fill; running blkdiscard on $filename..."
+        sudo blkdiscard "$filename"
+        if [[ $? -ne 0 ]]; then
+            echo "blkdiscard failed"
+            exit 1
+        fi
+    else
+        echo "Skipping fill; blkdiscard requires a block device (got: $filename)"
     fi
 fi
 

@@ -22,13 +22,14 @@ ioengine=libaio
 ioengine_args=
 
 results_dir="results"
+fill_disk=false
 
 usage() {
     echo "Usage: $0"
     echo "  --filename <filename> "
     echo "  [--filesize <filesize>] (default: $filesize)"
     echo "  [--results-dir <results-dir>] (default: $results_dir)"
-    echo "  [--skip-fill-disk] (default: false)"
+    echo "  [--fill-disk] (default: false)"
     echo "  [--ioengine] (default $ioengine)"
     echo "  [--ioengine-args] (default NONE)"
     echo "  [--ramp-time <ramp-time>] (default: $ramp_time)"
@@ -85,8 +86,8 @@ while [[ "$#" > 0 ]]; do case $1 in
     --results-dir)
         results_dir="$2";
         shift;;
-    --skip-fill-disk)
-        skip_fill_disk=true
+    --fill-disk)
+        fill_disk=true
         ;;
     --ioengine)
         ioengine="$2";
@@ -240,7 +241,7 @@ fi
 # fill the disk with random data
 #
 
-if [[ -z "$skip_fill_disk" ]]; then
+if [[ "$fill_disk" == "true" ]]; then
     echo "Filling disk (preconditioning)..."
     script_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
     bash "$script_dir/fill_disk.sh" \
@@ -249,6 +250,17 @@ if [[ -z "$skip_fill_disk" ]]; then
     if [[ $? -ne 0 ]]; then
         echo "fill_disk failed"
         exit 1
+    fi
+else
+    if [[ -b "$filename" ]]; then
+        echo "Skipping fill; running blkdiscard on $filename..."
+        sudo blkdiscard "$filename"
+        if [[ $? -ne 0 ]]; then
+            echo "blkdiscard failed"
+            exit 1
+        fi
+    else
+        echo "Skipping fill; blkdiscard requires a block device (got: $filename)"
     fi
 fi
 
