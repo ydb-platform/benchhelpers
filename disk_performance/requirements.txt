@@ -1,0 +1,2 @@
+# No external Python dependencies are required for aggregate.py.
+# It uses only the Python standard library.
