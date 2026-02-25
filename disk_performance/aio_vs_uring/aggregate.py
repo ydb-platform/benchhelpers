@@ -178,7 +178,12 @@ def plot_speed_by_inflight(rows: List[Dict[str, object]], output_dir: str, prefi
     return output_path
 
 
-def plot_latency_by_inflight(rows: List[Dict[str, object]], output_dir: str, prefix: str) -> Optional[str]:
+def plot_latency_by_inflight(
+    rows: List[Dict[str, object]],
+    output_dir: str,
+    prefix: str,
+    max_queue_depth: Optional[int] = None,
+) -> Optional[str]:
     try:
         import matplotlib.pyplot as plt
     except ImportError as exc:
@@ -198,14 +203,21 @@ def plot_latency_by_inflight(rows: List[Dict[str, object]], output_dir: str, pre
 
     for ax, (field_name, title_suffix) in zip(axes, percentile_keys):
         for series_name, points in sorted(grouped.items()):
-            x_vals = [int(r["QueueDepth"]) for r in points]
-            y_vals = [float(r[field_name]) for r in points]
+            filtered_points = points
+            if max_queue_depth is not None:
+                filtered_points = [r for r in points if int(r["QueueDepth"]) <= max_queue_depth]
+
+            x_vals = [int(r["QueueDepth"]) for r in filtered_points]
+            y_vals = [float(r[field_name]) for r in filtered_points]
             if x_vals:
                 has_points = True
                 ax.plot(x_vals, y_vals, marker="o", label=series_name)
 
         ax.set_ylabel("Latency (us)")
-        ax.set_title(f"{title_suffix} vs Inflight")
+        if max_queue_depth is None:
+            ax.set_title(f"{title_suffix} vs Inflight")
+        else:
+            ax.set_title(f"{title_suffix} vs Inflight (<= {max_queue_depth})")
         ax.grid(True, linestyle="--", alpha=0.4)
 
     if not has_points:
@@ -216,10 +228,96 @@ def plot_latency_by_inflight(rows: List[Dict[str, object]], output_dir: str, pre
     axes[-1].set_xlabel("Inflight (QueueDepth)")
     fig.tight_layout()
 
-    output_path = os.path.join(output_dir, f"{prefix}_latency.png")
+    output_name = f"{prefix}_latency.png"
+    if max_queue_depth is not None:
+        output_name = f"{prefix}_latency_upto_{max_queue_depth}.png"
+    output_path = os.path.join(output_dir, output_name)
     fig.savefig(output_path, dpi=120)
     plt.close(fig)
     return output_path
+
+
+def plot_latency_percentile_bars(
+    rows: List[Dict[str, object]], output_dir: str, prefix: str
+) -> List[str]:
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        raise RuntimeError(
+            "plotting requires matplotlib (pip install matplotlib)"
+        ) from exc
+
+    percentile_fields = [
+        ("LatencyP50_us", "50"),
+        ("LatencyP90_us", "90"),
+        ("LatencyP95_us", "95"),
+        ("LatencyP99_us", "99"),
+        ("LatencyP99_9_us", "99.9"),
+    ]
+    target_qds = [1, 4, 16]
+    workloads = sorted({str(r["Workload"]) for r in rows})
+    generated_paths: List[str] = []
+
+    for workload in workloads:
+        workload_rows = [r for r in rows if str(r["Workload"]) == workload]
+        qds_present = [qd for qd in target_qds if any(int(r["QueueDepth"]) == qd for r in workload_rows)]
+        if not qds_present:
+            continue
+
+        engines = sorted(
+            {
+                str(r["Engine"])
+                for r in workload_rows
+                if int(r["QueueDepth"]) in qds_present
+            }
+        )
+        if not engines:
+            continue
+
+        fig, axes = plt.subplots(len(qds_present), 1, figsize=(10, 4 * len(qds_present)), sharex=True)
+        if len(qds_present) == 1:
+            axes = [axes]
+
+        x_base = list(range(len(percentile_fields)))
+        bar_width = 0.8 / len(engines)
+        has_points = False
+
+        for ax, qd in zip(axes, qds_present):
+            rows_by_engine = {
+                str(r["Engine"]): r for r in workload_rows if int(r["QueueDepth"]) == qd
+            }
+            for engine_idx, engine in enumerate(engines):
+                row = rows_by_engine.get(engine)
+                if row is None:
+                    continue
+                has_points = True
+                x_vals = [
+                    x - 0.4 + (bar_width / 2.0) + engine_idx * bar_width
+                    for x in x_base
+                ]
+                y_vals = [float(row[field]) for field, _ in percentile_fields]
+                ax.bar(x_vals, y_vals, width=bar_width, label=engine)
+
+            ax.set_ylabel("Latency (us)")
+            ax.set_title(f"{workload}, iodepth={qd}, usec")
+            ax.set_xlim(-0.5, len(percentile_fields) - 0.5)
+            ax.grid(axis="y", linestyle="--", alpha=0.4)
+
+        if not has_points:
+            plt.close(fig)
+            continue
+
+        axes[0].legend()
+        axes[-1].set_xticks(x_base)
+        axes[-1].set_xticklabels([label for _, label in percentile_fields])
+        fig.tight_layout()
+
+        output_path = os.path.join(output_dir, f"{prefix}_{workload}_latency_bars_qd_1_4_16.png")
+        fig.savefig(output_path, dpi=120)
+        plt.close(fig)
+        generated_paths.append(output_path)
+
+    return generated_paths
 
 
 def main() -> int:
@@ -275,11 +373,30 @@ def main() -> int:
         try:
             speed_plot = plot_speed_by_inflight(rows, args.results_dir, args.prefix)
             latency_plot = plot_latency_by_inflight(rows, args.results_dir, args.prefix)
+            latency_plot_upto_32 = plot_latency_by_inflight(
+                rows, args.results_dir, args.prefix, max_queue_depth=32
+            )
+            latency_plot_upto_16 = plot_latency_by_inflight(
+                rows, args.results_dir, args.prefix, max_queue_depth=16
+            )
+            latency_bar_plots = plot_latency_percentile_bars(
+                rows, args.results_dir, args.prefix
+            )
         except RuntimeError as exc:
             print(str(exc), file=sys.stderr)
             return 1
 
-        generated_paths = [p for p in [speed_plot, latency_plot] if p is not None]
+        generated_paths = [
+            p
+            for p in [
+                speed_plot,
+                latency_plot,
+                latency_plot_upto_32,
+                latency_plot_upto_16,
+                *latency_bar_plots,
+            ]
+            if p is not None
+        ]
         if not generated_paths:
             print("plot: no data to plot", file=sys.stderr)
         else:
