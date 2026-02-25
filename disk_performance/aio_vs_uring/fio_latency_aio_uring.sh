@@ -87,6 +87,8 @@ function run_fio {
     local fio_test_name="${rw}_latency_test"
     local clock_arg="--clocksource=$clocksource"
     local result_file="$results_dir/${mode_name}_qd${iodepth}_${rw}.$format"
+    local iodepth_batch_submit=1
+    local iodepth_batch_complete_max=1
     local fio_cmd=(
         sudo fio
         --name="$fio_test_name"
@@ -102,8 +104,8 @@ function run_fio {
     fio_cmd+=(
         "$clock_arg"
         --direct=1 --verify=0 --randrepeat=0
-        --bs="$block_size" --iodepth="$iodepth" --rw="rand$rw" --iodepth_batch_submit="$iodepth"
-        --iodepth_batch_complete_max="$iodepth"
+        --bs="$block_size" --iodepth="$iodepth" --rw="rand$rw" --iodepth_batch_submit="$iodepth_batch_submit"
+        --iodepth_batch_complete_max="$iodepth_batch_complete_max"
         --percentile_list="10:50:90:95:99:99.9"
         --output-format="$format"
         --output="$result_file"
@@ -111,7 +113,7 @@ function run_fio {
 
     echo "-------------------------------------------------"
     echo "Running fio test: $mode_name"
-    echo "ioengine=$ioengine mode_fio_args='${mode_fio_args[*]}' clock_arg='$clock_arg' bs=$block_size iodepth=$iodepth runtime=$runtime rw=$rw output=$result_file"
+    echo "ioengine=$ioengine mode_fio_args='${mode_fio_args[*]}' clock_arg='$clock_arg' bs=$block_size iodepth=$iodepth runtime=$runtime rw=$rw batch_submit=$iodepth_batch_submit batch_complete_max=$iodepth_batch_complete_max output=$result_file"
     echo "fio command:"
     printf "  "
     printf "%q " "${fio_cmd[@]}"
