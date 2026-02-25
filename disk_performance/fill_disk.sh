@@ -3,11 +3,13 @@
 set -u
 
 usage() {
-    echo "Usage: $0 --filename <filename> [--size-percent <1-100>] [--rand-run-count <n>]"
+    echo "Usage: $0 --filename <filename> [--size-percent <1-100>] [--rand-run-count <n>] [--no-probes] [--fill-after-rand]"
 }
 
 size_percent=100
 rand_run_count=1
+enable_probes=1
+fill_after_rand=0
 probe_iodepth=32
 probe_ramp_time=10s
 probe_runtime=30s
@@ -164,6 +166,14 @@ while [[ "$#" -gt 0 ]]; do
             rand_run_count="$2"
             shift 2
             ;;
+        --no-probes)
+            enable_probes=0
+            shift
+            ;;
+        --fill-after-rand)
+            fill_after_rand=1
+            shift
+            ;;
         --help|-h)
             usage
             exit 0
@@ -214,7 +224,9 @@ if [[ -b "$filename" ]]; then
     fi
 fi
 
-run_probe_test "Initial probe (after discard if applied)"
+if [[ "$enable_probes" -eq 1 ]]; then
+    run_probe_test "Initial probe (after discard if applied)"
+fi
 
 echo "Running test: seq_fill (${size_percent}% of target)"
 run_fill_test "seq_fill" "write" "1M" "32" "seq_fill (${size_percent}% of target)"
@@ -222,6 +234,11 @@ run_fill_test "seq_fill" "write" "1M" "32" "seq_fill (${size_percent}% of target
 for run_idx in $(seq 1 "$rand_run_count"); do
     echo "Random preconditioning run $run_idx/$rand_run_count"
     run_fill_test "rand_precondition" "randwrite" "8K" "32" "rand_precondition run $run_idx (${size_percent}% of target)"
-    run_probe_test "Probe after random preconditioning run $run_idx"
+    if [[ "$fill_after_rand" -eq 1 ]]; then
+        run_fill_test "seq_fill_after_rand" "write" "1M" "32" "seq_fill after rand run $run_idx (${size_percent}% of target)"
+    fi
+    if [[ "$enable_probes" -eq 1 ]]; then
+        run_probe_test "Probe after random preconditioning run $run_idx"
+    fi
 done
 
