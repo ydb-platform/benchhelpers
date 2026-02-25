@@ -9,12 +9,20 @@ import sys
 from typing import Dict, List, Optional
 
 
-PERCENTILE_KEYS = {
-    "LatencyP50_us": "50.000000",
-    "LatencyP90_us": "90.000000",
-    "LatencyP95_us": "95.000000",
-    "LatencyP99_us": "99.000000",
-    "LatencyP99_9_us": "99.900000",
+CLAT_PERCENTILE_KEYS = {
+    "ClatP50_us": "50.000000",
+    "ClatP90_us": "90.000000",
+    "ClatP95_us": "95.000000",
+    "ClatP99_us": "99.000000",
+    "ClatP99_9_us": "99.900000",
+}
+
+LAT_PERCENTILE_KEYS = {
+    "LatP50_us": "50.000000",
+    "LatP90_us": "90.000000",
+    "LatP95_us": "95.000000",
+    "LatP99_us": "99.000000",
+    "LatP99_9_us": "99.900000",
 }
 
 RESULT_FILE_RE = re.compile(
@@ -58,8 +66,10 @@ def parse_one_result(path: str, engine: str, queue_depth: int, workload: str) ->
 
     total_bw_bytes = 0.0
     total_iops = 0.0
-    pct_sum = {k: 0.0 for k in PERCENTILE_KEYS}
-    pct_count = {k: 0 for k in PERCENTILE_KEYS}
+
+    all_pct_keys = {**CLAT_PERCENTILE_KEYS, **LAT_PERCENTILE_KEYS}
+    pct_sum = {k: 0.0 for k in all_pct_keys}
+    pct_count = {k: 0 for k in all_pct_keys}
 
     for job in jobs:
         data = job.get(workload, {})
@@ -67,8 +77,15 @@ def parse_one_result(path: str, engine: str, queue_depth: int, workload: str) ->
         total_iops += float(data.get("iops", 0.0))
 
         clat_percentiles = data.get("clat_ns", {}).get("percentile", {})
-        for out_key, fio_key in PERCENTILE_KEYS.items():
+        for out_key, fio_key in CLAT_PERCENTILE_KEYS.items():
             val_ns = clat_percentiles.get(fio_key)
+            if val_ns is not None:
+                pct_sum[out_key] += float(val_ns) / 1000.0
+                pct_count[out_key] += 1
+
+        lat_percentiles = data.get("lat_ns", {}).get("percentile", {})
+        for out_key, fio_key in LAT_PERCENTILE_KEYS.items():
+            val_ns = lat_percentiles.get(fio_key)
             if val_ns is not None:
                 pct_sum[out_key] += float(val_ns) / 1000.0
                 pct_count[out_key] += 1
@@ -81,7 +98,7 @@ def parse_one_result(path: str, engine: str, queue_depth: int, workload: str) ->
         "Speed_Bps": int(total_bw_bytes),
         "IOPS": int(total_iops),
     }
-    for out_key in PERCENTILE_KEYS:
+    for out_key in all_pct_keys:
         row[out_key] = int(pct_sum[out_key] / pct_count[out_key]) if pct_count[out_key] else 0
 
     return row
@@ -192,10 +209,11 @@ def plot_latency_by_inflight(
         ) from exc
 
     grouped = build_series(rows)
+    has_lat = any(row.get("LatP50_us", 0) for row in rows)
     percentile_keys = [
-        ("LatencyP50_us", "p50"),
-        ("LatencyP90_us", "p90"),
-        ("LatencyP99_us", "p99"),
+        ("LatP50_us" if has_lat else "ClatP50_us", "p50"),
+        ("LatP90_us" if has_lat else "ClatP90_us", "p90"),
+        ("LatP99_us" if has_lat else "ClatP99_us", "p99"),
     ]
 
     fig, axes = plt.subplots(3, 1, figsize=(10, 12), sharex=True)
@@ -247,13 +265,23 @@ def plot_latency_percentile_bars(
             "plotting requires matplotlib (pip install matplotlib)"
         ) from exc
 
-    percentile_fields = [
-        ("LatencyP50_us", "50"),
-        ("LatencyP90_us", "90"),
-        ("LatencyP95_us", "95"),
-        ("LatencyP99_us", "99"),
-        ("LatencyP99_9_us", "99.9"),
-    ]
+    has_lat = any(row.get("LatP50_us", 0) for row in rows)
+    if has_lat:
+        percentile_fields = [
+            ("LatP50_us", "50"),
+            ("LatP90_us", "90"),
+            ("LatP95_us", "95"),
+            ("LatP99_us", "99"),
+            ("LatP99_9_us", "99.9"),
+        ]
+    else:
+        percentile_fields = [
+            ("ClatP50_us", "50"),
+            ("ClatP90_us", "90"),
+            ("ClatP95_us", "95"),
+            ("ClatP99_us", "99"),
+            ("ClatP99_9_us", "99.9"),
+        ]
     target_qds = [1, 4, 16]
     workloads = sorted({str(r["Workload"]) for r in rows})
     generated_paths: List[str] = []
@@ -351,18 +379,27 @@ def main() -> int:
         print(f"failed to parse results: {exc}", file=sys.stderr)
         return 1
 
+    has_lat = any(row.get("LatP50_us", 0) for row in rows)
     fieldnames = [
         "Engine",
         "QueueDepth",
         "Workload",
         "Speed",
         "IOPS",
-        "LatencyP50_us",
-        "LatencyP90_us",
-        "LatencyP95_us",
-        "LatencyP99_us",
-        "LatencyP99_9_us",
+        "ClatP50_us",
+        "ClatP90_us",
+        "ClatP95_us",
+        "ClatP99_us",
+        "ClatP99_9_us",
     ]
+    if has_lat:
+        fieldnames += [
+            "LatP50_us",
+            "LatP90_us",
+            "LatP95_us",
+            "LatP99_us",
+            "LatP99_9_us",
+        ]
 
     if args.format == "csv":
         print_csv(rows, fieldnames)

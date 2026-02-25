@@ -253,7 +253,7 @@ if ! RESULT=$(sudo "$YDB_STRESS_TOOL" \
     exit 1
 fi
 
-if ! GROUP_JSON=$(echo "$RESULT" | jq --arg label "$LABEL" --arg log_mode "$LOG_MODE" '. + {Label: $label, LogMode: $log_mode}' 2>&1); then
+if ! GROUP_JSON=$(echo "$RESULT" | jq --arg lbl "$LABEL" --arg log_mode "$LOG_MODE" '. + {Label: $lbl, LogMode: $log_mode}' 2>&1); then
     echo "Error parsing stress tool output as JSON:"
     echo "jq error: $GROUP_JSON"
     echo "Raw output:"

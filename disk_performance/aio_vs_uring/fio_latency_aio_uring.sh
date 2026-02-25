@@ -106,6 +106,7 @@ function run_fio {
         --direct=1 --verify=0 --randrepeat=0
         --bs="$block_size" --iodepth="$iodepth" --rw="rand$rw" --iodepth_batch_submit="$iodepth_batch_submit"
         --iodepth_batch_complete_max="$iodepth_batch_complete_max"
+        --lat_percentiles=1
         --percentile_list="10:50:90:95:99:99.9"
         --output-format="$format"
         --output="$result_file"
