@@ -10,7 +10,7 @@ block_size=4K
 run_reads=0
 clocksource=cpu
 format=json
-results_dir="."
+results_dir="$(date +%Y%m%d_%H%M)_results"
 fill_disk=0
 
 iodepth_from=1
@@ -36,7 +36,7 @@ Options:
   --runtime <time>                 fio runtime (default: $runtime)
   --run-type <smoke|normal|long>   run profile (default: $run_type)
   --fill-disk                      run preconditioning fill (default: false)
-  --results-dir <path>             directory for fio outputs (default: $results_dir)
+  --results-dir <path>             directory for fio outputs (default: YYYYMMDD_HHMM_results)
   --reads                          also run read test (default: write-only)
   --iodepth-from <n>               iodepth start (default: $iodepth_from)
   --iodepth-to <n>                 iodepth end (default: $iodepth_to)

@@ -21,14 +21,14 @@ multi_stream_seq_test_offset=100G
 ioengine=libaio
 ioengine_args=
 
-results_dir="results"
+results_dir="$(date +%Y%m%d_%H%M)_results"
 fill_disk=false
 
 usage() {
     echo "Usage: $0"
     echo "  --filename <filename> "
     echo "  [--filesize <filesize>] (default: $filesize)"
-    echo "  [--results-dir <results-dir>] (default: $results_dir)"
+    echo "  [--results-dir <results-dir>] (default: YYYYMMDD_HHMM_results)"
     echo "  [--fill-disk] (default: false)"
     echo "  [--ioengine] (default $ioengine)"
     echo "  [--ioengine-args] (default NONE)"
