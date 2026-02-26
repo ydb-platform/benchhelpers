@@ -30,7 +30,7 @@ def drop(session, table_path):
 def create_table(session, table_path):
     sql = f"""
         --!syntax_v1
-        CREATE TABLE `{table_path}` (
+        CREATE TABLE IF NOT EXISTS `{table_path}` (
             timestamp Timestamp,
             cluster Utf8,
             version Utf8,
