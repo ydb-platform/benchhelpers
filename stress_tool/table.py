@@ -87,6 +87,16 @@ def _iops_to_kiops(s: Any) -> float:
     return _parse_float(s) / 1000.0
 
 
+def _is_multi_device(group: Dict[str, Any]) -> bool:
+    for it in group.get("InFlights", []):
+        if not isinstance(it, dict):
+            continue
+        for run in it.get("Runs", []):
+            if isinstance(run, dict) and "Device" in run:
+                return True
+    return False
+
+
 def _group_name(group: Dict[str, Any]) -> str:
     label = str(group.get("Label", "")).strip()
     log_mode = str(group.get("LogMode", "")).strip()
@@ -136,9 +146,13 @@ def _extract_min_med_max(
     return out
 
 
-def _select_median_iops_run(inflight_item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _select_median_iops_run(
+    inflight_item: Dict[str, Any],
+    device_filter: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """
     Pick the run whose IOPS is closest to the reported median IOPS.
+    When device_filter is set, only consider runs with that Device value.
     """
     iops_stats = inflight_item.get("IOPS", {})
     if not isinstance(iops_stats, dict):
@@ -156,6 +170,8 @@ def _select_median_iops_run(inflight_item: Dict[str, Any]) -> Optional[Dict[str,
     for r in runs:
         if not isinstance(r, dict):
             continue
+        if device_filter is not None and str(r.get("Device", "")) != device_filter:
+            continue
         diff = abs(_parse_float(r.get("IOPS")) - target)
         if best_diff is None or diff < best_diff:
             best_diff = diff
@@ -164,7 +180,9 @@ def _select_median_iops_run(inflight_item: Dict[str, Any]) -> Optional[Dict[str,
 
 
 def _extract_latency_percentiles(
-    group: Dict[str, Any], percentiles: Sequence[str]
+    group: Dict[str, Any],
+    percentiles: Sequence[str],
+    device_filter: Optional[str] = None,
 ) -> List[Tuple[int, List[float]]]:
     items = group.get("InFlights", [])
     if not isinstance(items, list):
@@ -177,7 +195,7 @@ def _extract_latency_percentiles(
         inflight = it.get("InFlight")
         if inflight is None:
             continue
-        run = _select_median_iops_run(it)
+        run = _select_median_iops_run(it, device_filter=device_filter)
         if run is None:
             continue
         vals = [_latency_to_us(run.get(p)) for p in percentiles]
@@ -188,12 +206,14 @@ def _extract_latency_percentiles(
 
 
 def _extract_runs_table_rows(
-    group: Dict[str, Any], percentiles: Sequence[str]
+    group: Dict[str, Any],
+    percentiles: Sequence[str],
+    has_device: bool = False,
 ) -> List[List[str]]:
     """
     One row per run, per inflight. Keeps run order as in JSON.
     Columns:
-      InFlight, Run, IOPS(kIOPS), Speed(MB/s), <percentiles...>
+      InFlight, Run, [Device,] IOPS(kIOPS), Speed(MB/s), <percentiles...>
     """
     items = group.get("InFlights", [])
     if not isinstance(items, list):
@@ -208,17 +228,30 @@ def _extract_runs_table_rows(
         runs = it.get("Runs", [])
         if not isinstance(runs, list):
             continue
-        for idx, r in enumerate(runs, start=1):
+        # For multi-device, each "run" is a group of (num_devices + SUM) rows
+        rows_per_run = 1
+        if has_device:
+            for i, r in enumerate(runs):
+                if isinstance(r, dict) and str(r.get("Device", "")) == "SUM":
+                    rows_per_run = i + 1
+                    break
+
+        for idx, r in enumerate(runs):
             if not isinstance(r, dict):
                 continue
+            run_num = (idx // rows_per_run) + 1
             iops_k = _iops_to_kiops(r.get("IOPS"))
             speed_mb = _bandwidth_to_mbs(r.get("Speed"))
             lat_vals = [_latency_to_us(r.get(p)) for p in percentiles]
 
-            rows.append(
-                [str(inflight), str(idx), _fmt_num(iops_k, 1), _fmt_num(speed_mb, 1)]
+            row = [str(inflight), str(run_num)]
+            if has_device:
+                row.append(str(r.get("Device", "")))
+            row.extend(
+                [_fmt_num(iops_k, 1), _fmt_num(speed_mb, 1)]
                 + [_fmt_num(v, 1) for v in lat_vals]
             )
+            rows.append(row)
     return rows
 
 
@@ -291,12 +324,14 @@ def main() -> int:
         "",
     ]
     for g in groups:
-        rows_data = _extract_latency_percentiles(g, ps)
+        device_filter = "SUM" if _is_multi_device(g) else None
+        rows_data = _extract_latency_percentiles(g, ps, device_filter=device_filter)
         rows = [
             [str(inf)] + [_fmt_num(v, 1) for v in vals]
             for inf, vals in rows_data
         ]
-        lat_sections.append(f"[{_group_name(g)}]  Latency (us) from median-IOPS run")
+        suffix = " (SUM)" if device_filter else ""
+        lat_sections.append(f"[{_group_name(g)}]  Latency (us) from median-IOPS run{suffix}")
         lat_sections.append(_render_table(["InFlight"] + ps, rows))
         lat_sections.append("")
     lat_txt = "\n".join(lat_sections).rstrip() + "\n"
@@ -308,15 +343,15 @@ def main() -> int:
         "",
     ]
     for g in groups:
-        rows = _extract_runs_table_rows(g, ps)
+        has_device = _is_multi_device(g)
+        rows = _extract_runs_table_rows(g, ps, has_device=has_device)
         runs_sections.append(f"[{_group_name(g)}]  Runs (IOPS in kIOPS, Speed in MB/s, Latency in us)")
+        headers = ["InFlight", "Run"]
+        if has_device:
+            headers.append("Device")
+        headers.extend(["IOPS(k)", "Speed"] + ps)
         if rows:
-            runs_sections.append(
-                _render_table(
-                    ["InFlight", "Run", "IOPS(k)", "Speed"] + ps,
-                    rows,
-                )
-            )
+            runs_sections.append(_render_table(headers, rows))
         else:
             runs_sections.append("(no runs found)")
         runs_sections.append("")

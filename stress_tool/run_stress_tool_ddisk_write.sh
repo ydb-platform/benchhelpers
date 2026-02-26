@@ -17,7 +17,7 @@ set -e
 
 YDB_STRESS_TOOL=""
 LABEL=""
-DISK_PATH=""
+DISK_PATHS=()
 OUTPUT_FILE=""
 
 DURATION=120
@@ -38,12 +38,13 @@ TAG=1
 
 usage() {
     cat << EOF
-Usage: $0 --tool <ydb_stress_tool_path> [--duration <seconds>] [--warmup <seconds>] [--label <label>] [--run-count <N>] [--inflight-from <N>] [--inflight-to <N>] [--areas-count <N>] [--area-size <bytes>] [--expected-chunk-size <bytes>] [--node-id <N>] [--pdisk-id <N>] [--ddisk-slot-id <N>] --disk <disk_path> --output <output_file>
+Usage: $0 --tool <ydb_stress_tool_path> [--duration <seconds>] [--warmup <seconds>] [--label <label>] [--run-count <N>] [--inflight-from <N>] [--inflight-to <N>] [--areas-count <N>] [--area-size <bytes>] [--expected-chunk-size <bytes>] --disk <disk_path> [--disk <disk_path2> ...] --output <output_file>
 
 Examples:
   $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1p2 --output ./out.json
   $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1p2 --output ./out.json --run-count $RUN_COUNT --inflight-from $INFLIGHT_FROM --inflight-to $INFLIGHT_TO
   $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1p2 --output ./out.json --areas-count 32
+  $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1p2 --disk /dev/nvme1n1p2 --output ./out.json
 EOF
 }
 
@@ -66,7 +67,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --disk)
-            DISK_PATH="$2"
+            DISK_PATHS+=("$2")
             shift 2
             ;;
         --output)
@@ -117,8 +118,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [ -z "$YDB_STRESS_TOOL" ] || [ -z "$DISK_PATH" ] || [ -z "$OUTPUT_FILE" ]; then
-    echo "Error: Tool, disk path and output file are required"
+if [ -z "$YDB_STRESS_TOOL" ] || [ ${#DISK_PATHS[@]} -eq 0 ] || [ -z "$OUTPUT_FILE" ]; then
+    echo "Error: Tool, at least one --disk, and output file are required"
     usage
     exit 1
 fi
@@ -159,15 +160,16 @@ if [ ! -x "$YDB_STRESS_TOOL" ]; then
     exit 1
 fi
 
-if [ ! -e "$DISK_PATH" ]; then
-    echo "Error: Disk path $DISK_PATH does not exist"
-    exit 1
-fi
-
-if [ ! -b "$DISK_PATH" ]; then
-    echo "Error: $DISK_PATH is not a block device"
-    exit 1
-fi
+for dp in "${DISK_PATHS[@]}"; do
+    if [ ! -e "$dp" ]; then
+        echo "Error: Disk path $dp does not exist"
+        exit 1
+    fi
+    if [ ! -b "$dp" ]; then
+        echo "Error: $dp is not a block device"
+        exit 1
+    fi
+done
 
 if ! [[ "$DURATION" =~ ^[0-9]+$ ]] || [ "$DURATION" -lt 1 ]; then
     echo "Error: --duration must be an integer >= 1 (got '$DURATION')"
@@ -265,9 +267,14 @@ fi
 CONFIG_FILE="$TEMP_DIR/config_ddisk_areas_${EFFECTIVE_AREAS}.cfg"
 generate_config "$EFFECTIVE_AREAS" "$CONFIG_FILE"
 
-echo "Running test with InFlights=$INFLIGHT_FROM..$INFLIGHT_TO, RunCount=$RUN_COUNT, AreasCount=$EFFECTIVE_AREAS"
+PATH_ARGS=()
+for dp in "${DISK_PATHS[@]}"; do
+    PATH_ARGS+=(--path "$dp")
+done
+
+echo "Running test with InFlights=$INFLIGHT_FROM..$INFLIGHT_TO, RunCount=$RUN_COUNT, AreasCount=$EFFECTIVE_AREAS, Disks=${#DISK_PATHS[@]}"
 if ! RESULT=$(sudo "$YDB_STRESS_TOOL" \
-    --path "$DISK_PATH" \
+    "${PATH_ARGS[@]}" \
     --type NVME \
     --no-logo \
     --cfg "$CONFIG_FILE" \

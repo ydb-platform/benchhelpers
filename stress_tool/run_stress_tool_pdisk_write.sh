@@ -8,7 +8,7 @@ set -e
 YDB_STRESS_TOOL=""
 DURATION=120
 LABEL=""
-DISK_PATH=""
+DISK_PATHS=()
 OUTPUT_FILE=""
 LOG_MODE="LOG_NONE"
 RUN_COUNT=10
@@ -20,7 +20,7 @@ WARMUP_SECONDS=15
 
 usage() {
     cat << EOF
-Usage: $0 --tool <ydb_stress_tool_path> [--duration <seconds>] [--label <label>] [--log-mode <LOG_NONE|LOG_SEQUENTIAL>] [--run-count <N>] [--inflight-from <N>] [--inflight-to <N>] [--chunks-count <N>] [--warmup <seconds>] --disk <disk_path> --output <output_file>
+Usage: $0 --tool <ydb_stress_tool_path> [--duration <seconds>] [--label <label>] [--log-mode <LOG_NONE|LOG_SEQUENTIAL>] [--run-count <N>] [--inflight-from <N>] [--inflight-to <N>] [--chunks-count <N>] [--warmup <seconds>] --disk <disk_path> [--disk <disk_path2> ...] --output <output_file>
 
 Examples:
   $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1 --output ./out.json
@@ -28,6 +28,7 @@ Examples:
   $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1 --output ./out.json --run-count $RUN_COUNT --inflight-from $INFLIGHT_FROM --inflight-to $INFLIGHT_TO
   $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1 --output ./out.json --inflight-from 1 --inflight-to 32 --chunks-count 32
   $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1 --output ./out.json --warmup 30
+  $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1 --disk /dev/nvme1n1 --output ./out.json
 EOF
 }
 
@@ -46,7 +47,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --disk)
-            DISK_PATH="$2"
+            DISK_PATHS+=("$2")
             shift 2
             ;;
         --output)
@@ -90,8 +91,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [ -z "$YDB_STRESS_TOOL" ] || [ -z "$DISK_PATH" ] || [ -z "$OUTPUT_FILE" ]; then
-    echo "Error: Tool, disk path and output file are required"
+if [ -z "$YDB_STRESS_TOOL" ] || [ ${#DISK_PATHS[@]} -eq 0 ] || [ -z "$OUTPUT_FILE" ]; then
+    echo "Error: Tool, at least one --disk, and output file are required"
     usage
     exit 1
 fi
@@ -132,15 +133,16 @@ if [ ! -x "$YDB_STRESS_TOOL" ]; then
     exit 1
 fi
 
-if [ ! -e "$DISK_PATH" ]; then
-    echo "Error: Disk path $DISK_PATH does not exist"
-    exit 1
-fi
-
-if [ ! -b "$DISK_PATH" ]; then
-    echo "Error: $DISK_PATH is not a block device"
-    exit 1
-fi
+for dp in "${DISK_PATHS[@]}"; do
+    if [ ! -e "$dp" ]; then
+        echo "Error: Disk path $dp does not exist"
+        exit 1
+    fi
+    if [ ! -b "$dp" ]; then
+        echo "Error: $dp is not a block device"
+        exit 1
+    fi
+done
 
 if [ "$LOG_MODE" != "LOG_SEQUENTIAL" ] && [ "$LOG_MODE" != "LOG_NONE" ]; then
     echo "Error: Invalid --log-mode '$LOG_MODE' (allowed: LOG_NONE or LOG_SEQUENTIAL)"
@@ -238,9 +240,14 @@ fi
 CONFIG_FILE="$TEMP_DIR/config_${LOG_MODE}_chunks_${EFFECTIVE_CHUNKS}.cfg"
 generate_config "$LOG_MODE" "$EFFECTIVE_CHUNKS" "$CONFIG_FILE"
 
-echo "Running test with LogMode=$LOG_MODE, InFlights=$INFLIGHT_FROM..$INFLIGHT_TO, RunCount=$RUN_COUNT, ChunksCount=$EFFECTIVE_CHUNKS"
+PATH_ARGS=()
+for dp in "${DISK_PATHS[@]}"; do
+    PATH_ARGS+=(--path "$dp")
+done
+
+echo "Running test with LogMode=$LOG_MODE, InFlights=$INFLIGHT_FROM..$INFLIGHT_TO, RunCount=$RUN_COUNT, ChunksCount=$EFFECTIVE_CHUNKS, Disks=${#DISK_PATHS[@]}"
 if ! RESULT=$(sudo "$YDB_STRESS_TOOL" \
-    --path "$DISK_PATH" \
+    "${PATH_ARGS[@]}" \
     --type NVME \
     --no-logo \
     --cfg "$CONFIG_FILE" \

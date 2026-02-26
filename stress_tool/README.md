@@ -42,7 +42,7 @@ The script runs **a single log mode** per invocation (default: `LOG_NONE`).
 - `--inflight-to`: Ending inflight value (default: 32)
 - `--chunks-count`: Number of `Chunks` in config. Default: equals max `InFlight` (`--inflight-to`) (if set, forced for all inflights)
 - `--warmup`: Delay before measurements in seconds (default: 15)
-- `--disk`: Path to the block device for testing (required)
+- `--disk`: Path to the block device for testing (required, repeatable for multi-device)
 - `--output`: Path to the output JSON file (required)
 
 #### CPU isolation (recommended)
@@ -55,10 +55,16 @@ For stable results it is recommended to isolate CPU resources for the benchmark.
 taskset -c 0-16 ./run_stress_tool_pdisk_write.sh ...args...
 ```
 
-#### Example
+#### Example (single device)
 ```bash
 ./run_stress_tool_pdisk_write.sh --tool ./ydb_stress_tool --duration 60 --label "pdisk write" \
   --disk /dev/nvme_01 --output result.json --run-count 3 --inflight-from 1 --inflight-to 32
+```
+
+#### Example (multi-device)
+```bash
+./run_stress_tool_pdisk_write.sh --tool ./ydb_stress_tool --duration 60 --label "pdisk write 2dev" \
+  --disk /dev/nvme0n1 --disk /dev/nvme1n1 --output result_2dev.json --run-count 3 --inflight-from 1 --inflight-to 32
 ```
 
 ### 2. run_stress_tool_ddisk_write.sh
@@ -88,15 +94,22 @@ DDisk has no log mode; the script still emits a `LogMode` field for compatibilit
 ```
 
 #### Arguments (high level)
+- **`--disk`**: Path to the block device (required, repeatable for multi-device)
 - **`--areas-count`**: Number of `Areas` in config. Default: equals max `InFlight` (`--inflight-to`) (if set, forced for all inflights)
 - **`--area-size`**: `AreaSize` in bytes (default: `134217728`)
 - **`--expected-chunk-size`**: `ExpectedChunkSize` in bytes (default: `134217728`)
 - **`--node-id` / `--pdisk-id` / `--ddisk-slot-id`**: DDiskId components (defaults: `1`)
 
-#### Example
+#### Example (single device)
 ```bash
 ./run_stress_tool_ddisk_write.sh --tool ./ydb_stress_tool --label "ddisk write" \
   --disk /dev/nvme_01 --output ddisk_result.json --run-count 3 --inflight-from 1 --inflight-to 32
+```
+
+#### Example (multi-device)
+```bash
+./run_stress_tool_ddisk_write.sh --tool ./ydb_stress_tool --label "ddisk 2dev" \
+  --disk /dev/nvme0n1p2 --disk /dev/nvme1n1p2 --output ddisk_2dev.json --run-count 3
 ```
 
 ### 3. res_to_csv.sh
@@ -127,12 +140,16 @@ Plots:
 - IOPS vs `InFlight` (min/max whiskers, median dot)
 - Latency p50/p90/p95/p99 vs `InFlight` from the **median-IOPS run**
 
+**Multi-device behavior:**
+- **Single input file with multi-device data:** plots one series per device.
+- **Multiple input files:** all must be single-device or all multi-device. For multi-device, only SUM/aggregate results are plotted.
+
 #### Usage
 ```bash
-python3 plot.py <input_json> <output_prefix>
+python3 plot.py <input_json> [<input_json2> ...] <output_prefix> [--label <label>]
 ```
 
-#### Example
+#### Example (single device)
 ```bash
 python3 plot.py result.json /tmp/pdisk_write
 # writes:
@@ -141,13 +158,24 @@ python3 plot.py result.json /tmp/pdisk_write
 #   /tmp/pdisk_write_latency.png
 ```
 
+#### Example (multi-device, single file — per-device series)
+```bash
+python3 plot.py result_2dev.json /tmp/pdisk_2dev
+```
+
+#### Example (comparing two multi-device runs — SUM only)
+```bash
+python3 plot.py run1.json run2.json /tmp/compare --label "before" --label "after"
+```
+
 ### 5. table.py
 
 Prints the same information as `plot.py`, but as **human-readable tables** to stdout:
 
-- Throughput (`Speed`) vs `InFlight` (min/median/max)
+- Throughput (`Speed`) vs `InFlight` (min/median/max) — SUM-based statistics for multi-device
 - IOPS vs `InFlight` (min/median/max)
-- Latency percentiles p50/p90/p95/p99 vs `InFlight` from the **median-IOPS run**
+- Latency percentiles p50/p90/p95/p99 vs `InFlight` from the **median-IOPS run** (SUM run for multi-device)
+- Per-run table with all runs including per-device and SUM rows (Device column added for multi-device)
 
 #### Usage
 ```bash

@@ -89,6 +89,105 @@ def _iops_to_kiops(s: Any) -> float:
     return _parse_float(s) / 1000.0
 
 
+def _is_multi_device(group: Dict[str, Any]) -> bool:
+    for it in group.get("InFlights", []):
+        if not isinstance(it, dict):
+            continue
+        for run in it.get("Runs", []):
+            if isinstance(run, dict) and "Device" in run:
+                return True
+    return False
+
+
+def _get_device_ids(group: Dict[str, Any]) -> List[str]:
+    devices: set = set()
+    for it in group.get("InFlights", []):
+        if not isinstance(it, dict):
+            continue
+        for run in it.get("Runs", []):
+            if isinstance(run, dict):
+                dev = run.get("Device")
+                if dev is not None and str(dev) != "SUM":
+                    devices.add(str(dev))
+    return sorted(devices)
+
+
+def _compute_stats(values: List[float]) -> Dict[str, float]:
+    values = [v for v in values if not math.isnan(v)]
+    if not values:
+        return {}
+    values.sort()
+    n = len(values)
+    mn = values[0]
+    mx = values[-1]
+    md = (values[n // 2 - 1] + values[n // 2]) / 2.0 if n % 2 == 0 else values[n // 2]
+    mean = sum(values) / n
+    sd = math.sqrt(sum((v - mean) ** 2 for v in values) / n)
+    return {"min": mn, "max": mx, "median": md, "stdev": sd}
+
+
+def _split_multi_device_group(
+    group: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Split a multi-device group into one synthetic group per device."""
+    device_ids = _get_device_ids(group)
+    per_device: List[Dict[str, Any]] = []
+    for dev_id in device_ids:
+        g = dict(group)
+        label = str(group.get("Label", "")).strip()
+        g["Label"] = f"{label} dev{dev_id}".strip()
+        new_inflights = []
+        for it in group.get("InFlights", []):
+            if not isinstance(it, dict):
+                continue
+            dev_runs = [
+                r for r in it.get("Runs", [])
+                if isinstance(r, dict) and str(r.get("Device", "")) == dev_id
+            ]
+            if not dev_runs:
+                continue
+            new_it = dict(it)
+            new_it["Runs"] = dev_runs
+            speeds = [_bandwidth_to_mbs(r.get("Speed")) for r in dev_runs]
+            st = _compute_stats(speeds)
+            if st:
+                new_it["Speed"] = {
+                    k: f"{v:.1f} MB/s" if isinstance(v, float) else v
+                    for k, v in st.items()
+                }
+            iops_vals = [_parse_float(r.get("IOPS")) for r in dev_runs]
+            st = _compute_stats(iops_vals)
+            if st:
+                new_it["IOPS"] = {
+                    k: f"{v:.1f}" if isinstance(v, float) else v
+                    for k, v in st.items()
+                }
+            new_inflights.append(new_it)
+        g["InFlights"] = new_inflights
+        per_device.append(g)
+    return per_device
+
+
+def _filter_to_sum_runs(group: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep only SUM runs; InFlight-level Speed/IOPS stats are already SUM-based."""
+    g = dict(group)
+    new_inflights = []
+    for it in group.get("InFlights", []):
+        if not isinstance(it, dict):
+            continue
+        sum_runs = [
+            r for r in it.get("Runs", [])
+            if isinstance(r, dict) and str(r.get("Device", "")) == "SUM"
+        ]
+        if not sum_runs:
+            continue
+        new_it = dict(it)
+        new_it["Runs"] = sum_runs
+        new_inflights.append(new_it)
+    g["InFlights"] = new_inflights
+    return g
+
+
 def _group_name(group: Dict[str, Any]) -> str:
     label = str(group.get("Label", "")).strip()
     log_mode = str(group.get("LogMode", "")).strip()
@@ -215,6 +314,9 @@ def _plot_min_med_max(
             except Exception:
                 ax.set_xticks(xs_sorted)
 
+    ax.set_xlim(left=0)
+    ax.set_ylim(bottom=0)
+
     if len(groups) > 1:
         ax.legend(loc="best")
 
@@ -327,6 +429,9 @@ def _plot_latency_percentiles(
             except Exception:
                 ax.set_xticks(xs_sorted)
 
+    ax.set_xlim(left=0)
+    ax.set_ylim(bottom=0)
+
     ax.legend(loc="best", ncols=2)
     fig.tight_layout()
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
@@ -388,6 +493,28 @@ def main() -> int:
 
     if not groups:
         raise SystemExit("No result groups found in input JSON.")
+
+    multi_count = sum(1 for g in groups if _is_multi_device(g))
+    single_count = len(groups) - multi_count
+
+    if len(args.input_json) == 1 and multi_count > 0:
+        # Single input file with multi-device data: plot each device as a series
+        plot_groups: List[Dict[str, Any]] = []
+        for g in groups:
+            if _is_multi_device(g):
+                plot_groups.extend(_split_multi_device_group(g))
+            else:
+                plot_groups.append(g)
+        groups = plot_groups
+    elif len(args.input_json) > 1:
+        if multi_count > 0 and single_count > 0:
+            raise SystemExit(
+                "Cannot mix single-device and multi-device result files. "
+                "All inputs must be either single-device or all multi-device."
+            )
+        if multi_count > 0:
+            # Multiple inputs, all multi-device: plot only SUM/aggregate
+            groups = [_filter_to_sum_runs(g) for g in groups]
 
     out_speed = f"{args.prefix}_speed.png"
     out_iops = f"{args.prefix}_iops.png"
