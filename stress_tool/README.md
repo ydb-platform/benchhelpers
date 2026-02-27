@@ -112,7 +112,50 @@ DDisk has no log mode; the script still emits a `LogMode` field for compatibilit
   --disk /dev/nvme0n1p2 --disk /dev/nvme1n1p2 --output ddisk_2dev.json --run-count 3
 ```
 
-### 3. res_to_csv.sh
+### 3. run_stress_tool_uring_write.sh
+
+Runs the YDB stress tool uring write test and collects results.
+Output JSON format is **compatible** with `plot.py` and `table.py` (same `InFlights` shape).
+
+The script emits `LogMode: "URING"` for compatibility with comparison/plot tooling.
+
+#### Usage
+```bash
+./run_stress_tool_uring_write.sh --tool <ydb_stress_tool_path> \
+  [--duration <seconds>] \
+  [--label <label>] \
+  [--run-count <N>] \
+  [--inflight-from <N>] \
+  [--inflight-to <N>] \
+  [--request-size <bytes>] \
+  [--queue-depth <N>] \
+  [--use-aligned-data <true|false>] \
+  [--use-write-fixed <true|false>] \
+  --disk <disk_path> \
+  --output <output_file>
+```
+
+#### Arguments (high level)
+- **`--disk`**: Path to the block device (required, repeatable for multi-device)
+- **`--duration`**: `DurationSeconds` for `UringRouterTestList` (default: `30`)
+- **`--request-size`**: `RequestSize` in bytes (default: `4096`)
+- **`--queue-depth`**: `QueueDepth` (default: `128`, must be `>= --inflight-to`)
+- **`--use-aligned-data`**: `UseAlignedData` boolean (default: `true`)
+- **`--use-write-fixed`**: `UseWriteFixed` boolean (default: `true`)
+
+#### Example (single device)
+```bash
+./run_stress_tool_uring_write.sh --tool ./ydb_stress_tool --label "uring write" \
+  --disk /dev/nvme0n1p2 --output uring_result.json --run-count 3 --inflight-from 1 --inflight-to 128
+```
+
+#### Example (multi-device)
+```bash
+./run_stress_tool_uring_write.sh --tool ./ydb_stress_tool --label "uring 2dev" \
+  --disk /dev/nvme0n1p2 --disk /dev/nvme1n1p2 --output uring_2dev.json --run-count 3
+```
+
+### 4. res_to_csv.sh
 
 Converts the JSON results from `run_stress_tool_pdisk_write.sh` into CSV format.
 For latency percentiles it uses **the last run** (`Runs[-1]`) for each inflight value.
@@ -132,7 +175,7 @@ For latency percentiles it uses **the last run** (`Runs[-1]`) for each inflight 
 ./res_to_csv.sh --input result.json --percentile p99.00 --output results.csv
 ```
 
-### 4. plot.py
+### 5. plot.py
 
 Plots:
 
@@ -168,7 +211,7 @@ python3 plot.py result_2dev.json /tmp/pdisk_2dev
 python3 plot.py run1.json run2.json /tmp/compare --label "before" --label "after"
 ```
 
-### 5. table.py
+### 6. table.py
 
 Prints the same information as `plot.py`, but as **human-readable tables** to stdout:
 
@@ -213,7 +256,7 @@ python3 table.py result.json
 
 ## Output Format
 
-### JSON Output (`run_stress_tool_pdisk_write.sh` / `run_stress_tool_ddisk_write.sh`)
+### JSON Output (`run_stress_tool_pdisk_write.sh` / `run_stress_tool_ddisk_write.sh` / `run_stress_tool_uring_write.sh`)
 The output is a JSON array (even if it contains a single group). Each group contains `InFlights` with summary stats and per-run results:
 ```json
 [
