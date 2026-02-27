@@ -64,7 +64,7 @@ taskset -c 0-16 ./run_stress_tool_pdisk_write.sh ...args...
 #### Example (multi-device)
 ```bash
 ./run_stress_tool_pdisk_write.sh --tool ./ydb_stress_tool --duration 60 --label "pdisk write 2dev" \
-  --disk /dev/nvme0n1 --disk /dev/nvme1n1 --output result_2dev.json --run-count 3 --inflight-from 1 --inflight-to 32
+  --disk /dev/nvme0n1p2 --disk /dev/nvme1n1p2 --output result_2dev.json --run-count 3 --inflight-from 1 --inflight-to 32
 ```
 
 ### 2. run_stress_tool_ddisk_write.sh
