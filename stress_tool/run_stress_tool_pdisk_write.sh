@@ -123,6 +123,11 @@ if ! command -v jq &> /dev/null; then
     exit 1
 fi
 
+if ! command -v blkdiscard &> /dev/null; then
+    echo "Error: blkdiscard is not installed. Please install util-linux (blkdiscard) to run this script."
+    exit 1
+fi
+
 if [ ! -f "$YDB_STRESS_TOOL" ]; then
     echo "Error: Tool not found at $YDB_STRESS_TOOL"
     exit 1
@@ -243,6 +248,12 @@ generate_config "$LOG_MODE" "$EFFECTIVE_CHUNKS" "$CONFIG_FILE"
 PATH_ARGS=()
 for dp in "${DISK_PATHS[@]}"; do
     PATH_ARGS+=(--path "$dp")
+done
+
+echo "Discarding test devices before benchmark run..."
+for dp in "${DISK_PATHS[@]}"; do
+    echo "  sudo blkdiscard $dp"
+    sudo blkdiscard "$dp"
 done
 
 echo "Running test with LogMode=$LOG_MODE, InFlights=$INFLIGHT_FROM..$INFLIGHT_TO, RunCount=$RUN_COUNT, ChunksCount=$EFFECTIVE_CHUNKS, Disks=${#DISK_PATHS[@]}"
