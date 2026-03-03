@@ -23,6 +23,7 @@ ioengine_args=
 
 results_dir="$(date +%Y%m%d_%H%M)_results"
 fill_disk=false
+prefix=""
 
 usage() {
     echo "Usage: $0"
@@ -37,6 +38,7 @@ usage() {
     echo "  [--run-type <smoke|normal|long>] (default: $run_type)"
     echo "  [--run-count <run-count>] (default: $run_count)"
     echo "  [--format <format>] (default: $format)"
+    echo "  [--prefix <prefix>] (default: empty)"
 }
 
 size_to_bytes() {
@@ -109,6 +111,9 @@ while [[ "$#" > 0 ]]; do case $1 in
         shift;;
     --format)
         format="$2";
+        shift;;
+    --prefix)
+        prefix="$2";
         shift;;
     --help|-h)
         usage
@@ -429,5 +434,9 @@ done
 
 if [[ "$format" == "json" ]]; then
     script_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-    $script_dir/aggregate.py "$results_dir" 2>&1 | tee "$results_dir/result.txt"
+    aggregate_cmd=("$script_dir/aggregate.py" "$results_dir" "--plot")
+    if [[ -n "$prefix" ]]; then
+        aggregate_cmd+=("--prefix" "$prefix")
+    fi
+    "${aggregate_cmd[@]}" 2>&1 | tee "$results_dir/result.txt"
 fi

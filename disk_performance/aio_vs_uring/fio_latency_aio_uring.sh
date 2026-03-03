@@ -12,6 +12,7 @@ clocksource=cpu
 format=json
 results_dir="$(date +%Y%m%d_%H%M)_results"
 fill_disk=0
+prefix=""
 
 iodepth_from=1
 iodepth_to=128
@@ -42,6 +43,7 @@ Options:
   --iodepth-to <n>                 iodepth end (default: $iodepth_to)
   --clocksource <name>             fio clock source (default: $clocksource)
   --format <fmt>                   output format for fio files (default: $format)
+  --prefix <prefix>                plot filename prefix for aggregate.py (default: empty)
 
 Modes (if none selected, all are run):
   --aio                            libaio mode
@@ -195,6 +197,10 @@ while [[ "$#" -gt 0 ]]; do
             ;;
         --format)
             format="$2"
+            shift 2
+            ;;
+        --prefix)
+            prefix="$2"
             shift 2
             ;;
         --aio)
@@ -406,5 +412,9 @@ done
 
 if [[ "$format" == "json" ]]; then
     script_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-    python3 "$script_dir/aggregate.py" "$results_dir" --format table 2>&1 | tee "$results_dir/result.txt"
+    aggregate_cmd=(python3 "$script_dir/aggregate.py" "$results_dir" --format table --plot)
+    if [[ -n "$prefix" ]]; then
+        aggregate_cmd+=(--prefix "$prefix")
+    fi
+    "${aggregate_cmd[@]}" 2>&1 | tee "$results_dir/result.txt"
 fi
