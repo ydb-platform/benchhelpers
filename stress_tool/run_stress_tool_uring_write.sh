@@ -13,6 +13,7 @@ REQUEST_SIZE=4096
 QUEUE_DEPTH=128
 USE_ALIGNED_DATA="true"
 USE_WRITE_FIXED="true"
+USE_SHARED_SQPOLL="true"
 
 RUN_COUNT=10
 INFLIGHT_FROM=1
@@ -21,12 +22,13 @@ LOG_MODE="URING"
 
 usage() {
     cat << EOF
-Usage: $0 --tool <ydb_stress_tool_path> [--duration <seconds>] [--label <label>] [--run-count <N>] [--inflight-from <N>] [--inflight-to <N>] [--request-size <bytes>] [--queue-depth <N>] [--use-aligned-data <true|false>] [--use-write-fixed <true|false>] --disk <disk_path> [--disk <disk_path2> ...] --output <output_file>
+Usage: $0 --tool <ydb_stress_tool_path> [--duration <seconds>] [--label <label>] [--run-count <N>] [--inflight-from <N>] [--inflight-to <N>] [--request-size <bytes>] [--queue-depth <N>] [--use-aligned-data <true|false>] [--use-write-fixed <true|false>] [--disable-shared-sqpoll] --disk <disk_path> [--disk <disk_path2> ...] --output <output_file>
 
 Examples:
   $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1 --output ./out_uring.json
   $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1 --output ./out_uring.json --duration 60 --run-count 3 --inflight-from 1 --inflight-to 64
   $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1 --output ./out_uring.json --request-size 4096 --queue-depth 128 --use-aligned-data true --use-write-fixed true
+  $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1 --output ./out_uring.json --disable-shared-sqpoll
   $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1 --disk /dev/nvme1n1 --output ./out_uring_2dev.json
 EOF
 }
@@ -89,6 +91,10 @@ while [[ $# -gt 0 ]]; do
         --use-write-fixed)
             USE_WRITE_FIXED="$2"
             shift 2
+            ;;
+        --disable-shared-sqpoll)
+            USE_SHARED_SQPOLL="false"
+            shift
             ;;
         *)
             echo "Unknown option: $1"
@@ -227,6 +233,7 @@ UringRouterTestList: {
     QueueDepth: $QUEUE_DEPTH
     UseAlignedData: $USE_ALIGNED_DATA_NORM
     UseWriteFixed: $USE_WRITE_FIXED_NORM
+    UseSharedSQPoll: $USE_SHARED_SQPOLL
 }
 EOF
 

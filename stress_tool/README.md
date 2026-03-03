@@ -131,6 +131,7 @@ The script emits `LogMode: "URING"` for compatibility with comparison/plot tooli
   [--queue-depth <N>] \
   [--use-aligned-data <true|false>] \
   [--use-write-fixed <true|false>] \
+  [--disable-shared-sqpoll] \
   --disk <disk_path> \
   --output <output_file>
 ```
@@ -142,6 +143,7 @@ The script emits `LogMode: "URING"` for compatibility with comparison/plot tooli
 - **`--queue-depth`**: `QueueDepth` (default: `128`, must be `>= --inflight-to`)
 - **`--use-aligned-data`**: `UseAlignedData` boolean (default: `true`)
 - **`--use-write-fixed`**: `UseWriteFixed` boolean (default: `true`)
+- **`--disable-shared-sqpoll`**: sets `UseSharedSQPoll: false` (default behavior is `true`)
 
 #### Example (single device)
 ```bash
