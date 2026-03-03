@@ -19,7 +19,7 @@ def _parse_float(s: Any) -> float:
 
 
 _BW_RE = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*([A-Za-z]+/s)\s*$")
-_LAT_US_RE = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*us\s*$")
+_LAT_RE = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*([A-Za-z\u00b5]+)\s*$")
 
 
 def _bandwidth_to_mbs(s: Any) -> float:
@@ -74,10 +74,20 @@ def _latency_to_us(s: Any) -> float:
     raw = str(s).strip()
     if raw == "":
         return float("nan")
-    m = _LAT_US_RE.match(raw)
+    m = _LAT_RE.match(raw)
     if not m:
         raise ValueError(f"Unrecognized latency value: {raw!r}")
-    return float(m.group(1))
+    val = float(m.group(1))
+    unit = m.group(2).lower()
+    if unit in {"us", "µs"}:
+        return val
+    if unit == "ms":
+        return val * 1000.0
+    if unit == "ns":
+        return val / 1000.0
+    if unit == "s":
+        return val * 1_000_000.0
+    raise ValueError(f"Unsupported latency unit: {unit!r} (value={raw!r})")
 
 
 def _iops_to_kiops(s: Any) -> float:
@@ -85,6 +95,56 @@ def _iops_to_kiops(s: Any) -> float:
     Convert IOPS value to kIOPS (thousands of IOPS).
     """
     return _parse_float(s) / 1000.0
+
+
+def _percentile_aliases(percentile: str) -> List[str]:
+    """
+    Expand percentile aliases, e.g. "p50.00" -> ["p50.00", "50.0 perc", ...].
+    """
+    out: List[str] = [percentile]
+    m = re.match(r"^\s*p?\s*([0-9]+(?:\.[0-9]+)?)\s*$", percentile.strip(), flags=re.IGNORECASE)
+    if not m:
+        return out
+    p = float(m.group(1))
+    out.extend(
+        [
+            f"p{p:.2f}",
+            f"p{p:g}",
+            f"{p:.2f} perc",
+            f"{p:.1f} perc",
+            f"{p:g} perc",
+            f"{p:.2f}%",
+            f"{p:.1f}%",
+            f"{p:g}%",
+        ]
+    )
+    # de-duplicate while preserving order
+    return list(dict.fromkeys(out))
+
+
+def _extract_latency_percentile_us(run: Dict[str, Any], percentile: str) -> float:
+    """
+    Read percentile latency from known run layouts, return us or NaN.
+    """
+    for key in _percentile_aliases(percentile):
+        if key in run:
+            try:
+                return _latency_to_us(run.get(key))
+            except ValueError:
+                return float("nan")
+
+    for container_key in ["Latency", "Latencies", "Percentiles"]:
+        container = run.get(container_key)
+        if not isinstance(container, dict):
+            continue
+        for key in _percentile_aliases(percentile):
+            if key in container:
+                try:
+                    return _latency_to_us(container.get(key))
+                except ValueError:
+                    return float("nan")
+
+    return float("nan")
 
 
 def _is_multi_device(group: Dict[str, Any]) -> bool:
@@ -198,7 +258,7 @@ def _extract_latency_percentiles(
         run = _select_median_iops_run(it, device_filter=device_filter)
         if run is None:
             continue
-        vals = [_latency_to_us(run.get(p)) for p in percentiles]
+        vals = [_extract_latency_percentile_us(run, p) for p in percentiles]
         out.append((int(inflight), vals))
 
     out.sort(key=lambda t: t[0])
@@ -242,7 +302,7 @@ def _extract_runs_table_rows(
             run_num = (idx // rows_per_run) + 1
             iops_k = _iops_to_kiops(r.get("IOPS"))
             speed_mb = _bandwidth_to_mbs(r.get("Speed"))
-            lat_vals = [_latency_to_us(r.get(p)) for p in percentiles]
+            lat_vals = [_extract_latency_percentile_us(r, p) for p in percentiles]
 
             row = [str(inflight), str(run_num)]
             if has_device:
