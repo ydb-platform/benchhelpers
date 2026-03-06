@@ -20,7 +20,7 @@ def _parse_float(s: Any) -> float:
 
 
 _BW_RE = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*([A-Za-z]+/s)\s*$")
-_LAT_US_RE = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*us\s*$")
+_LAT_RE = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*(us|µs|ms|ns|s)\s*$", flags=re.IGNORECASE)
 
 
 def _bandwidth_to_mbs(s: Any) -> float:
@@ -66,7 +66,7 @@ def _bandwidth_to_mbs(s: Any) -> float:
 
 def _latency_to_us(s: Any) -> float:
     """
-    Convert strings like '39 us' to float microseconds.
+    Convert latency values (us/ms/ns/s) to float microseconds.
     """
     if s is None:
         return float("nan")
@@ -75,10 +75,70 @@ def _latency_to_us(s: Any) -> float:
     raw = str(s).strip()
     if raw == "":
         return float("nan")
-    m = _LAT_US_RE.match(raw)
+    m = _LAT_RE.match(raw)
     if not m:
         raise ValueError(f"Unrecognized latency value: {raw!r}")
-    return float(m.group(1))
+    val = float(m.group(1))
+    unit = m.group(2).lower()
+    if unit in {"us", "µs"}:
+        return val
+    if unit == "ms":
+        return val * 1000.0
+    if unit == "ns":
+        return val / 1000.0
+    if unit == "s":
+        return val * 1_000_000.0
+    raise ValueError(f"Unsupported latency unit: {unit!r} (value={raw!r})")
+
+
+def _percentile_aliases(percentile: str) -> List[str]:
+    """
+    Expand percentile aliases, e.g. "p50.00" -> ["p50.00", "50.0 perc", ...].
+    """
+    out: List[str] = [percentile]
+    m = re.match(r"^\s*p?\s*([0-9]+(?:\.[0-9]+)?)\s*$", percentile.strip(), flags=re.IGNORECASE)
+    if not m:
+        return out
+    p = float(m.group(1))
+    out.extend(
+        [
+            f"p{p:.2f}",
+            f"p{p:g}",
+            f"{p:.2f} perc",
+            f"{p:.1f} perc",
+            f"{p:g} perc",
+            f"{p:.2f}%",
+            f"{p:.1f}%",
+            f"{p:g}%",
+        ]
+    )
+    return list(dict.fromkeys(out))
+
+
+def _extract_latency_percentile_us(run: Dict[str, Any], percentile: str) -> float:
+    """
+    Read percentile latency from known run layouts, return us or NaN.
+    """
+    for key in _percentile_aliases(percentile):
+        if key in run:
+            try:
+                return _latency_to_us(run.get(key))
+            except ValueError:
+                return float("nan")
+
+    # Prefer full latency buckets from common containers.
+    for container_key in ["Latency", "Latencies", "Percentiles"]:
+        container = run.get(container_key)
+        if not isinstance(container, dict):
+            continue
+        for key in _percentile_aliases(percentile):
+            if key in container:
+                try:
+                    return _latency_to_us(container.get(key))
+                except ValueError:
+                    return float("nan")
+
+    return float("nan")
 
 
 def _iops_to_kiops(s: Any) -> float:
@@ -238,6 +298,9 @@ def _plot_min_med_max(
     metric_key: str,
     value_parser,
     out_path: str,
+    x_label: str = "QueueDepth (Inflight)",
+    x_min: int | None = None,
+    x_max: int | None = None,
 ) -> None:
     # Optional dependency: matplotlib (headless-safe backend).
     try:
@@ -263,6 +326,18 @@ def _plot_min_med_max(
         xs, mins, meds, maxs = _extract_series(group, metric_key, value_parser)
         if not xs:
             continue
+        if x_min is not None or x_max is not None:
+            clipped = [
+                (x, lo, med, hi)
+                for x, lo, med, hi in zip(xs, mins, meds, maxs)
+                if (x_min is None or x >= x_min) and (x_max is None or x <= x_max)
+            ]
+            if not clipped:
+                continue
+            xs = [it[0] for it in clipped]
+            mins = [it[1] for it in clipped]
+            meds = [it[2] for it in clipped]
+            maxs = [it[3] for it in clipped]
         all_inflights.update(xs)
 
         x_plot = [x + offsets[idx] for x in xs]
@@ -294,7 +369,7 @@ def _plot_min_med_max(
         )
 
     ax.set_title(title)
-    ax.set_xlabel("InFlight")
+    ax.set_xlabel(x_label)
     ax.set_ylabel(ylabel)
     ax.grid(True, which="both", axis="both", linestyle="--", linewidth=0.6, alpha=0.6)
 
@@ -314,7 +389,12 @@ def _plot_min_med_max(
             except Exception:
                 ax.set_xticks(xs_sorted)
 
-    ax.set_xlim(left=0)
+    if x_min is not None or x_max is not None:
+        left = x_min if x_min is not None else 0
+        right = x_max if x_max is not None else None
+        ax.set_xlim(left=left, right=right)
+    else:
+        ax.set_xlim(left=0)
     ax.set_ylim(bottom=0)
 
     if len(groups) > 1:
@@ -358,6 +438,7 @@ def _plot_latency_percentiles(
     groups: List[Dict[str, Any]],
     out_path: str,
     percentiles: List[str],
+    title: str = "Latency percentiles vs QueueDepth (Inflight) (median-IOPS run)",
 ) -> None:
     try:
         import matplotlib  # type: ignore
@@ -396,7 +477,7 @@ def _plot_latency_percentiles(
 
             xs.append(int(x))
             for p in percentiles:
-                ys_by_p[p].append(_latency_to_us(run.get(p)))
+                ys_by_p[p].append(_extract_latency_percentile_us(run, p))
 
         # sort by inflight
         order = sorted(range(len(xs)), key=lambda i: xs[i])
@@ -410,8 +491,8 @@ def _plot_latency_percentiles(
             ax.plot(xs, ys_by_p[p], marker="o", linewidth=1.5, markersize=4, label=f"{name} {p}")
         all_inflights.update(xs)
 
-    ax.set_title("Latency percentiles vs InFlight (median-IOPS run)")
-    ax.set_xlabel("InFlight")
+    ax.set_title(title)
+    ax.set_xlabel("QueueDepth (Inflight)")
     ax.set_ylabel("Latency (us)")
     ax.grid(True, which="both", axis="both", linestyle="--", linewidth=0.6, alpha=0.6)
 
@@ -444,13 +525,20 @@ def main() -> int:
         description="Plot YDB stress tool results (new InFlights format)."
     )
     p.add_argument(
-        "input_json",
+        "paths",
         nargs="+",
-        help="Path(s) to resulting JSON file(s) (array of groups).",
+        help=(
+            "Path(s) to resulting JSON file(s) (array of groups). "
+            "For backward compatibility, the final positional value may be a prefix."
+        ),
     )
     p.add_argument(
-        "prefix",
-        help="Prefix for output files (e.g. /tmp/pdisk_write).",
+        "--prefix",
+        default="",
+        help=(
+            "Prefix for output files (e.g. /tmp/pdisk_write). "
+            "If omitted, a default prefix is derived from the first input file."
+        ),
     )
     p.add_argument(
         "--label",
@@ -460,16 +548,29 @@ def main() -> int:
     )
     args = p.parse_args()
 
-    if len(args.label) > len(args.input_json):
+    input_json = list(args.paths)
+    prefix = str(args.prefix).strip()
+
+    # Backward compatibility: if --prefix is not set and last positional token
+    # does not look like a JSON path, treat it as legacy positional prefix.
+    if not prefix and len(input_json) >= 2 and not str(input_json[-1]).lower().endswith(".json"):
+        prefix = str(input_json.pop()).strip()
+
+    if not prefix:
+        first_base = os.path.splitext(os.path.basename(input_json[0]))[0]
+        prefix = os.path.join(".", first_base)
+        print(f"[info] --prefix not provided; using default prefix: {prefix}")
+
+    if len(args.label) > len(input_json):
         raise SystemExit(
             "--label provided more times than input files "
-            f"({len(args.label)} > {len(args.input_json)})"
+            f"({len(args.label)} > {len(input_json)})"
         )
 
     groups: List[Dict[str, Any]] = []
     test_types: List[str] = []
 
-    for idx, path in enumerate(args.input_json):
+    for idx, path in enumerate(input_json):
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
@@ -497,7 +598,7 @@ def main() -> int:
     multi_count = sum(1 for g in groups if _is_multi_device(g))
     single_count = len(groups) - multi_count
 
-    if len(args.input_json) == 1 and multi_count > 0:
+    if len(input_json) == 1 and multi_count > 0:
         # Single input file with multi-device data: plot each device as a series
         plot_groups: List[Dict[str, Any]] = []
         for g in groups:
@@ -506,7 +607,7 @@ def main() -> int:
             else:
                 plot_groups.append(g)
         groups = plot_groups
-    elif len(args.input_json) > 1:
+    elif len(input_json) > 1:
         if multi_count > 0 and single_count > 0:
             raise SystemExit(
                 "Cannot mix single-device and multi-device result files. "
@@ -516,9 +617,11 @@ def main() -> int:
             # Multiple inputs, all multi-device: plot only SUM/aggregate
             groups = [_filter_to_sum_runs(g) for g in groups]
 
-    out_speed = f"{args.prefix}_speed.png"
-    out_iops = f"{args.prefix}_iops.png"
-    out_latency = f"{args.prefix}_latency.png"
+    out_speed = f"{prefix}_speed.png"
+    out_speed_qd_1_8 = f"{prefix}_speed_qd1_8.png"
+    out_iops = f"{prefix}_iops.png"
+    out_iops_qd_1_8 = f"{prefix}_iops_qd1_8.png"
+    out_latency = f"{prefix}_latency.png"
 
     title_suffix = ""
     if test_types:
@@ -530,30 +633,66 @@ def main() -> int:
 
     _plot_min_med_max(
         groups=groups,
-        title=f"Throughput vs InFlight{title_suffix}",
+        title=f"Throughput vs QueueDepth (Inflight){title_suffix}",
         ylabel="Speed (MB/s)",
         metric_key="Speed",
         value_parser=_bandwidth_to_mbs,
         out_path=out_speed,
     )
+    _plot_min_med_max(
+        groups=groups,
+        title=f"Throughput vs QueueDepth (Inflight){title_suffix} [1..8]",
+        ylabel="Speed (MB/s)",
+        metric_key="Speed",
+        value_parser=_bandwidth_to_mbs,
+        out_path=out_speed_qd_1_8,
+        x_min=1,
+        x_max=8,
+    )
 
     _plot_min_med_max(
         groups=groups,
-        title=f"IOPS vs InFlight{title_suffix}",
+        title=f"IOPS vs QueueDepth (Inflight){title_suffix}",
         ylabel="IOPS (kIOPS)",
         metric_key="IOPS",
         value_parser=_iops_to_kiops,
         out_path=out_iops,
     )
+    _plot_min_med_max(
+        groups=groups,
+        title=f"IOPS vs QueueDepth (Inflight){title_suffix} [1..8]",
+        ylabel="IOPS (kIOPS)",
+        metric_key="IOPS",
+        value_parser=_iops_to_kiops,
+        out_path=out_iops_qd_1_8,
+        x_min=1,
+        x_max=8,
+    )
 
     print(out_speed)
+    print(out_speed_qd_1_8)
     print(out_iops)
-    _plot_latency_percentiles(
-        groups=groups,
-        out_path=out_latency,
-        percentiles=["p50.00", "p90.00", "p95.00", "p99.00"],
-    )
-    print(out_latency)
+    print(out_iops_qd_1_8)
+    if len(groups) >= 3:
+        latency_percentiles = ["p50.00", "p90.00", "p99.00"]
+        for p in latency_percentiles:
+            p_slug = p.lower().replace(".", "")
+            out_p = f"{prefix}_latency_{p_slug}.png"
+            _plot_latency_percentiles(
+                groups=groups,
+                out_path=out_p,
+                percentiles=[p],
+                title=f"Latency {p} vs QueueDepth (Inflight) (median-IOPS run){title_suffix}",
+            )
+            print(out_p)
+    else:
+        _plot_latency_percentiles(
+            groups=groups,
+            out_path=out_latency,
+            percentiles=["p50.00", "p90.00", "p95.00", "p99.00"],
+            title=f"Latency percentiles vs QueueDepth (Inflight) (median-IOPS run){title_suffix}",
+        )
+        print(out_latency)
     return 0
 
 
