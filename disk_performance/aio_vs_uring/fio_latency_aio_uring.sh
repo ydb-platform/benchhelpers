@@ -8,6 +8,7 @@ run_type=normal
 
 block_size=4K
 run_reads=0
+run_count=10
 clocksource=cpu
 format=json
 results_dir="$(date +%Y%m%d_%H%M)_results"
@@ -39,6 +40,7 @@ Options:
   --fill-disk                      run preconditioning fill (default: false)
   --results-dir <path>             directory for fio outputs (default: YYYYMMDD_HHMM_results)
   --reads                          also run read test (default: write-only)
+  --run-count <n>                 number of repeated runs per test point (default: $run_count)
   --iodepth-from <n>               iodepth start (default: $iodepth_from)
   --iodepth-to <n>                 iodepth end (default: $iodepth_to)
   --clocksource <name>             fio clock source (default: $clocksource)
@@ -86,9 +88,10 @@ size_to_bytes() {
 function run_fio {
     local iodepth="$1"
     local rw="$2"
+    local run_index="$3"
     local fio_test_name="${rw}_latency_test"
     local clock_arg="--clocksource=$clocksource"
-    local result_file="$results_dir/${mode_name}_qd${iodepth}_${rw}.$format"
+    local result_file="$results_dir/${mode_name}_qd${iodepth}_${rw}_run${run_index}.$format"
     local iodepth_batch_submit=1
     local iodepth_batch_complete_max=1
     local fio_cmd=(
@@ -115,8 +118,8 @@ function run_fio {
     )
 
     echo "-------------------------------------------------"
-    echo "Running fio test: $mode_name"
-    echo "ioengine=$ioengine mode_fio_args='${mode_fio_args[*]}' clock_arg='$clock_arg' bs=$block_size iodepth=$iodepth runtime=$runtime rw=$rw batch_submit=$iodepth_batch_submit batch_complete_max=$iodepth_batch_complete_max output=$result_file"
+    echo "Running fio test: $mode_name (run $run_index/$run_count)"
+    echo "ioengine=$ioengine mode_fio_args='${mode_fio_args[*]}' clock_arg='$clock_arg' bs=$block_size iodepth=$iodepth runtime=$runtime rw=$rw run_index=$run_index batch_submit=$iodepth_batch_submit batch_complete_max=$iodepth_batch_complete_max output=$result_file"
     echo "fio command:"
     printf "  "
     printf "%q " "${fio_cmd[@]}"
@@ -210,6 +213,10 @@ while [[ "$#" -gt 0 ]]; do
         --reads)
             run_reads=1
             shift
+            ;;
+        --run-count)
+            run_count="$2"
+            shift 2
             ;;
         --iodepth-from)
             iodepth_from="$2"
@@ -307,6 +314,11 @@ if [[ "$iodepth_from" -le 0 || "$iodepth_to" -le 0 || "$iodepth_from" -gt "$iode
     exit 1
 fi
 
+if ! [[ "$run_count" =~ ^[0-9]+$ ]] || [[ "$run_count" -le 0 ]]; then
+    echo "Invalid --run-count: $run_count (expected positive integer)"
+    exit 1
+fi
+
 fill_size_percent=100
 case "$run_type" in
     smoke)
@@ -366,10 +378,12 @@ for (( iodepth=iodepth_from; iodepth<=iodepth_to; iodepth*=2 )); do
         ioengine=libaio
         mode_fio_args=()
         mode_name="aio"
-        run_fio "$iodepth" "write"
-        if [[ "$run_reads" -eq 1 ]]; then
-            run_fio "$iodepth" "read"
-        fi
+        for (( run_idx=1; run_idx<=run_count; run_idx++ )); do
+            run_fio "$iodepth" "write" "$run_idx"
+            if [[ "$run_reads" -eq 1 ]]; then
+                run_fio "$iodepth" "read" "$run_idx"
+            fi
+        done
     fi
 
     if [[ "$run_uring" -eq 1 ]]; then
@@ -379,10 +393,12 @@ for (( iodepth=iodepth_from; iodepth<=iodepth_to; iodepth*=2 )); do
         ioengine=io_uring
         mode_fio_args=()
         mode_name="uring"
-        run_fio "$iodepth" "write"
-        if [[ "$run_reads" -eq 1 ]]; then
-            run_fio "$iodepth" "read"
-        fi
+        for (( run_idx=1; run_idx<=run_count; run_idx++ )); do
+            run_fio "$iodepth" "write" "$run_idx"
+            if [[ "$run_reads" -eq 1 ]]; then
+                run_fio "$iodepth" "read" "$run_idx"
+            fi
+        done
     fi
 
     if [[ "$run_uring_cqpoll" -eq 1 ]]; then
@@ -392,10 +408,12 @@ for (( iodepth=iodepth_from; iodepth<=iodepth_to; iodepth*=2 )); do
         ioengine=io_uring
         mode_fio_args=(--hipri=1)
         mode_name="uring-cqpoll"
-        run_fio "$iodepth" "write"
-        if [[ "$run_reads" -eq 1 ]]; then
-            run_fio "$iodepth" "read"
-        fi
+        for (( run_idx=1; run_idx<=run_count; run_idx++ )); do
+            run_fio "$iodepth" "write" "$run_idx"
+            if [[ "$run_reads" -eq 1 ]]; then
+                run_fio "$iodepth" "read" "$run_idx"
+            fi
+        done
     fi
 
     if [[ "$run_uring_sqpoll" -eq 1 ]]; then
@@ -405,10 +423,12 @@ for (( iodepth=iodepth_from; iodepth<=iodepth_to; iodepth*=2 )); do
         ioengine=io_uring
         mode_fio_args=(--sqthread_poll=1)
         mode_name="uring-sqpoll"
-        run_fio "$iodepth" "write"
-        if [[ "$run_reads" -eq 1 ]]; then
-            run_fio "$iodepth" "read"
-        fi
+        for (( run_idx=1; run_idx<=run_count; run_idx++ )); do
+            run_fio "$iodepth" "write" "$run_idx"
+            if [[ "$run_reads" -eq 1 ]]; then
+                run_fio "$iodepth" "read" "$run_idx"
+            fi
+        done
     fi
 
     if [[ "$run_uring_sqpoll_cqpoll" -eq 1 ]]; then
@@ -418,10 +438,12 @@ for (( iodepth=iodepth_from; iodepth<=iodepth_to; iodepth*=2 )); do
         ioengine=io_uring
         mode_fio_args=(--sqthread_poll=1 --hipri=1)
         mode_name="uring-sqpoll-cqpoll"
-        run_fio "$iodepth" "write"
-        if [[ "$run_reads" -eq 1 ]]; then
-            run_fio "$iodepth" "read"
-        fi
+        for (( run_idx=1; run_idx<=run_count; run_idx++ )); do
+            run_fio "$iodepth" "write" "$run_idx"
+            if [[ "$run_reads" -eq 1 ]]; then
+                run_fio "$iodepth" "read" "$run_idx"
+            fi
+        done
     fi
 
     if [[ "$iodepth" -eq 0 ]]; then

@@ -5,8 +5,9 @@ import csv
 import json
 import os
 import re
+import statistics
 import sys
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 
 CLAT_PERCENTILE_KEYS = {
@@ -26,7 +27,8 @@ LAT_PERCENTILE_KEYS = {
 }
 
 RESULT_FILE_RE = re.compile(
-    r"^(?P<engine>.+)_qd(?P<queue_depth>\d+)_(?P<workload>read|write)\.json$"
+    r"^(?P<engine>.+)_qd(?P<queue_depth>\d+)_(?P<workload>read|write)"
+    r"(?:_run(?P<run_index>\d+))?\.json$"
 )
 
 
@@ -57,7 +59,9 @@ def human_bytes_per_second(value: float) -> str:
     return f"{value:.2f} B/s"
 
 
-def parse_one_result(path: str, engine: str, queue_depth: int, workload: str) -> Dict[str, object]:
+def parse_one_result(
+    path: str, engine: str, queue_depth: int, workload: str, run_index: int
+) -> Dict[str, object]:
     payload = load_fio_json(path)
 
     jobs = payload.get("jobs", [])
@@ -94,6 +98,7 @@ def parse_one_result(path: str, engine: str, queue_depth: int, workload: str) ->
         "Engine": engine,
         "QueueDepth": queue_depth,
         "Workload": workload,
+        "Run": run_index,
         "Speed": human_bytes_per_second(total_bw_bytes),
         "Speed_Bps": int(total_bw_bytes),
         "IOPS": int(total_iops),
@@ -114,11 +119,60 @@ def collect_rows(results_dir: str) -> List[Dict[str, object]]:
         engine = match.group("engine")
         queue_depth = int(match.group("queue_depth"))
         workload = match.group("workload")
+        run_index = int(match.group("run_index") or "1")
         path = os.path.join(results_dir, name)
-        rows.append(parse_one_result(path, engine, queue_depth, workload))
+        rows.append(parse_one_result(path, engine, queue_depth, workload, run_index))
 
-    rows.sort(key=lambda r: (str(r["Engine"]), int(r["QueueDepth"]), str(r["Workload"])))
+    rows.sort(
+        key=lambda r: (
+            str(r["Engine"]),
+            int(r["QueueDepth"]),
+            str(r["Workload"]),
+            int(r["Run"]),
+        )
+    )
     return rows
+
+
+def group_rows_by_point(
+    rows: List[Dict[str, object]],
+) -> Dict[Tuple[str, int, str], List[Dict[str, object]]]:
+    grouped: Dict[Tuple[str, int, str], List[Dict[str, object]]] = {}
+    for row in rows:
+        key = (str(row["Engine"]), int(row["QueueDepth"]), str(row["Workload"]))
+        grouped.setdefault(key, []).append(row)
+    return grouped
+
+
+def pick_median_run_rows(rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    grouped = group_rows_by_point(rows)
+    median_rows: List[Dict[str, object]] = []
+
+    for key, point_rows in grouped.items():
+        speed_values = [float(r["Speed_Bps"]) for r in point_rows]
+        median_speed = statistics.median(speed_values)
+
+        # Choose the actual run closest to median speed.
+        selected_row = min(
+            point_rows,
+            key=lambda r: (
+                abs(float(r["Speed_Bps"]) - median_speed),
+                int(r["Run"]),
+            ),
+        )
+
+        selected_copy = dict(selected_row)
+        selected_copy["RunsInGroup"] = len(point_rows)
+        median_rows.append(selected_copy)
+
+    median_rows.sort(
+        key=lambda r: (
+            str(r["Engine"]),
+            int(r["QueueDepth"]),
+            str(r["Workload"]),
+        )
+    )
+    return median_rows
 
 
 def print_table(rows: List[Dict[str, object]], fieldnames: List[str]) -> None:
@@ -146,17 +200,35 @@ def print_csv(rows: List[Dict[str, object]], fieldnames: List[str]) -> None:
         writer.writerow({k: row[k] for k in fieldnames})
 
 
-def build_series(rows: List[Dict[str, object]]) -> Dict[str, List[Dict[str, object]]]:
-    grouped: Dict[str, List[Dict[str, object]]] = {}
-    for row in rows:
-        workload = str(row["Workload"])
-        engine = str(row["Engine"])
-        key = engine if workload == "write" else f"{engine}-{workload}"
-        grouped.setdefault(key, []).append(row)
+def build_metric_series(
+    rows: List[Dict[str, object]],
+    field_name: str,
+    max_queue_depth: Optional[int] = None,
+) -> Dict[str, List[Dict[str, float]]]:
+    grouped_by_point = group_rows_by_point(rows)
+    grouped_series: Dict[str, List[Dict[str, float]]] = {}
 
-    for key in grouped:
-        grouped[key] = sorted(grouped[key], key=lambda r: int(r["QueueDepth"]))
-    return grouped
+    for (engine, queue_depth, workload), point_rows in grouped_by_point.items():
+        if max_queue_depth is not None and queue_depth > max_queue_depth:
+            continue
+
+        values = [float(r.get(field_name, 0.0)) for r in point_rows]
+        if not values:
+            continue
+
+        series_key = engine if workload == "write" else f"{engine}-{workload}"
+        grouped_series.setdefault(series_key, []).append(
+            {
+                "QueueDepth": float(queue_depth),
+                "Median": float(statistics.median(values)),
+                "Min": float(min(values)),
+                "Max": float(max(values)),
+            }
+        )
+
+    for key in grouped_series:
+        grouped_series[key] = sorted(grouped_series[key], key=lambda r: r["QueueDepth"])
+    return grouped_series
 
 
 def plot_speed_by_inflight(rows: List[Dict[str, object]], output_dir: str, prefix: str) -> Optional[str]:
@@ -167,16 +239,27 @@ def plot_speed_by_inflight(rows: List[Dict[str, object]], output_dir: str, prefi
             "plotting requires matplotlib (pip install matplotlib)"
         ) from exc
 
-    grouped = build_series(rows)
+    grouped = build_metric_series(rows, "Speed_Bps")
 
     fig, ax = plt.subplots(figsize=(10, 6))
     has_points = False
     for series_name, points in sorted(grouped.items()):
         x_vals = [int(r["QueueDepth"]) for r in points]
-        y_vals = [float(r["Speed_Bps"]) / (1024.0 * 1024.0) for r in points]
+        y_vals = [float(r["Median"]) / (1024.0 * 1024.0) for r in points]
+        y_min = [float(r["Min"]) / (1024.0 * 1024.0) for r in points]
+        y_max = [float(r["Max"]) / (1024.0 * 1024.0) for r in points]
+        yerr_lower = [y - y_lo for y, y_lo in zip(y_vals, y_min)]
+        yerr_upper = [y_hi - y for y, y_hi in zip(y_vals, y_max)]
         if x_vals:
             has_points = True
-            ax.plot(x_vals, y_vals, marker="o", label=series_name)
+            ax.errorbar(
+                x_vals,
+                y_vals,
+                yerr=[yerr_lower, yerr_upper],
+                fmt="-o",
+                capsize=4,
+                label=series_name,
+            )
 
     if not has_points:
         plt.close(fig)
@@ -184,7 +267,7 @@ def plot_speed_by_inflight(rows: List[Dict[str, object]], output_dir: str, prefi
 
     ax.set_xlabel("Inflight (QueueDepth)")
     ax.set_ylabel("Speed (MiB/s)")
-    ax.set_title("Speed vs Inflight")
+    ax.set_title("Speed vs Inflight (median with min/max whiskers)")
     ax.grid(True, linestyle="--", alpha=0.4)
     ax.legend()
     fig.tight_layout()
@@ -208,7 +291,7 @@ def plot_latency_by_inflight(
             "plotting requires matplotlib (pip install matplotlib)"
         ) from exc
 
-    grouped = build_series(rows)
+    has_lat = any(row.get("LatP50_us", 0) for row in rows)
     has_lat = any(row.get("LatP50_us", 0) for row in rows)
     percentile_keys = [
         ("LatP50_us" if has_lat else "ClatP50_us", "p50"),
@@ -220,22 +303,32 @@ def plot_latency_by_inflight(
     has_points = False
 
     for ax, (field_name, title_suffix) in zip(axes, percentile_keys):
+        grouped = build_metric_series(rows, field_name, max_queue_depth=max_queue_depth)
         for series_name, points in sorted(grouped.items()):
-            filtered_points = points
-            if max_queue_depth is not None:
-                filtered_points = [r for r in points if int(r["QueueDepth"]) <= max_queue_depth]
-
-            x_vals = [int(r["QueueDepth"]) for r in filtered_points]
-            y_vals = [float(r[field_name]) for r in filtered_points]
+            x_vals = [int(r["QueueDepth"]) for r in points]
+            y_vals = [float(r["Median"]) for r in points]
+            y_min = [float(r["Min"]) for r in points]
+            y_max = [float(r["Max"]) for r in points]
+            yerr_lower = [y - y_lo for y, y_lo in zip(y_vals, y_min)]
+            yerr_upper = [y_hi - y for y, y_hi in zip(y_vals, y_max)]
             if x_vals:
                 has_points = True
-                ax.plot(x_vals, y_vals, marker="o", label=series_name)
+                ax.errorbar(
+                    x_vals,
+                    y_vals,
+                    yerr=[yerr_lower, yerr_upper],
+                    fmt="-o",
+                    capsize=4,
+                    label=series_name,
+                )
 
         ax.set_ylabel("Latency (us)")
         if max_queue_depth is None:
-            ax.set_title(f"{title_suffix} vs Inflight")
+            ax.set_title(f"{title_suffix} vs Inflight (median with min/max whiskers)")
         else:
-            ax.set_title(f"{title_suffix} vs Inflight (<= {max_queue_depth})")
+            ax.set_title(
+                f"{title_suffix} vs Inflight (<= {max_queue_depth}, median with min/max whiskers)"
+            )
         ax.grid(True, linestyle="--", alpha=0.4)
 
     if not has_points:
@@ -285,6 +378,7 @@ def plot_latency_percentile_bars(
     target_qds = [1, 4, 16]
     workloads = sorted({str(r["Workload"]) for r in rows})
     generated_paths: List[str] = []
+    grouped_by_point = group_rows_by_point(rows)
 
     for workload in workloads:
         workload_rows = [r for r in rows if str(r["Workload"]) == workload]
@@ -307,27 +401,52 @@ def plot_latency_percentile_bars(
             axes = [axes]
 
         x_base = list(range(len(percentile_fields)))
-        bar_width = 0.8 / len(engines)
+        marker_span = 0.8
+        marker_step = marker_span / max(len(engines), 1)
         has_points = False
 
         for ax, qd in zip(axes, qds_present):
-            rows_by_engine = {
-                str(r["Engine"]): r for r in workload_rows if int(r["QueueDepth"]) == qd
-            }
             for engine_idx, engine in enumerate(engines):
-                row = rows_by_engine.get(engine)
-                if row is None:
-                    continue
-                has_points = True
                 x_vals = [
-                    x - 0.4 + (bar_width / 2.0) + engine_idx * bar_width
+                    x - 0.4 + (marker_step / 2.0) + engine_idx * marker_step
                     for x in x_base
                 ]
-                y_vals = [float(row[field]) for field, _ in percentile_fields]
-                ax.bar(x_vals, y_vals, width=bar_width, label=engine)
+                y_vals: List[float] = []
+                yerr_lower: List[float] = []
+                yerr_upper: List[float] = []
+                has_engine_points = False
+
+                for field, _ in percentile_fields:
+                    point_rows = grouped_by_point.get((engine, qd, workload), [])
+                    values = [float(r.get(field, 0.0)) for r in point_rows]
+                    if values:
+                        median_value = float(statistics.median(values))
+                        min_value = float(min(values))
+                        max_value = float(max(values))
+                        has_engine_points = True
+                    else:
+                        median_value = 0.0
+                        min_value = 0.0
+                        max_value = 0.0
+                    y_vals.append(median_value)
+                    yerr_lower.append(median_value - min_value)
+                    yerr_upper.append(max_value - median_value)
+
+                if not has_engine_points:
+                    continue
+
+                has_points = True
+                ax.errorbar(
+                    x_vals,
+                    y_vals,
+                    yerr=[yerr_lower, yerr_upper],
+                    fmt="o",
+                    capsize=4,
+                    label=engine,
+                )
 
             ax.set_ylabel("Latency (us)")
-            ax.set_title(f"{workload}, iodepth={qd}, usec")
+            ax.set_title(f"{workload}, iodepth={qd}, usec (median with min/max whiskers)")
             ax.set_xlim(-0.5, len(percentile_fields) - 0.5)
             ax.grid(axis="y", linestyle="--", alpha=0.4)
 
@@ -374,16 +493,20 @@ def main() -> int:
         return 1
 
     try:
-        rows = collect_rows(args.results_dir)
+        all_rows = collect_rows(args.results_dir)
     except (json.JSONDecodeError, OSError, ValueError) as exc:
         print(f"failed to parse results: {exc}", file=sys.stderr)
         return 1
+
+    rows = pick_median_run_rows(all_rows)
 
     has_lat = any(row.get("LatP50_us", 0) for row in rows)
     fieldnames = [
         "Engine",
         "QueueDepth",
         "Workload",
+        "Run",
+        "RunsInGroup",
         "Speed",
         "IOPS",
         "ClatP50_us",
@@ -408,16 +531,16 @@ def main() -> int:
 
     if args.plot:
         try:
-            speed_plot = plot_speed_by_inflight(rows, args.results_dir, args.prefix)
-            latency_plot = plot_latency_by_inflight(rows, args.results_dir, args.prefix)
+            speed_plot = plot_speed_by_inflight(all_rows, args.results_dir, args.prefix)
+            latency_plot = plot_latency_by_inflight(all_rows, args.results_dir, args.prefix)
             latency_plot_upto_32 = plot_latency_by_inflight(
-                rows, args.results_dir, args.prefix, max_queue_depth=32
+                all_rows, args.results_dir, args.prefix, max_queue_depth=32
             )
             latency_plot_upto_16 = plot_latency_by_inflight(
-                rows, args.results_dir, args.prefix, max_queue_depth=16
+                all_rows, args.results_dir, args.prefix, max_queue_depth=16
             )
             latency_bar_plots = plot_latency_percentile_bars(
-                rows, args.results_dir, args.prefix
+                all_rows, args.results_dir, args.prefix
             )
         except RuntimeError as exc:
             print(str(exc), file=sys.stderr)
