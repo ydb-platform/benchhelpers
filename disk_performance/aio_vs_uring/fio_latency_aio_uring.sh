@@ -145,6 +145,34 @@ function run_fio {
     fi
 }
 
+precondition_target() {
+    local mode_label="$1"
+    if [[ "$fill_disk" -eq 1 ]]; then
+        local script_dir fill_script
+        script_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
+        fill_script="$script_dir/../fill_disk.sh"
+        echo "[$mode_label] Filling disk (preconditioning) using $fill_script..."
+        bash "$fill_script" \
+            --filename "$filename" \
+            --size-percent "$fill_size_percent"
+        if [[ $? -ne 0 ]]; then
+            echo "[$mode_label] fill_disk failed"
+            exit 1
+        fi
+    else
+        if [[ -b "$filename" ]]; then
+            echo "[$mode_label] Skipping fill; running blkdiscard on $filename..."
+            sudo blkdiscard "$filename"
+            if [[ $? -ne 0 ]]; then
+                echo "[$mode_label] blkdiscard failed"
+                exit 1
+            fi
+        else
+            echo "[$mode_label] Skipping fill; blkdiscard requires a block device (got: $filename)"
+        fi
+    fi
+}
+
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
         --filename)
@@ -322,30 +350,6 @@ if [[ ! -d "$results_dir" ]]; then
     fi
 fi
 
-if [[ "$fill_disk" -eq 1 ]]; then
-    script_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-    fill_script="$script_dir/../fill_disk.sh"
-    echo "Filling disk (preconditioning) using $fill_script..."
-    bash "$fill_script" \
-        --filename "$filename" \
-        --size-percent "$fill_size_percent"
-    if [[ $? -ne 0 ]]; then
-        echo "fill_disk failed"
-        exit 1
-    fi
-else
-    if [[ -b "$filename" ]]; then
-        echo "Skipping fill; running blkdiscard on $filename..."
-        sudo blkdiscard "$filename"
-        if [[ $? -ne 0 ]]; then
-            echo "blkdiscard failed"
-            exit 1
-        fi
-    else
-        echo "Skipping fill; blkdiscard requires a block device (got: $filename)"
-    fi
-fi
-
 if [[ "$run_aio" -eq 0 && "$run_uring" -eq 0 && "$run_uring_cqpoll" -eq 0 && "$run_uring_sqpoll" -eq 0 && "$run_uring_sqpoll_cqpoll" -eq 0 ]]; then
     run_aio=1
     run_uring=1
@@ -356,6 +360,9 @@ fi
 
 for (( iodepth=iodepth_from; iodepth<=iodepth_to; iodepth*=2 )); do
     if [[ "$run_aio" -eq 1 ]]; then
+        if [[ "$iodepth" -eq "$iodepth_from" ]]; then
+            precondition_target "aio"
+        fi
         ioengine=libaio
         mode_fio_args=()
         mode_name="aio"
@@ -366,6 +373,9 @@ for (( iodepth=iodepth_from; iodepth<=iodepth_to; iodepth*=2 )); do
     fi
 
     if [[ "$run_uring" -eq 1 ]]; then
+        if [[ "$iodepth" -eq "$iodepth_from" ]]; then
+            precondition_target "uring"
+        fi
         ioengine=io_uring
         mode_fio_args=()
         mode_name="uring"
@@ -376,6 +386,9 @@ for (( iodepth=iodepth_from; iodepth<=iodepth_to; iodepth*=2 )); do
     fi
 
     if [[ "$run_uring_cqpoll" -eq 1 ]]; then
+        if [[ "$iodepth" -eq "$iodepth_from" ]]; then
+            precondition_target "uring-cqpoll"
+        fi
         ioengine=io_uring
         mode_fio_args=(--hipri=1)
         mode_name="uring-cqpoll"
@@ -386,6 +399,9 @@ for (( iodepth=iodepth_from; iodepth<=iodepth_to; iodepth*=2 )); do
     fi
 
     if [[ "$run_uring_sqpoll" -eq 1 ]]; then
+        if [[ "$iodepth" -eq "$iodepth_from" ]]; then
+            precondition_target "uring-sqpoll"
+        fi
         ioengine=io_uring
         mode_fio_args=(--sqthread_poll=1)
         mode_name="uring-sqpoll"
@@ -396,6 +412,9 @@ for (( iodepth=iodepth_from; iodepth<=iodepth_to; iodepth*=2 )); do
     fi
 
     if [[ "$run_uring_sqpoll_cqpoll" -eq 1 ]]; then
+        if [[ "$iodepth" -eq "$iodepth_from" ]]; then
+            precondition_target "uring-sqpoll-cqpoll"
+        fi
         ioengine=io_uring
         mode_fio_args=(--sqthread_poll=1 --hipri=1)
         mode_name="uring-sqpoll-cqpoll"
