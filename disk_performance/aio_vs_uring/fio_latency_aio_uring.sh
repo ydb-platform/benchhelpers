@@ -157,7 +157,10 @@ function run_fio {
     echo
     echo "-------------------------------------------------"
 
-    "${fio_cmd[@]}"
+    if ! "${fio_cmd[@]}"; then
+        echo "fio command failed for mode=$mode_name iodepth=$iodepth rw=$rw run_index=$run_index"
+        exit 1
+    fi
 
     # Some fio modes may prepend warning lines before JSON payload.
     # Keep only the JSON object so downstream parsers see clean data.

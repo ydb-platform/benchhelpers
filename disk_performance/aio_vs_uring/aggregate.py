@@ -32,6 +32,10 @@ RESULT_FILE_RE = re.compile(
 )
 
 
+class FioRunFailedError(ValueError):
+    """Raised when fio reports non-zero job errors in JSON output."""
+
+
 def load_fio_json(path: str) -> Dict[str, object]:
     with open(path, "r", encoding="utf-8") as f:
         raw = f.read()
@@ -67,6 +71,16 @@ def parse_one_result(
     jobs = payload.get("jobs", [])
     if not jobs:
         raise ValueError(f"{path}: no jobs in fio output")
+
+    job_errors = []
+    for job in jobs:
+        error_code = int(job.get("error", 0))
+        if error_code != 0:
+            job_errors.append(error_code)
+    if job_errors:
+        raise FioRunFailedError(
+            f"{path}: fio reported non-zero job error(s): {job_errors}"
+        )
 
     total_bw_bytes = 0.0
     total_iops = 0.0
@@ -109,8 +123,9 @@ def parse_one_result(
     return row
 
 
-def collect_rows(results_dir: str) -> List[Dict[str, object]]:
+def collect_rows(results_dir: str) -> Tuple[List[Dict[str, object]], List[str]]:
     rows = []
+    skipped_errors: List[str] = []
     for name in sorted(os.listdir(results_dir)):
         match = RESULT_FILE_RE.match(name)
         if not match:
@@ -121,7 +136,10 @@ def collect_rows(results_dir: str) -> List[Dict[str, object]]:
         workload = match.group("workload")
         run_index = int(match.group("run_index") or "1")
         path = os.path.join(results_dir, name)
-        rows.append(parse_one_result(path, engine, queue_depth, workload, run_index))
+        try:
+            rows.append(parse_one_result(path, engine, queue_depth, workload, run_index))
+        except FioRunFailedError as exc:
+            skipped_errors.append(str(exc))
 
     rows.sort(
         key=lambda r: (
@@ -131,7 +149,7 @@ def collect_rows(results_dir: str) -> List[Dict[str, object]]:
             int(r["Run"]),
         )
     )
-    return rows
+    return rows, skipped_errors
 
 
 def group_rows_by_point(
@@ -493,9 +511,28 @@ def main() -> int:
         return 1
 
     try:
-        all_rows = collect_rows(args.results_dir)
+        all_rows, skipped_errors = collect_rows(args.results_dir)
     except (json.JSONDecodeError, OSError, ValueError) as exc:
         print(f"failed to parse results: {exc}", file=sys.stderr)
+        return 1
+
+    if skipped_errors:
+        print(
+            f"warning: skipped {len(skipped_errors)} failed fio run file(s)",
+            file=sys.stderr,
+        )
+        max_warning_details = 20
+        for msg in skipped_errors[:max_warning_details]:
+            print(f"warning: {msg}", file=sys.stderr)
+        if len(skipped_errors) > max_warning_details:
+            remaining = len(skipped_errors) - max_warning_details
+            print(
+                f"warning: ... plus {remaining} more failed fio run file(s)",
+                file=sys.stderr,
+            )
+
+    if not all_rows:
+        print("no successful fio JSON result files found", file=sys.stderr)
         return 1
 
     rows = pick_median_run_rows(all_rows)
