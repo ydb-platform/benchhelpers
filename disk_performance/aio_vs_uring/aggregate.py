@@ -180,6 +180,7 @@ def pick_median_run_rows(rows: List[Dict[str, object]]) -> List[Dict[str, object
         )
 
         selected_copy = dict(selected_row)
+        selected_copy["MedianRun"] = int(selected_copy["Run"])
         selected_copy["RunsInGroup"] = len(point_rows)
         median_rows.append(selected_copy)
 
@@ -542,7 +543,7 @@ def main() -> int:
         "Engine",
         "QueueDepth",
         "Workload",
-        "Run",
+        "MedianRun",
         "RunsInGroup",
         "Speed",
         "IOPS",
