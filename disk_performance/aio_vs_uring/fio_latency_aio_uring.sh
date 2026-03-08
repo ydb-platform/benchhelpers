@@ -4,10 +4,14 @@ filesize=2500G
 
 ramp_time=10s
 runtime=1m
+
+long_cooldown_interval_seconds=3600
+short_cooldown=10s
+long_cooldown=5m
+
 run_type=normal
 
 block_size=4K
-run_reads=0
 run_count=10
 clocksource=cpu
 format=json
@@ -36,10 +40,11 @@ Options:
   --block-size <size>              fio block size (default: $block_size)
   --ramp-time <time>               fio ramp time (default: $ramp_time)
   --runtime <time>                 fio runtime (default: $runtime)
+  --short-cooldown <time>          cooldown after each run (default: $short_cooldown)
+  --long-cooldown <time>           cooldown each elapsed hour (default: $long_cooldown)
   --run-type <smoke|normal|long>   run profile (default: $run_type)
   --fill-disk                      run preconditioning fill (default: false)
   --results-dir <path>             directory for fio outputs (default: YYYYMMDD_HHMM_results)
-  --reads                          also run read test (default: write-only)
   --run-count <n>                 number of repeated runs per test point (default: $run_count)
   --iodepth-from <n>               iodepth start (default: $iodepth_from)
   --iodepth-to <n>                 iodepth end (default: $iodepth_to)
@@ -85,6 +90,29 @@ size_to_bytes() {
     return 1
 }
 
+duration_to_seconds() {
+    local duration="$1"
+    local value unit multiplier
+
+    if [[ ! "$duration" =~ ^([0-9]+)([smhd])$ ]]; then
+        return 1
+    fi
+
+    value="${BASH_REMATCH[1]}"
+    unit="${BASH_REMATCH[2]}"
+    case "$unit" in
+        s) multiplier=1 ;;
+        m) multiplier=60 ;;
+        h) multiplier=3600 ;;
+        d) multiplier=86400 ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    echo $((value * multiplier))
+}
+
 function run_fio {
     local iodepth="$1"
     local rw="$2"
@@ -94,6 +122,9 @@ function run_fio {
     local result_file="$results_dir/${mode_name}_qd${iodepth}_${rw}_run${run_index}.$format"
     local iodepth_batch_submit=1
     local iodepth_batch_complete_max=1
+
+    precondition_target "$mode_name"
+
     local fio_cmd=(
         sudo fio
         --name="$fio_test_name"
@@ -108,7 +139,7 @@ function run_fio {
 
     fio_cmd+=(
         "$clock_arg"
-        --direct=1 --verify=0 --randrepeat=0
+        --direct=1 --verify=0 --randrepeat=0 --randseed=17
         --bs="$block_size" --iodepth="$iodepth" --rw="rand$rw" --iodepth_batch_submit="$iodepth_batch_submit"
         --iodepth_batch_complete_max="$iodepth_batch_complete_max"
         --lat_percentiles=1
@@ -176,6 +207,53 @@ precondition_target() {
     fi
 }
 
+set_mode_context() {
+    local mode_key="$1"
+    case "$mode_key" in
+        aio)
+            ioengine=libaio
+            mode_fio_args=()
+            mode_name="aio"
+            ;;
+        uring)
+            ioengine=io_uring
+            mode_fio_args=()
+            mode_name="uring"
+            ;;
+        uring-cqpoll)
+            ioengine=io_uring
+            mode_fio_args=(--hipri=1)
+            mode_name="uring-cqpoll"
+            ;;
+        uring-sqpoll)
+            ioengine=io_uring
+            mode_fio_args=(--sqthread_poll=1)
+            mode_name="uring-sqpoll"
+            ;;
+        uring-sqpoll-cqpoll)
+            ioengine=io_uring
+            mode_fio_args=(--sqthread_poll=1 --hipri=1)
+            mode_name="uring-sqpoll-cqpoll"
+            ;;
+        *)
+            echo "Unknown mode key: $mode_key"
+            exit 1
+            ;;
+    esac
+}
+
+shuffle_run_plan() {
+    local seed="$1"
+    local i j tmp
+    RANDOM="$seed"
+    for (( i=${#run_plan[@]}-1; i>0; i-- )); do
+        j=$((RANDOM % (i + 1)))
+        tmp="${run_plan[i]}"
+        run_plan[i]="${run_plan[j]}"
+        run_plan[j]="$tmp"
+    done
+}
+
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
         --filename)
@@ -198,6 +276,14 @@ while [[ "$#" -gt 0 ]]; do
             runtime="$2"
             shift 2
             ;;
+        --short-cooldown)
+            short_cooldown="$2"
+            shift 2
+            ;;
+        --long-cooldown)
+            long_cooldown="$2"
+            shift 2
+            ;;
         --run-type)
             run_type="$2"
             shift 2
@@ -209,10 +295,6 @@ while [[ "$#" -gt 0 ]]; do
         --results-dir)
             results_dir="$2"
             shift 2
-            ;;
-        --reads)
-            run_reads=1
-            shift
             ;;
         --run-count)
             run_count="$2"
@@ -324,6 +406,7 @@ case "$run_type" in
     smoke)
         ramp_time=1s
         runtime=2s
+        short_cooldown=1s
         fill_size_percent=1
         ;;
     normal)
@@ -349,6 +432,28 @@ if ! [[ "$runtime" =~ ^[0-9]+[smhd]$ ]]; then
     exit 1
 fi
 
+if ! [[ "$short_cooldown" =~ ^[0-9]+[smhd]$ ]]; then
+    echo "invalid --short-cooldown: $short_cooldown (expected like 10s, 1m)"
+    exit 1
+fi
+
+if ! [[ "$long_cooldown" =~ ^[0-9]+[smhd]$ ]]; then
+    echo "invalid --long-cooldown: $long_cooldown (expected like 5m, 1h)"
+    exit 1
+fi
+
+short_cooldown_seconds="$(duration_to_seconds "$short_cooldown")"
+if [[ $? -ne 0 || -z "$short_cooldown_seconds" ]]; then
+    echo "failed to parse --short-cooldown: $short_cooldown"
+    exit 1
+fi
+
+long_cooldown_seconds="$(duration_to_seconds "$long_cooldown")"
+if [[ $? -ne 0 || -z "$long_cooldown_seconds" ]]; then
+    echo "failed to parse --long-cooldown: $long_cooldown"
+    exit 1
+fi
+
 if [[ -z "$clocksource" ]]; then
     echo "Invalid clocksource: empty value"
     exit 1
@@ -370,85 +475,54 @@ if [[ "$run_aio" -eq 0 && "$run_uring" -eq 0 && "$run_uring_cqpoll" -eq 0 && "$r
     run_uring_sqpoll_cqpoll=1
 fi
 
+selected_modes=()
+if [[ "$run_aio" -eq 1 ]]; then
+    selected_modes+=("aio")
+fi
+if [[ "$run_uring" -eq 1 ]]; then
+    selected_modes+=("uring")
+fi
+if [[ "$run_uring_cqpoll" -eq 1 ]]; then
+    selected_modes+=("uring-cqpoll")
+fi
+if [[ "$run_uring_sqpoll" -eq 1 ]]; then
+    selected_modes+=("uring-sqpoll")
+fi
+if [[ "$run_uring_sqpoll_cqpoll" -eq 1 ]]; then
+    selected_modes+=("uring-sqpoll-cqpoll")
+fi
+
+run_plan=()
 for (( iodepth=iodepth_from; iodepth<=iodepth_to; iodepth*=2 )); do
-    if [[ "$run_aio" -eq 1 ]]; then
-        if [[ "$iodepth" -eq "$iodepth_from" ]]; then
-            precondition_target "aio"
-        fi
-        ioengine=libaio
-        mode_fio_args=()
-        mode_name="aio"
+    for mode_key in "${selected_modes[@]}"; do
         for (( run_idx=1; run_idx<=run_count; run_idx++ )); do
-            run_fio "$iodepth" "write" "$run_idx"
-            if [[ "$run_reads" -eq 1 ]]; then
-                run_fio "$iodepth" "read" "$run_idx"
-            fi
+            run_plan+=("${mode_key}|${iodepth}|write|${run_idx}")
         done
+    done
+done
+
+shuffle_run_plan 11
+
+next_long_cooldown_epoch=$(( $(date +%s) + long_cooldown_interval_seconds ))
+
+for run_entry in "${run_plan[@]}"; do
+    IFS='|' read -r mode_key iodepth rw run_idx <<< "$run_entry"
+    set_mode_context "$mode_key"
+    run_fio "$iodepth" "$rw" "$run_idx"
+
+    if (( short_cooldown_seconds > 0 )); then
+        echo "Short cooldown: sleeping for $short_cooldown"
+        sleep "$short_cooldown"
     fi
 
-    if [[ "$run_uring" -eq 1 ]]; then
-        if [[ "$iodepth" -eq "$iodepth_from" ]]; then
-            precondition_target "uring"
+    now_epoch="$(date +%s)"
+    while (( now_epoch >= next_long_cooldown_epoch )); do
+        if (( long_cooldown_seconds > 0 )); then
+            echo "Long cooldown: sleeping for $long_cooldown"
+            sleep "$long_cooldown"
         fi
-        ioengine=io_uring
-        mode_fio_args=()
-        mode_name="uring"
-        for (( run_idx=1; run_idx<=run_count; run_idx++ )); do
-            run_fio "$iodepth" "write" "$run_idx"
-            if [[ "$run_reads" -eq 1 ]]; then
-                run_fio "$iodepth" "read" "$run_idx"
-            fi
-        done
-    fi
-
-    if [[ "$run_uring_cqpoll" -eq 1 ]]; then
-        if [[ "$iodepth" -eq "$iodepth_from" ]]; then
-            precondition_target "uring-cqpoll"
-        fi
-        ioengine=io_uring
-        mode_fio_args=(--hipri=1)
-        mode_name="uring-cqpoll"
-        for (( run_idx=1; run_idx<=run_count; run_idx++ )); do
-            run_fio "$iodepth" "write" "$run_idx"
-            if [[ "$run_reads" -eq 1 ]]; then
-                run_fio "$iodepth" "read" "$run_idx"
-            fi
-        done
-    fi
-
-    if [[ "$run_uring_sqpoll" -eq 1 ]]; then
-        if [[ "$iodepth" -eq "$iodepth_from" ]]; then
-            precondition_target "uring-sqpoll"
-        fi
-        ioengine=io_uring
-        mode_fio_args=(--sqthread_poll=1)
-        mode_name="uring-sqpoll"
-        for (( run_idx=1; run_idx<=run_count; run_idx++ )); do
-            run_fio "$iodepth" "write" "$run_idx"
-            if [[ "$run_reads" -eq 1 ]]; then
-                run_fio "$iodepth" "read" "$run_idx"
-            fi
-        done
-    fi
-
-    if [[ "$run_uring_sqpoll_cqpoll" -eq 1 ]]; then
-        if [[ "$iodepth" -eq "$iodepth_from" ]]; then
-            precondition_target "uring-sqpoll-cqpoll"
-        fi
-        ioengine=io_uring
-        mode_fio_args=(--sqthread_poll=1 --hipri=1)
-        mode_name="uring-sqpoll-cqpoll"
-        for (( run_idx=1; run_idx<=run_count; run_idx++ )); do
-            run_fio "$iodepth" "write" "$run_idx"
-            if [[ "$run_reads" -eq 1 ]]; then
-                run_fio "$iodepth" "read" "$run_idx"
-            fi
-        done
-    fi
-
-    if [[ "$iodepth" -eq 0 ]]; then
-        break
-    fi
+        next_long_cooldown_epoch=$((next_long_cooldown_epoch + long_cooldown_interval_seconds))
+    done
 done
 
 if [[ "$format" == "json" ]]; then
