@@ -311,7 +311,6 @@ def plot_latency_by_inflight(
         ) from exc
 
     has_lat = any(row.get("LatP50_us", 0) for row in rows)
-    has_lat = any(row.get("LatP50_us", 0) for row in rows)
     percentile_keys = [
         ("LatP50_us" if has_lat else "ClatP50_us", "p50"),
         ("LatP90_us" if has_lat else "ClatP90_us", "p90"),
@@ -567,6 +566,9 @@ def main() -> int:
     else:
         print_table(rows, fieldnames)
 
+    # Ensure table/csv output is fully emitted before plot status lines.
+    sys.stdout.flush()
+
     if args.plot:
         try:
             speed_plot = plot_speed_by_inflight(all_rows, args.results_dir, args.prefix)
@@ -596,10 +598,10 @@ def main() -> int:
             if p is not None
         ]
         if not generated_paths:
-            print("plot: no data to plot", file=sys.stderr)
+            print("plot: no data to plot")
         else:
             for path in generated_paths:
-                print(f"plot: {path}", file=sys.stderr)
+                print(f"plot: {path}")
 
     return 0
 
