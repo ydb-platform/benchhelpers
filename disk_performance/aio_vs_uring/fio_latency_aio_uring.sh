@@ -24,9 +24,9 @@ iodepth_to=128
 
 run_aio=0
 run_uring=0
-run_uring_cqpoll=0
+run_uring_iopoll=0
 run_uring_sqpoll=0
-run_uring_sqpoll_cqpoll=0
+run_uring_sqpoll_iopoll=0
 
 function usage {
     cat <<EOF
@@ -55,9 +55,9 @@ Options:
 Modes (if none selected, all are run):
   --aio                            libaio mode
   --uring                          io_uring mode
-  --uring-cqpoll                   io_uring + completion polling (--hipri)
+  --uring-iopoll                   io_uring + completion polling (--hipri)
   --uring-sqpoll                   io_uring + SQ polling (--sqthread_poll)
-  --uring-sqpoll-cqpoll           io_uring + SQ polling + completion polling
+  --uring-sqpoll-iopoll           io_uring + SQ polling + completion polling
 EOF
 }
 
@@ -223,20 +223,20 @@ set_mode_context() {
             mode_fio_args=()
             mode_name="uring"
             ;;
-        uring-cqpoll)
+        uring-iopoll)
             ioengine=io_uring
             mode_fio_args=(--hipri=1)
-            mode_name="uring-cqpoll"
+            mode_name="uring-iopoll"
             ;;
         uring-sqpoll)
             ioengine=io_uring
             mode_fio_args=(--sqthread_poll=1)
             mode_name="uring-sqpoll"
             ;;
-        uring-sqpoll-cqpoll)
+        uring-sqpoll-iopoll)
             ioengine=io_uring
             mode_fio_args=(--sqthread_poll=1 --hipri=1)
-            mode_name="uring-sqpoll-cqpoll"
+            mode_name="uring-sqpoll-iopoll"
             ;;
         *)
             echo "Unknown mode key: $mode_key"
@@ -331,16 +331,16 @@ while [[ "$#" -gt 0 ]]; do
             run_uring=1
             shift
             ;;
-        --uring-cqpoll)
-            run_uring_cqpoll=1
+        --uring-iopoll)
+            run_uring_iopoll=1
             shift
             ;;
         --uring-sqpoll)
             run_uring_sqpoll=1
             shift
             ;;
-        --uring-sqpoll-cqpoll)
-            run_uring_sqpoll_cqpoll=1
+        --uring-sqpoll-iopoll)
+            run_uring_sqpoll_iopoll=1
             shift
             ;;
         -h|--help)
@@ -470,12 +470,12 @@ if [[ ! -d "$results_dir" ]]; then
     fi
 fi
 
-if [[ "$run_aio" -eq 0 && "$run_uring" -eq 0 && "$run_uring_cqpoll" -eq 0 && "$run_uring_sqpoll" -eq 0 && "$run_uring_sqpoll_cqpoll" -eq 0 ]]; then
+if [[ "$run_aio" -eq 0 && "$run_uring" -eq 0 && "$run_uring_iopoll" -eq 0 && "$run_uring_sqpoll" -eq 0 && "$run_uring_sqpoll_iopoll" -eq 0 ]]; then
     run_aio=1
     run_uring=1
-    run_uring_cqpoll=1
+    run_uring_iopoll=1
     run_uring_sqpoll=1
-    run_uring_sqpoll_cqpoll=1
+    run_uring_sqpoll_iopoll=1
 fi
 
 selected_modes=()
@@ -485,14 +485,14 @@ fi
 if [[ "$run_uring" -eq 1 ]]; then
     selected_modes+=("uring")
 fi
-if [[ "$run_uring_cqpoll" -eq 1 ]]; then
-    selected_modes+=("uring-cqpoll")
+if [[ "$run_uring_iopoll" -eq 1 ]]; then
+    selected_modes+=("uring-iopoll")
 fi
 if [[ "$run_uring_sqpoll" -eq 1 ]]; then
     selected_modes+=("uring-sqpoll")
 fi
-if [[ "$run_uring_sqpoll_cqpoll" -eq 1 ]]; then
-    selected_modes+=("uring-sqpoll-cqpoll")
+if [[ "$run_uring_sqpoll_iopoll" -eq 1 ]]; then
+    selected_modes+=("uring-sqpoll-iopoll")
 fi
 
 run_plan=()
