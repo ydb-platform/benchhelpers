@@ -219,6 +219,46 @@ def print_csv(rows: List[Dict[str, object]], fieldnames: List[str]) -> None:
         writer.writerow({k: row[k] for k in fieldnames})
 
 
+def build_max_iops_rows(rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    def round_half_up(value: float) -> int:
+        # fio IOPS is non-negative here; this matches 0.5 -> 1 behavior.
+        return int(value + 0.5)
+
+    best_by_engine: Dict[str, Dict[str, object]] = {}
+
+    for row in rows:
+        engine = str(row["Engine"])
+        current_best = best_by_engine.get(engine)
+        if current_best is None:
+            best_by_engine[engine] = row
+            continue
+
+        if (
+            int(row["IOPS"]),
+            int(row["QueueDepth"]),
+            int(row["Speed_Bps"]),
+        ) > (
+            int(current_best["IOPS"]),
+            int(current_best["QueueDepth"]),
+            int(current_best["Speed_Bps"]),
+        ):
+            best_by_engine[engine] = row
+
+    max_rows: List[Dict[str, object]] = []
+    for engine in sorted(best_by_engine):
+        best = best_by_engine[engine]
+        max_rows.append(
+            {
+                "Engine": engine,
+                "QueueDepth": int(best["QueueDepth"]),
+                "KIOPS": round_half_up(float(best["IOPS"]) / 1000.0),
+                "Speed": str(best["Speed"]),
+            }
+        )
+
+    return max_rows
+
+
 def build_metric_series(
     rows: List[Dict[str, object]],
     field_name: str,
@@ -565,6 +605,10 @@ def main() -> int:
         print_csv(rows, fieldnames)
     else:
         print_table(rows, fieldnames)
+        print()
+        print("Max IOPS")
+        print("--------")
+        print_table(rows=build_max_iops_rows(rows), fieldnames=["Engine", "QueueDepth", "KIOPS", "Speed"])
 
     # Ensure table/csv output is fully emitted before plot status lines.
     sys.stdout.flush()
