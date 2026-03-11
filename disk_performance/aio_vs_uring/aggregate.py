@@ -326,12 +326,73 @@ def plot_speed_by_inflight(rows: List[Dict[str, object]], output_dir: str, prefi
 
     ax.set_xlabel("Inflight (QueueDepth)")
     ax.set_ylabel("Speed (MiB/s)")
+    ax.set_ylim(bottom=0)
     ax.set_title("Speed vs Inflight (median with min/max whiskers)")
     ax.grid(True, linestyle="--", alpha=0.4)
     ax.legend()
     fig.tight_layout()
 
     output_path = os.path.join(output_dir, f"{prefix}.png")
+    fig.savefig(output_path, dpi=120)
+    plt.close(fig)
+    return output_path
+
+
+def plot_iops_by_inflight(
+    rows: List[Dict[str, object]],
+    output_dir: str,
+    prefix: str,
+    max_queue_depth: Optional[int] = None,
+) -> Optional[str]:
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        raise RuntimeError(
+            "plotting requires matplotlib (pip install matplotlib)"
+        ) from exc
+
+    grouped = build_metric_series(rows, "IOPS", max_queue_depth=max_queue_depth)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    has_points = False
+    for series_name, points in sorted(grouped.items()):
+        x_vals = [int(r["QueueDepth"]) for r in points]
+        y_vals = [float(r["Median"]) for r in points]
+        y_min = [float(r["Min"]) for r in points]
+        y_max = [float(r["Max"]) for r in points]
+        yerr_lower = [y - y_lo for y, y_lo in zip(y_vals, y_min)]
+        yerr_upper = [y_hi - y for y, y_hi in zip(y_vals, y_max)]
+        if x_vals:
+            has_points = True
+            ax.errorbar(
+                x_vals,
+                y_vals,
+                yerr=[yerr_lower, yerr_upper],
+                fmt="-o",
+                capsize=4,
+                label=series_name,
+            )
+
+    if not has_points:
+        plt.close(fig)
+        return None
+
+    ax.set_xlabel("Inflight (QueueDepth)")
+    ax.set_ylabel("IOPS")
+    ax.set_ylim(bottom=0)
+    if max_queue_depth is None:
+        ax.set_title("IOPS vs Inflight (median with min/max whiskers)")
+        output_name = f"{prefix}_iops.png"
+    else:
+        ax.set_title(
+            f"IOPS vs Inflight (<= {max_queue_depth}, median with min/max whiskers)"
+        )
+        output_name = f"{prefix}_iops_upto_{max_queue_depth}.png"
+    ax.grid(True, linestyle="--", alpha=0.4)
+    ax.legend()
+    fig.tight_layout()
+
+    output_path = os.path.join(output_dir, output_name)
     fig.savefig(output_path, dpi=120)
     plt.close(fig)
     return output_path
@@ -381,6 +442,7 @@ def plot_latency_by_inflight(
                 )
 
         ax.set_ylabel("Latency (us)")
+        ax.set_ylim(bottom=0)
         if max_queue_depth is None:
             ax.set_title(f"{title_suffix} vs Inflight (median with min/max whiskers)")
         else:
@@ -504,6 +566,7 @@ def plot_latency_percentile_bars(
                 )
 
             ax.set_ylabel("Latency (us)")
+            ax.set_ylim(bottom=0)
             ax.set_title(f"{workload}, iodepth={qd}, usec (median with min/max whiskers)")
             ax.set_xlim(-0.5, len(percentile_fields) - 0.5)
             ax.grid(axis="y", linestyle="--", alpha=0.4)
@@ -615,6 +678,10 @@ def main() -> int:
 
     if args.plot:
         try:
+            iops_plot = plot_iops_by_inflight(all_rows, args.results_dir, args.prefix)
+            iops_plot_upto_8 = plot_iops_by_inflight(
+                all_rows, args.results_dir, args.prefix, max_queue_depth=8
+            )
             speed_plot = plot_speed_by_inflight(all_rows, args.results_dir, args.prefix)
             latency_plot = plot_latency_by_inflight(all_rows, args.results_dir, args.prefix)
             latency_plot_upto_32 = plot_latency_by_inflight(
@@ -633,6 +700,8 @@ def main() -> int:
         generated_paths = [
             p
             for p in [
+                iops_plot,
+                iops_plot_upto_8,
                 speed_plot,
                 latency_plot,
                 latency_plot_upto_32,
