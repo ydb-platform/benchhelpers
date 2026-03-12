@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script to run the stress tool with different configurations
-# Usage: ./run_stress_tool_pdisk_write.sh --tool <ydb_stress_tool_path> [--duration <seconds>] [--label <label>] [--log-mode <LOG_NONE|LOG_SEQUENTIAL>] [--run-count <N>] [--inflight-from <N>] [--inflight-to <N>] [--chunks-count <N>] --disk <disk_path> --output <output_file>
+# Usage: ./run_stress_tool_pdisk_write.sh --tool <ydb_stress_tool_path> [--duration <seconds>] [--label <label>] [--log-mode <LOG_NONE|LOG_SEQUENTIAL>] [--run-count <N>] [--inflight-from <N>] [--inflight-to <N>] [--chunks-count <N>] [--disable-pdisk-encryption] --disk <disk_path> --output <output_file>
 
 set -e
 
@@ -17,10 +17,11 @@ INFLIGHT_TO=32
 CHUNKS_COUNT=""
 CHUNK_SLOTS=32768
 WARMUP_SECONDS=15
+DISABLE_PDISK_ENCRYPTION=false
 
 usage() {
     cat << EOF
-Usage: $0 --tool <ydb_stress_tool_path> [--duration <seconds>] [--label <label>] [--log-mode <LOG_NONE|LOG_SEQUENTIAL>] [--run-count <N>] [--inflight-from <N>] [--inflight-to <N>] [--chunks-count <N>] [--warmup <seconds>] --disk <disk_path> [--disk <disk_path2> ...] --output <output_file>
+Usage: $0 --tool <ydb_stress_tool_path> [--duration <seconds>] [--label <label>] [--log-mode <LOG_NONE|LOG_SEQUENTIAL>] [--run-count <N>] [--inflight-from <N>] [--inflight-to <N>] [--chunks-count <N>] [--warmup <seconds>] [--disable-pdisk-encryption] --disk <disk_path> [--disk <disk_path2> ...] --output <output_file>
 
 Examples:
   $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1 --output ./out.json
@@ -29,6 +30,7 @@ Examples:
   $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1 --output ./out.json --inflight-from 1 --inflight-to 32 --chunks-count 32
   $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1 --output ./out.json --warmup 30
   $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1 --disk /dev/nvme1n1 --output ./out.json
+  $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1 --output ./out.json --disable-pdisk-encryption
 EOF
 }
 
@@ -82,6 +84,10 @@ while [[ $# -gt 0 ]]; do
         --warmup)
             WARMUP_SECONDS="$2"
             shift 2
+            ;;
+        --disable-pdisk-encryption)
+            DISABLE_PDISK_ENCRYPTION=true
+            shift
             ;;
         *)
             echo "Unknown option: $1"
@@ -250,6 +256,11 @@ for dp in "${DISK_PATHS[@]}"; do
     PATH_ARGS+=(--path "$dp")
 done
 
+STRESS_TOOL_ARGS=()
+if [ "$DISABLE_PDISK_ENCRYPTION" = true ]; then
+    STRESS_TOOL_ARGS+=(--disable-pdisk-encryption)
+fi
+
 echo "Discarding test devices before benchmark run..."
 for dp in "${DISK_PATHS[@]}"; do
     echo "  sudo blkdiscard $dp"
@@ -259,6 +270,7 @@ done
 echo "Running test with LogMode=$LOG_MODE, InFlights=$INFLIGHT_FROM..$INFLIGHT_TO, RunCount=$RUN_COUNT, ChunksCount=$EFFECTIVE_CHUNKS, Disks=${#DISK_PATHS[@]}"
 if ! RESULT=$(sudo "$YDB_STRESS_TOOL" \
     "${PATH_ARGS[@]}" \
+    "${STRESS_TOOL_ARGS[@]}" \
     --type NVME \
     --no-logo \
     --cfg "$CONFIG_FILE" \
