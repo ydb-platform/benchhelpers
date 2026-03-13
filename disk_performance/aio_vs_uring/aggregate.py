@@ -357,9 +357,9 @@ def plot_iops_by_inflight(
     has_points = False
     for series_name, points in sorted(grouped.items()):
         x_vals = [int(r["QueueDepth"]) for r in points]
-        y_vals = [float(r["Median"]) for r in points]
-        y_min = [float(r["Min"]) for r in points]
-        y_max = [float(r["Max"]) for r in points]
+        y_vals = [float(r["Median"]) / 1000.0 for r in points]
+        y_min = [float(r["Min"]) / 1000.0 for r in points]
+        y_max = [float(r["Max"]) / 1000.0 for r in points]
         yerr_lower = [y - y_lo for y, y_lo in zip(y_vals, y_min)]
         yerr_upper = [y_hi - y for y, y_hi in zip(y_vals, y_max)]
         if x_vals:
@@ -378,14 +378,14 @@ def plot_iops_by_inflight(
         return None
 
     ax.set_xlabel("Inflight (QueueDepth)")
-    ax.set_ylabel("IOPS")
+    ax.set_ylabel("KIOPS")
     ax.set_ylim(bottom=0)
     if max_queue_depth is None:
-        ax.set_title("IOPS vs Inflight (median with min/max whiskers)")
+        ax.set_title("KIOPS vs Inflight (median with min/max whiskers)")
         output_name = f"{prefix}_iops.png"
     else:
         ax.set_title(
-            f"IOPS vs Inflight (<= {max_queue_depth}, median with min/max whiskers)"
+            f"KIOPS vs Inflight (<= {max_queue_depth}, median with min/max whiskers)"
         )
         output_name = f"{prefix}_iops_upto_{max_queue_depth}.png"
     ax.grid(True, linestyle="--", alpha=0.4)
@@ -584,6 +584,21 @@ def plot_latency_percentile_bars(
         fig.savefig(output_path, dpi=120)
         plt.close(fig)
         generated_paths.append(output_path)
+
+        # Also emit a generic filename when there is a single workload.
+        if len(workloads) == 1:
+            generic_output_path = os.path.join(
+                output_dir, f"{prefix}_latency_bars_qd_1_4_16.png"
+            )
+            try:
+                import shutil
+
+                shutil.copyfile(output_path, generic_output_path)
+            except OSError:
+                # Keep the main workload-specific image even if extra copy fails.
+                pass
+            else:
+                generated_paths.append(generic_output_path)
 
     return generated_paths
 

@@ -520,6 +520,118 @@ def _plot_latency_percentiles(
     plt.close(fig)
 
 
+def _find_inflight_item(group: Dict[str, Any], inflight: int) -> Dict[str, Any] | None:
+    items = group.get("InFlights", [])
+    if not isinstance(items, list):
+        return None
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        x = it.get("InFlight")
+        if x is None:
+            continue
+        try:
+            if int(x) == inflight:
+                return it
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _plot_latency_bars_qd_1_4_16(
+    groups: List[Dict[str, Any]],
+    out_path: str,
+    title: str = "Latency percentiles (QueueDepth 1, 4, 16; median-IOPS run)",
+) -> bool:
+    try:
+        import matplotlib  # type: ignore
+    except ModuleNotFoundError as e:
+        raise SystemExit(
+            "Missing dependency: matplotlib\n"
+            "Install it with: pip3 install matplotlib\n"
+            f"Original error: {e}"
+        )
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    target_inflights = [1, 4, 16]
+    percentiles = ["p50.00", "p90.00", "p95.00", "p99.00"]
+    percentile_labels = ["50", "90", "95", "99"]
+
+    qds_present: List[int] = []
+    for qd in target_inflights:
+        has_any = False
+        for group in groups:
+            it = _find_inflight_item(group, qd)
+            run = _select_median_iops_run(it) if it is not None else None
+            if run is None:
+                continue
+            vals = [_extract_latency_percentile_us(run, p) for p in percentiles]
+            if any(not math.isnan(v) for v in vals):
+                has_any = True
+                break
+        if has_any:
+            qds_present.append(qd)
+
+    if not qds_present:
+        return False
+
+    fig, axes = plt.subplots(len(qds_present), 1, figsize=(10, 4 * len(qds_present)), sharex=True)
+    if len(qds_present) == 1:
+        axes = [axes]
+
+    x_base = list(range(len(percentiles)))
+    marker_span = 0.8
+    marker_step = marker_span / max(len(groups), 1)
+    has_points = False
+
+    for ax, qd in zip(axes, qds_present):
+        for group_idx, group in enumerate(groups):
+            it = _find_inflight_item(group, qd)
+            run = _select_median_iops_run(it) if it is not None else None
+            if run is None:
+                continue
+
+            x_vals = [
+                x - 0.4 + (marker_step / 2.0) + group_idx * marker_step
+                for x in x_base
+            ]
+            y_vals = [_extract_latency_percentile_us(run, p) for p in percentiles]
+            x_plot = [x for x, y in zip(x_vals, y_vals) if not math.isnan(y)]
+            y_plot = [y for y in y_vals if not math.isnan(y)]
+            if not x_plot:
+                continue
+
+            has_points = True
+            ax.plot(
+                x_plot,
+                y_plot,
+                "o",
+                label=_group_name(group),
+            )
+
+        ax.set_ylabel("Latency (us)")
+        ax.set_ylim(bottom=0)
+        ax.set_title(f"iodepth={qd}, usec (median-IOPS run)")
+        ax.set_xlim(-0.5, len(percentiles) - 0.5)
+        ax.grid(axis="y", linestyle="--", alpha=0.4)
+
+    if not has_points:
+        plt.close(fig)
+        return False
+
+    axes[0].legend(loc="best")
+    axes[-1].set_xticks(x_base)
+    axes[-1].set_xticklabels(percentile_labels)
+    fig.suptitle(title, y=0.995)
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return True
+
+
 def main() -> int:
     p = argparse.ArgumentParser(
         description="Plot YDB stress tool results (new InFlights format)."
@@ -622,6 +734,7 @@ def main() -> int:
     out_iops = f"{prefix}_iops.png"
     out_iops_qd_1_8 = f"{prefix}_iops_qd1_8.png"
     out_latency = f"{prefix}_latency.png"
+    out_latency_bars_qd_1_4_16 = f"{prefix}_latency_bars_qd_1_4_16.png"
 
     title_suffix = ""
     if test_types:
@@ -693,6 +806,13 @@ def main() -> int:
             title=f"Latency percentiles vs QueueDepth (Inflight) (median-IOPS run){title_suffix}",
         )
         print(out_latency)
+
+    if _plot_latency_bars_qd_1_4_16(
+        groups=groups,
+        out_path=out_latency_bars_qd_1_4_16,
+        title=f"Latency percentiles (QueueDepth 1, 4, 16; median-IOPS run){title_suffix}",
+    ):
+        print(out_latency_bars_qd_1_4_16)
     return 0
 
 
