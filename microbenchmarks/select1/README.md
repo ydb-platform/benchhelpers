@@ -25,13 +25,13 @@ This will create a fat JAR file in the `target` directory named `select1-benchma
 Run the benchmark with:
 
 ```bash
-java -jar target/select1-benchmark-1.0-SNAPSHOT.jar [--jdbc-url <url>] [--min-inflight <min>] [--max-inflight <max>] [--interval <seconds>] [--format <format>] [--linear] [--use-concurrency-limits] [--limiter-initial-limit <limit>] [--limiter-name <name>] [--limiter-algorithm <vegas|gradient|aimd>]
+java -jar target/select1-benchmark-1.0-SNAPSHOT.jar [--jdbc-url <url>] [--min-inflight <min>] [--max-inflight <max>] [--interval <seconds>] [--format <format>] [--linear] [--use-concurrency-limits] [--limiter-initial-limit <limit>] [--limiter-name <name>] [--limiter-algorithm <vegas|balanced-vegas|balanced-vegas2|balanced-vegas3|gradient|aimd>]
 ```
 
 or using legacy connection parameters:
 
 ```bash
-java -jar target/select1-benchmark-1.0-SNAPSHOT.jar [--host <hostname>] [--port <port>] [--user <username>] [--password <password>] [--min-inflight <min>] [--max-inflight <max>] [--interval <seconds>] [--format <format>] [--linear] [--use-concurrency-limits] [--limiter-initial-limit <limit>] [--limiter-name <name>] [--limiter-algorithm <vegas|gradient|aimd>]
+java -jar target/select1-benchmark-1.0-SNAPSHOT.jar [--host <hostname>] [--port <port>] [--user <username>] [--password <password>] [--min-inflight <min>] [--max-inflight <max>] [--interval <seconds>] [--format <format>] [--linear] [--use-concurrency-limits] [--limiter-initial-limit <limit>] [--limiter-name <name>] [--limiter-algorithm <vegas|balanced-vegas|balanced-vegas2|balanced-vegas3|gradient|aimd>]
 ```
 
 ### Arguments
@@ -54,7 +54,7 @@ java -jar target/select1-benchmark-1.0-SNAPSHOT.jar [--host <hostname>] [--port 
 - `--use-concurrency-limits` or `-c`: Enable Netflix client-side concurrency limiter for each query (blocking mode)
 - `--limiter-initial-limit`: Initial limiter value when limiter is enabled (default: 16)
 - `--limiter-name`: Limiter name used in limiter metrics (default: `select1-query`)
-- `--limiter-algorithm`: Limiter algorithm when limiter is enabled: `vegas`, `gradient`, or `aimd` (default: `vegas`)
+- `--limiter-algorithm`: Limiter algorithm when limiter is enabled: `vegas`, `balanced-vegas`, `balanced-vegas2`, `balanced-vegas3`, `gradient`, or `aimd` (default: `vegas`)
 
 ### Examples
 
@@ -79,6 +79,30 @@ java -jar target/select1-benchmark-1.0-SNAPSHOT.jar \
   --jdbc-url "jdbc:ydb:grpc://localhost:2135/Root/db1" \
   --min-inflight 8 --max-inflight 128 --interval 60 \
   --use-concurrency-limits --limiter-algorithm gradient \
+  --limiter-initial-limit 16 --limiter-name ydb-select1 \
+  --format human
+
+# YDB with balanced vegas limiter (better p50 vs tail tradeoff)
+java -jar target/select1-benchmark-1.0-SNAPSHOT.jar \
+  --jdbc-url "jdbc:ydb:grpc://localhost:2135/Root/db1" \
+  --min-inflight 8 --max-inflight 128 --interval 60 \
+  --use-concurrency-limits --limiter-algorithm balanced-vegas \
+  --limiter-initial-limit 16 --limiter-name ydb-select1 \
+  --format human
+
+# YDB with balanced vegas2 limiter (more permissive than balanced-vegas)
+java -jar target/select1-benchmark-1.0-SNAPSHOT.jar \
+  --jdbc-url "jdbc:ydb:grpc://localhost:2135/Root/db1" \
+  --min-inflight 8 --max-inflight 128 --interval 60 \
+  --use-concurrency-limits --limiter-algorithm balanced-vegas2 \
+  --limiter-initial-limit 16 --limiter-name ydb-select1 \
+  --format human
+
+# YDB with balanced vegas3 limiter (aggressive growth profile)
+java -jar target/select1-benchmark-1.0-SNAPSHOT.jar \
+  --jdbc-url "jdbc:ydb:grpc://localhost:2135/Root/db1" \
+  --min-inflight 8 --max-inflight 128 --interval 60 \
+  --use-concurrency-limits --limiter-algorithm balanced-vegas3 \
   --limiter-initial-limit 16 --limiter-name ydb-select1 \
   --format human
 ```

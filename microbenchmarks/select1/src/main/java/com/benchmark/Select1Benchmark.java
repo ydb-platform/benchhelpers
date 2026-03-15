@@ -30,6 +30,21 @@ public class Select1Benchmark {
     private static final int DEFAULT_LIMITER_INITIAL_LIMIT = 16;
     private static final String DEFAULT_LIMITER_NAME = "select1-query";
     private static final String DEFAULT_LIMITER_ALGORITHM = "vegas";
+    private static final int BALANCED_VEGAS_ALPHA = 5;
+    private static final int BALANCED_VEGAS_BETA = 10;
+    private static final int BALANCED_VEGAS_THRESHOLD = 2;
+    private static final double BALANCED_VEGAS_SMOOTHING = 0.3;
+    private static final int BALANCED_VEGAS_PROBE_MULTIPLIER = 300;
+    private static final int BALANCED_VEGAS2_ALPHA = 8;
+    private static final int BALANCED_VEGAS2_BETA = 16;
+    private static final int BALANCED_VEGAS2_THRESHOLD = 3;
+    private static final double BALANCED_VEGAS2_SMOOTHING = 0.5;
+    private static final int BALANCED_VEGAS2_PROBE_MULTIPLIER = 1000;
+    private static final int BALANCED_VEGAS3_ALPHA = 20;
+    private static final int BALANCED_VEGAS3_BETA = 40;
+    private static final int BALANCED_VEGAS3_THRESHOLD = 8;
+    private static final double BALANCED_VEGAS3_SMOOTHING = 0.9;
+    private static final int BALANCED_VEGAS3_PROBE_MULTIPLIER = 10000;
 
     private enum OutputFormat {
         HUMAN,
@@ -38,6 +53,9 @@ public class Select1Benchmark {
 
     private enum LimiterAlgorithm {
         VEGAS,
+        BALANCED_VEGAS,
+        BALANCED_VEGAS2,
+        BALANCED_VEGAS3,
         GRADIENT,
         AIMD
     }
@@ -333,6 +351,33 @@ public class Select1Benchmark {
                 return VegasLimit.newBuilder()
                         .initialLimit(limiterInitialLimit)
                         .build();
+            case BALANCED_VEGAS:
+                return VegasLimit.newBuilder()
+                        .initialLimit(limiterInitialLimit)
+                        .alpha(BALANCED_VEGAS_ALPHA)
+                        .beta(BALANCED_VEGAS_BETA)
+                        .thresholdFunction(ignore -> BALANCED_VEGAS_THRESHOLD)
+                        .smoothing(BALANCED_VEGAS_SMOOTHING)
+                        .probeMultiplier(BALANCED_VEGAS_PROBE_MULTIPLIER)
+                        .build();
+            case BALANCED_VEGAS2:
+                return VegasLimit.newBuilder()
+                        .initialLimit(limiterInitialLimit)
+                        .alpha(BALANCED_VEGAS2_ALPHA)
+                        .beta(BALANCED_VEGAS2_BETA)
+                        .thresholdFunction(ignore -> BALANCED_VEGAS2_THRESHOLD)
+                        .smoothing(BALANCED_VEGAS2_SMOOTHING)
+                        .probeMultiplier(BALANCED_VEGAS2_PROBE_MULTIPLIER)
+                        .build();
+            case BALANCED_VEGAS3:
+                return VegasLimit.newBuilder()
+                        .initialLimit(limiterInitialLimit)
+                        .alpha(BALANCED_VEGAS3_ALPHA)
+                        .beta(BALANCED_VEGAS3_BETA)
+                        .thresholdFunction(ignore -> BALANCED_VEGAS3_THRESHOLD)
+                        .smoothing(BALANCED_VEGAS3_SMOOTHING)
+                        .probeMultiplier(BALANCED_VEGAS3_PROBE_MULTIPLIER)
+                        .build();
             case GRADIENT:
                 return GradientLimit.newBuilder()
                         .initialLimit(limiterInitialLimit)
@@ -342,6 +387,54 @@ public class Select1Benchmark {
                         .initialLimit(limiterInitialLimit)
                         .minLimit(1)
                         .build();
+            default:
+                throw new IllegalArgumentException("Unsupported limiter algorithm: " + limiterAlgorithm);
+        }
+    }
+
+    private static LimiterAlgorithm parseLimiterAlgorithm(String limiterAlgorithmStr) {
+        String normalized = limiterAlgorithmStr == null ? "" : limiterAlgorithmStr.trim().toLowerCase();
+        switch (normalized) {
+            case "vegas":
+                return LimiterAlgorithm.VEGAS;
+            case "balanced-vegas":
+            case "balanced_vegas":
+            case "balancedvegas":
+                return LimiterAlgorithm.BALANCED_VEGAS;
+            case "balanced-vegas2":
+            case "balanced_vegas2":
+            case "balancedvegas2":
+                return LimiterAlgorithm.BALANCED_VEGAS2;
+            case "balanced-vegas3":
+            case "balanced_vegas3":
+            case "balancedvegas3":
+                return LimiterAlgorithm.BALANCED_VEGAS3;
+            case "gradient":
+                return LimiterAlgorithm.GRADIENT;
+            case "aimd":
+                return LimiterAlgorithm.AIMD;
+            default:
+                throw new IllegalArgumentException(
+                        "Invalid limiter-algorithm: " + limiterAlgorithmStr +
+                                ". Must be 'vegas', 'balanced-vegas', 'balanced-vegas2', 'balanced-vegas3', 'gradient', or 'aimd'"
+                );
+        }
+    }
+
+    private static String limiterAlgorithmName(LimiterAlgorithm limiterAlgorithm) {
+        switch (limiterAlgorithm) {
+            case VEGAS:
+                return "vegas";
+            case BALANCED_VEGAS:
+                return "balanced-vegas";
+            case BALANCED_VEGAS2:
+                return "balanced-vegas2";
+            case BALANCED_VEGAS3:
+                return "balanced-vegas3";
+            case GRADIENT:
+                return "gradient";
+            case AIMD:
+                return "aimd";
             default:
                 throw new IllegalArgumentException("Unsupported limiter algorithm: " + limiterAlgorithm);
         }
@@ -512,7 +605,7 @@ public class Select1Benchmark {
         options.addOption(Option.builder()
                 .longOpt("limiter-algorithm")
                 .hasArg()
-                .desc("Limiter algorithm when concurrency-limits is enabled: vegas, gradient, or aimd (default: " + DEFAULT_LIMITER_ALGORITHM + ")")
+                .desc("Limiter algorithm when concurrency-limits is enabled: vegas, balanced-vegas, balanced-vegas2, balanced-vegas3, gradient, or aimd (default: " + DEFAULT_LIMITER_ALGORITHM + ")")
                 .build());
         return options;
     }
@@ -547,15 +640,16 @@ public class Select1Benchmark {
             boolean useConcurrencyLimits = cmd.hasOption("use-concurrency-limits");
             int limiterInitialLimit = Integer.parseInt(cmd.getOptionValue("limiter-initial-limit", String.valueOf(DEFAULT_LIMITER_INITIAL_LIMIT)));
             String limiterName = cmd.getOptionValue("limiter-name", DEFAULT_LIMITER_NAME);
-            String limiterAlgorithmStr = cmd.getOptionValue("limiter-algorithm", DEFAULT_LIMITER_ALGORITHM).toLowerCase();
+            String limiterAlgorithmInput = cmd.getOptionValue("limiter-algorithm", DEFAULT_LIMITER_ALGORITHM);
             LimiterAlgorithm limiterAlgorithm;
             try {
-                limiterAlgorithm = LimiterAlgorithm.valueOf(limiterAlgorithmStr.toUpperCase());
+                limiterAlgorithm = parseLimiterAlgorithm(limiterAlgorithmInput);
             } catch (IllegalArgumentException e) {
-                System.err.println("Invalid limiter-algorithm: " + limiterAlgorithmStr + ". Must be 'vegas', 'gradient', or 'aimd'");
+                System.err.println(e.getMessage());
                 System.exit(1);
                 return;
             }
+            String limiterAlgorithmStr = limiterAlgorithmName(limiterAlgorithm);
             if (minInflight < 1 || maxInflight < 1) {
                 System.err.println("min-inflight and max-inflight must be >= 1");
                 System.exit(1);
