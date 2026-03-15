@@ -18,20 +18,20 @@ To build the project, run:
 mvn clean package -P [ydb|postgres|...]
 ```
 
-This will create a fat JAR file in the `target` directory named `select1-benchmark-1.0-SNAPSHOT-jar-with-dependencies.jar`.
+This will create a fat JAR file in the `target` directory named `select1-benchmark-1.0-SNAPSHOT.jar`.
 
 ## Usage
 
 Run the benchmark with:
 
 ```bash
-java -jar target/select1-benchmark-1.0-SNAPSHOT-jar-with-dependencies.jar [--jdbc-url <url>] [--min-inflight <min>] [--max-inflight <max>] [--interval <seconds>] [--format <format>]
+java -jar target/select1-benchmark-1.0-SNAPSHOT.jar [--jdbc-url <url>] [--min-inflight <min>] [--max-inflight <max>] [--interval <seconds>] [--format <format>]
 ```
 
 or using legacy connection parameters:
 
 ```bash
-java -jar target/select1-benchmark-1.0-SNAPSHOT-jar-with-dependencies.jar [--host <hostname>] [--port <port>] [--user <username>] [--password <password>] [--min-inflight <min>] [--max-inflight <max>] [--interval <seconds>] [--format <format>]
+java -jar target/select1-benchmark-1.0-SNAPSHOT.jar [--host <hostname>] [--port <port>] [--user <username>] [--password <password>] [--min-inflight <min>] [--max-inflight <max>] [--interval <seconds>] [--format <format>]
 ```
 
 ### Arguments
@@ -54,20 +54,20 @@ java -jar target/select1-benchmark-1.0-SNAPSHOT-jar-with-dependencies.jar [--hos
 Using JDBC URL (recommended):
 ```bash
 # PostgreSQL with human-readable output
-java -jar target/select1-benchmark-1.0-SNAPSHOT-jar-with-dependencies.jar --jdbc-url "jdbc:postgresql://localhost:5432/postgres?user=postgres&password=postgres"
+java -jar target/select1-benchmark-1.0-SNAPSHOT.jar --jdbc-url "jdbc:postgresql://localhost:5432/postgres?user=postgres&password=postgres"
 
 # YDB with CSV output
-java -jar target/select1-benchmark-1.0-SNAPSHOT-jar-with-dependencies.jar --jdbc-url "jdbc:ydb:grpc://localhost:2135/local" --format csv
+java -jar target/select1-benchmark-1.0-SNAPSHOT.jar --jdbc-url "jdbc:ydb:grpc://localhost:2135/local" --format csv
 ```
 
 Using legacy connection parameters:
 ```bash
-java -jar target/select1-benchmark-1.0-SNAPSHOT-jar-with-dependencies.jar --host localhost --port 5432 --user postgres --password postgres
+java -jar target/select1-benchmark-1.0-SNAPSHOT.jar --host localhost --port 5432 --user postgres --password postgres
 ```
 
 Full options:
 ```bash
-java -jar target/select1-benchmark-1.0-SNAPSHOT-jar-with-dependencies.jar --jdbc-url "jdbc:postgresql://localhost:5432/postgres?user=postgres&password=postgres" --min-inflight 1 --max-inflight 32 --interval 30 --format csv
+java -jar target/select1-benchmark-1.0-SNAPSHOT.jar --jdbc-url "jdbc:postgresql://localhost:5432/postgres?user=postgres&password=postgres" --min-inflight 1 --max-inflight 32 --interval 30 --format csv
 ```
 
 ## Output Formats
@@ -92,4 +92,4 @@ Latency p90 (µs),200.75,300.25,400.50
 Latency p99 (µs),500.00,750.00,1000.00
 Latency p99.9 (µs),1000.00,1500.00,2000.00
 Throughput (RPS),1000.50,2000.75,4000.25
-``` 
+```
