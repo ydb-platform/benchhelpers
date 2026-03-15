@@ -290,6 +290,10 @@ public class Select1Benchmark {
                 .hasArg()
                 .desc("Output format: human or csv (default: " + DEFAULT_FORMAT + ")")
                 .build());
+        options.addOption(Option.builder("l")
+                .longOpt("linear")
+                .desc("Use linear inflight growth (+1); default growth is exponential (*2)")
+                .build());
         return options;
     }
 
@@ -307,7 +311,7 @@ public class Select1Benchmark {
                 String port = cmd.getOptionValue("port", DEFAULT_PORT);
                 String username = cmd.getOptionValue("user", "postgres");
                 String password = cmd.getOptionValue("password", "postgres");
-                jdbcUrl = String.format("jdbc:postgresql://%s:%s/postgres?user=%s&password=%s", 
+                jdbcUrl = String.format("jdbc:postgresql://%s:%s/postgres?user=%s&password=%s",
                         hostname, port, username, password);
             }
 
@@ -320,6 +324,17 @@ public class Select1Benchmark {
             int minInflight = Integer.parseInt(cmd.getOptionValue("min-inflight", String.valueOf(DEFAULT_MIN_INFLIGHT)));
             int maxInflight = Integer.parseInt(cmd.getOptionValue("max-inflight", String.valueOf(DEFAULT_MAX_INFLIGHT)));
             int intervalSeconds = Integer.parseInt(cmd.getOptionValue("interval", String.valueOf(DEFAULT_INTERVAL_SECONDS)));
+            if (minInflight < 1 || maxInflight < 1) {
+                System.err.println("min-inflight and max-inflight must be >= 1");
+                System.exit(1);
+                return;
+            }
+            if (minInflight > maxInflight) {
+                System.err.println("min-inflight must be <= max-inflight");
+                System.exit(1);
+                return;
+            }
+            boolean linear = cmd.hasOption("linear");
             String formatStr = cmd.getOptionValue("format", DEFAULT_FORMAT).toLowerCase();
             OutputFormat format;
             try {
@@ -331,11 +346,11 @@ public class Select1Benchmark {
             }
 
             System.out.println("Running benchmark with parameters:");
-            System.out.printf("JDBC URL: %s, Min Inflight: %d, Max Inflight: %d, Interval: %d seconds, Format: %s%n",
-                    jdbcUrl, minInflight, maxInflight, intervalSeconds, formatStr);
+            System.out.printf("JDBC URL: %s, Min Inflight: %d, Max Inflight: %d, Growth: %s, Interval: %d seconds, Format: %s%n",
+                    jdbcUrl, minInflight, maxInflight, linear ? "linear(+1)" : "exponential(*2)", intervalSeconds, formatStr);
 
             List<BenchmarkResult> results = new ArrayList<>();
-            for (int inflight = minInflight; inflight <= maxInflight; inflight++) {
+            for (int inflight = minInflight; inflight <= maxInflight; inflight = linear ? inflight + 1 : inflight * 2) {
                 results.add(runBenchmark(jdbcUrl, inflight, intervalSeconds));
             }
 
@@ -350,4 +365,4 @@ public class Select1Benchmark {
             System.exit(1);
         }
     }
-} 
+}
