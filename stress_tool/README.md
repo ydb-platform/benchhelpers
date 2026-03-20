@@ -67,16 +67,17 @@ taskset -c 0-16 ./run_stress_tool_pdisk_write.sh ...args...
   --disk /dev/nvme0n1p2 --disk /dev/nvme1n1p2 --output result_2dev.json --run-count 3 --inflight-from 1 --inflight-to 32
 ```
 
-### 2. run_stress_tool_ddisk_write.sh
+### 2. run_stress_tool_ddisk.sh
 
-Runs the YDB stress tool DDisk write load test and collects results.
+Runs the YDB stress tool DDisk load test (reads or writes) and collects results.
 Output JSON format is **compatible** with `plot.py` and `table.py` (same `InFlights` shape).
 
-DDisk has no log mode; the script still emits a `LogMode` field for compatibility (it is set to `DDISK`).
+The `LogMode` field is set to `DDISK_WRITE` or `DDISK_READ` depending on the mode.
 
 #### Usage
 ```bash
-./run_stress_tool_ddisk_write.sh --tool <ydb_stress_tool_path> \
+./run_stress_tool_ddisk.sh --tool <ydb_stress_tool_path> \
+  [--reads] \
   [--duration <seconds>] \
   [--warmup <seconds>] \
   [--label <label>] \
@@ -94,21 +95,28 @@ DDisk has no log mode; the script still emits a `LogMode` field for compatibilit
 ```
 
 #### Arguments (high level)
+- **`--reads`**: Perform read load instead of write load (default: writes)
 - **`--disk`**: Path to the block device (required, repeatable for multi-device)
 - **`--areas-count`**: Number of `Areas` in config. Default: equals max `InFlight` (`--inflight-to`) (if set, forced for all inflights)
 - **`--area-size`**: `AreaSize` in bytes (default: `134217728`)
 - **`--expected-chunk-size`**: `ExpectedChunkSize` in bytes (default: `134217728`)
 - **`--node-id` / `--pdisk-id` / `--ddisk-slot-id`**: DDiskId components (defaults: `1`)
 
-#### Example (single device)
+#### Example (single device, write)
 ```bash
-./run_stress_tool_ddisk_write.sh --tool ./ydb_stress_tool --label "ddisk write" \
+./run_stress_tool_ddisk.sh --tool ./ydb_stress_tool --label "ddisk write" \
   --disk /dev/nvme_01 --output ddisk_result.json --run-count 3 --inflight-from 1 --inflight-to 32
+```
+
+#### Example (single device, read)
+```bash
+./run_stress_tool_ddisk.sh --tool ./ydb_stress_tool --reads --label "ddisk read" \
+  --disk /dev/nvme_01 --output ddisk_read_result.json --run-count 3 --inflight-from 1 --inflight-to 32
 ```
 
 #### Example (multi-device)
 ```bash
-./run_stress_tool_ddisk_write.sh --tool ./ydb_stress_tool --label "ddisk 2dev" \
+./run_stress_tool_ddisk.sh --tool ./ydb_stress_tool --label "ddisk 2dev" \
   --disk /dev/nvme0n1p2 --disk /dev/nvme1n1p2 --output ddisk_2dev.json --run-count 3
 ```
 
@@ -258,7 +266,7 @@ python3 table.py result.json
 
 ## Output Format
 
-### JSON Output (`run_stress_tool_pdisk_write.sh` / `run_stress_tool_ddisk_write.sh` / `run_stress_tool_uring_write.sh`)
+### JSON Output (`run_stress_tool_pdisk_write.sh` / `run_stress_tool_ddisk.sh` / `run_stress_tool_uring_write.sh`)
 The output is a JSON array (even if it contains a single group). Each group contains `InFlights` with summary stats and per-run results:
 ```json
 [

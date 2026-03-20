@@ -1,13 +1,13 @@
 #!/bin/bash
 
-# Script to run the stress tool with DDiskWriteLoad configuration.
+# Script to run the stress tool with DDiskLoad configuration (reads or writes).
 # Outputs results in the same JSON group format as run_stress_tool_pdisk_write.sh:
 #   [
 #     { Label, LogMode, TestType, Params, InFlights: [...] }
 #   ]
 #
 # Usage:
-#   ./run_stress_tool_ddisk_write.sh --tool <ydb_stress_tool_path> [--duration <seconds>] [--warmup <seconds>] [--label <label>]
+#   ./run_stress_tool_ddisk.sh --tool <ydb_stress_tool_path> [--reads] [--duration <seconds>] [--warmup <seconds>] [--label <label>]
 #     [--run-count <N>] [--inflight-from <N>] [--inflight-to <N>] [--areas-count <N>]
 #     [--area-size <bytes>] [--expected-chunk-size <bytes>]
 #     [--node-id <N>] [--pdisk-id <N>] [--ddisk-slot-id <N>]
@@ -26,6 +26,8 @@ RUN_COUNT=10
 INFLIGHT_FROM=1
 INFLIGHT_TO=128
 
+IS_READ_LOAD=false
+
 # Areas behave like chunks: by default Areas count == current inflight.
 AREAS_COUNT=""
 AREA_SIZE=134217728
@@ -38,10 +40,14 @@ TAG=1
 
 usage() {
     cat << EOF
-Usage: $0 --tool <ydb_stress_tool_path> [--duration <seconds>] [--warmup <seconds>] [--label <label>] [--run-count <N>] [--inflight-from <N>] [--inflight-to <N>] [--areas-count <N>] [--area-size <bytes>] [--expected-chunk-size <bytes>] --disk <disk_path> [--disk <disk_path2> ...] --output <output_file>
+Usage: $0 --tool <ydb_stress_tool_path> [--reads] [--duration <seconds>] [--warmup <seconds>] [--label <label>] [--run-count <N>] [--inflight-from <N>] [--inflight-to <N>] [--areas-count <N>] [--area-size <bytes>] [--expected-chunk-size <bytes>] --disk <disk_path> [--disk <disk_path2> ...] --output <output_file>
+
+Options:
+  --reads              Perform read load instead of write load.
 
 Examples:
   $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1p2 --output ./out.json
+  $0 --tool ./ydb-stress-tool --reads --disk /dev/nvme0n1p2 --output ./out.json
   $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1p2 --output ./out.json --run-count $RUN_COUNT --inflight-from $INFLIGHT_FROM --inflight-to $INFLIGHT_TO
   $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1p2 --output ./out.json --areas-count 32
   $0 --tool ./ydb-stress-tool --disk /dev/nvme0n1p2 --disk /dev/nvme1n1p2 --output ./out.json
@@ -53,6 +59,10 @@ while [[ $# -gt 0 ]]; do
         --tool)
             YDB_STRESS_TOOL="$2"
             shift 2
+            ;;
+        --reads)
+            IS_READ_LOAD=true
+            shift
             ;;
         --duration)
             DURATION="$2"
@@ -238,7 +248,7 @@ generate_config() {
     cat > "$config_file" << EOF
 DDiskTestList: {
     DDiskTestList: {
-        DDiskWriteLoad: {
+        DDiskLoad: {
             Tag: $TAG
             DDiskId: {
                 NodeId: $NODE_ID
@@ -251,13 +261,19 @@ EOF
         echo "            Areas: { AreaSize: $AREA_SIZE Weight: 1 Sequential: false }" >> "$config_file"
     done
 
+    local extra_fields=""
+    if [ "$IS_READ_LOAD" = true ]; then
+        extra_fields="
+            IsReadLoad: true"
+    fi
+
     cat >> "$config_file" << EOF
             DurationSeconds: $DURATION
             DelayBeforeMeasurementsSeconds: $WARMUP_SECONDS
             IntervalMsMin: 0
             IntervalMsMax: 0
-            InFlightWrites: $INFLIGHT_TO
-            ExpectedChunkSize: $EXPECTED_CHUNK_SIZE
+            InFlight: $INFLIGHT_TO
+            ExpectedChunkSize: $EXPECTED_CHUNK_SIZE$extra_fields
         }
     }
 }
@@ -277,13 +293,23 @@ for dp in "${DISK_PATHS[@]}"; do
     PATH_ARGS+=(--path "$dp")
 done
 
-echo "Discarding test devices before benchmark run..."
-for dp in "${DISK_PATHS[@]}"; do
-    echo "  sudo blkdiscard $dp"
-    sudo blkdiscard "$dp"
-done
+if [ "$IS_READ_LOAD" = true ]; then
+    LOAD_KIND="read"
+    LOG_MODE="DDISK_READ"
+else
+    LOAD_KIND="write"
+    LOG_MODE="DDISK_WRITE"
+fi
 
-echo "Running test with InFlights=$INFLIGHT_FROM..$INFLIGHT_TO, RunCount=$RUN_COUNT, AreasCount=$EFFECTIVE_AREAS, Disks=${#DISK_PATHS[@]}"
+if [ "$IS_READ_LOAD" != true ]; then
+    echo "Discarding test devices before benchmark run..."
+    for dp in "${DISK_PATHS[@]}"; do
+        echo "  sudo blkdiscard $dp"
+        sudo blkdiscard "$dp"
+    done
+fi
+
+echo "Running DDisk ${LOAD_KIND} test with InFlights=$INFLIGHT_FROM..$INFLIGHT_TO, RunCount=$RUN_COUNT, AreasCount=$EFFECTIVE_AREAS, Disks=${#DISK_PATHS[@]}"
 if ! RESULT=$(sudo "$YDB_STRESS_TOOL" \
     "${PATH_ARGS[@]}" \
     --type NVME \
@@ -298,7 +324,7 @@ if ! RESULT=$(sudo "$YDB_STRESS_TOOL" \
     exit 1
 fi
 
-if ! GROUP_JSON=$(echo "$RESULT" | jq --arg label "$LABEL" --arg log_mode "DDISK" '. + {Label: $label, LogMode: $log_mode}' 2>&1); then
+if ! GROUP_JSON=$(echo "$RESULT" | jq --arg label "$LABEL" --arg log_mode "$LOG_MODE" '. + {Label: $label, LogMode: $log_mode}' 2>&1); then
     echo "Error parsing stress tool output as JSON:"
     echo "jq error: $GROUP_JSON"
     echo "Raw output:"
@@ -307,4 +333,3 @@ if ! GROUP_JSON=$(echo "$RESULT" | jq --arg label "$LABEL" --arg log_mode "DDISK
 fi
 
 echo "[$GROUP_JSON]" > "$OUTPUT_FILE"
-
