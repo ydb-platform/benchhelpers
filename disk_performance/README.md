@@ -5,12 +5,13 @@ This folder contains the scripts to run the NVMe oriented performance tests.
 ## Table of Contents
 
 - [fio_device.sh](#fio_devicesh)
-- [fill_disk.sh](#fill_disksh)
+- [precondition.sh](#preconditionsh)
 - [aio vs. uring](#aio-vs-uring)
 
 ## fio_device.sh
 
 This script runs a number of fio tests on a single device. Device must be unmounted before running the script.
+All fio jobs run with `--numjobs=1`.
 
 We measure:
 1. Sequential throughput: read/write 1M at QD64.
@@ -18,6 +19,11 @@ We measure:
 3. Random latency: read/write 4K and 8K at QD1.
 
 The test suite is repeated multiple times (`--run-count`) and variance is calculated across runs.
+By default, `fio_device.sh` uses `io_uring` with `--hipri=1 --sqthread_poll=1`.
+Use `--use-aio` if you want to force `libaio` mode.
+
+By default, `fio_device.sh` runs preconditioning before the benchmark loop.
+To run against a freshly discarded block device without preconditioning, use `--clean-device`.
 
 Note, `blkdiscard` is applied only once before the run loop, so read latency can drift between runs; reported latencies are taken from the median run.
 
@@ -25,7 +31,8 @@ Note, `blkdiscard` is applied only once before the run loop, so read latency can
 
 Running on INTEL SSDPE2KE032T8 NVMe:
 ```
-./fio_device.sh --filename /dev/nvme3n1p2 --results-dir ~/fio_device_logs/fio_device_nvme3/ [--run-count 10]
+./fio_device.sh --filename /dev/nvme3n1p2 --results-dir ~/fio_device_logs/fio_device_nvme3_aged/ [--run-count 10] [--size-percent 100]
+./fio_device.sh --filename /dev/nvme3n1p2 --clean-device --results-dir ~/fio_device_logs/fio_device_nvme3_fresh/
 ```
 
 Output example:
@@ -182,16 +189,18 @@ python3.10 ./aggregate.py ~/fio_device_logs/fio_device_nvme3/ --plot --prefix fi
 ![Random write 4K latency by run](img/fio_device_latency_random_write_4k.png)
 ![Random write 8K latency by run](img/fio_device_latency_random_write_8k.png)
 
-## fill_disk.sh
+## precondition.sh
 
 Preconditions a disk target (or selected `--size-percent`) with sequential fill plus optional random-write runs.
 For block devices it applies `blkdiscard` first and prints probe latency/bandwidth summaries between stages.
 
 In other words, it runs the following:
 1. `blkdiscard` once (block devices only).
-2. Short initial random-write probe (`4K`, `iodepth=32`).
-3. Sequential fill (`1M`) over `--size-percent` of the target.
-4. Repeat `--rand-run-count` times: random preconditioning (`8K`) + short probe for each repetition.
+2. Optional short initial random-write probe (`4K`, `iodepth=32`) when `--probes` is enabled.
+3. Repeat `--sequential-run-count` times (default `2`): sequential fill (`1M`) over `--size-percent` of the target.
+4. Repeat `--rand-run-count` times (default `1`): random preconditioning (`8K`).
+5. Optional sequential fill after each random run when `--fill-after-rand` is set.
+6. Optional probe after each random run when `--probes` is enabled.
 
 It can also be used as a standalone benchmark together with an external disk metrics collector. In particular, after filling an NVMe device and then running random writes, you may observe a dramatic performance drop, as shown below:
 

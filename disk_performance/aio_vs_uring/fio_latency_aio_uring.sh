@@ -187,13 +187,13 @@ precondition_target() {
     if [[ "$fill_disk" -eq 1 ]]; then
         local script_dir fill_script
         script_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-        fill_script="$script_dir/../fill_disk.sh"
+        fill_script="$script_dir/../precondition.sh"
         echo "[$mode_label] Filling disk (preconditioning) using $fill_script..."
         bash "$fill_script" \
             --filename "$filename" \
             --size-percent "$fill_size_percent"
         if [[ $? -ne 0 ]]; then
-            echo "[$mode_label] fill_disk failed"
+            echo "[$mode_label] precondition failed"
             exit 1
         fi
     else

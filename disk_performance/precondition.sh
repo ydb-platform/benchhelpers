@@ -3,12 +3,13 @@
 set -u
 
 usage() {
-    echo "Usage: $0 --filename <filename> [--size-percent <1-100>] [--rand-run-count <n>] [--no-probes] [--fill-after-rand]"
+    echo "Usage: $0 --filename <filename> [--size-percent <1-100>] [--sequential-run-count <n>] [--rand-run-count <n>] [--probes] [--fill-after-rand]"
 }
 
 size_percent=100
+sequential_run_count=2
 rand_run_count=1
-enable_probes=1
+enable_probes=0
 fill_after_rand=0
 probe_iodepth=32
 probe_ramp_time=10s
@@ -98,7 +99,7 @@ PY
 run_probe_test() {
     local label="$1"
     local result_file
-    result_file="./.fill_disk_probe_${$}_${RANDOM}.json"
+    result_file="./.precondition_probe_${$}_${RANDOM}.json"
     temp_files+=("$result_file")
 
     sudo fio --name=write_latency_probe \
@@ -128,7 +129,7 @@ run_fill_test() {
     local iodepth="$4"
     local label="$5"
     local result_file
-    result_file="./.fill_disk_fill_${$}_${RANDOM}.json"
+    result_file="./.precondition_fill_${$}_${RANDOM}.json"
     temp_files+=("$result_file")
 
     sudo fio --name="$fio_name" \
@@ -162,12 +163,16 @@ while [[ "$#" -gt 0 ]]; do
             size_percent="$2"
             shift 2
             ;;
+        --sequential-run-count)
+            sequential_run_count="$2"
+            shift 2
+            ;;
         --rand-run-count)
             rand_run_count="$2"
             shift 2
             ;;
-        --no-probes)
-            enable_probes=0
+        --probes)
+            enable_probes=1
             shift
             ;;
         --fill-after-rand)
@@ -202,6 +207,11 @@ if ! [[ "$size_percent" =~ ^[0-9]+$ ]] || (( size_percent < 1 || size_percent > 
     exit 1
 fi
 
+if ! [[ "$sequential_run_count" =~ ^[1-9][0-9]*$ ]]; then
+    echo "sequential-run-count must be a positive integer, got: $sequential_run_count"
+    exit 1
+fi
+
 if ! [[ "$rand_run_count" =~ ^[1-9][0-9]*$ ]]; then
     echo "rand-run-count must be a positive integer, got: $rand_run_count"
     exit 1
@@ -224,15 +234,19 @@ if [[ -b "$filename" ]]; then
     fi
 fi
 
+echo "Preconditioning target size: ${size_percent}%"
+
 if [[ "$enable_probes" -eq 1 ]]; then
     run_probe_test "Initial probe (after discard if applied)"
 fi
 
-echo "Running test: seq_fill (${size_percent}% of target)"
-run_fill_test "seq_fill" "write" "1M" "32" "seq_fill (${size_percent}% of target)"
+for run_idx in $(seq 1 "$sequential_run_count"); do
+    echo "Sequential preconditioning run $run_idx/$sequential_run_count (${size_percent}% of target)"
+    run_fill_test "seq_fill" "write" "1M" "32" "seq_fill run $run_idx (${size_percent}% of target)"
+done
 
 for run_idx in $(seq 1 "$rand_run_count"); do
-    echo "Random preconditioning run $run_idx/$rand_run_count"
+    echo "Random preconditioning run $run_idx/$rand_run_count (${size_percent}% of target)"
     run_fill_test "rand_precondition" "randwrite" "8K" "32" "rand_precondition run $run_idx (${size_percent}% of target)"
     if [[ "$fill_after_rand" -eq 1 ]]; then
         run_fill_test "seq_fill_after_rand" "write" "1M" "32" "seq_fill after rand run $run_idx (${size_percent}% of target)"

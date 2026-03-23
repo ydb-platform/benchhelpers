@@ -3,7 +3,7 @@
 # Initially based on recommendations from https://cloud.google.com/compute/docs/disks/benchmarking-pd-performance
 # Adjusted to measure a steady (aged) performance and variance
 
-filesize=2500G
+size_percent=100
 
 ramp_time=10s
 runtime=1m
@@ -18,56 +18,29 @@ run_count=10
 
 multi_stream_seq_test_offset=100G
 
-ioengine=libaio
-ioengine_args=
+ioengine=io_uring
+ioengine_args="--hipri=1 --sqthread_poll=1"
+use_aio=false
 
 results_dir="$(date +%Y%m%d_%H%M)_results"
-fill_disk=false
+clean_device=false
 prefix=""
 
 usage() {
     echo "Usage: $0"
     echo "  --filename <filename> "
-    echo "  [--filesize <filesize>] (default: $filesize)"
+    echo "  [--size-percent <size-percent>] (default: $size_percent)"
     echo "  [--results-dir <results-dir>] (default: YYYYMMDD_HHMM_results)"
-    echo "  [--fill-disk] (default: false)"
+    echo "  [--clean-device] (default: false; skip precondition and do blkdiscard only)"
     echo "  [--ioengine] (default $ioengine)"
-    echo "  [--ioengine-args] (default NONE)"
+    echo "  [--ioengine-args] (default: $ioengine_args)"
+    echo "  [--use-aio] (default: false)"
     echo "  [--ramp-time <ramp-time>] (default: $ramp_time)"
     echo "  [--runtime <runtime>] (default: $runtime)"
     echo "  [--run-type <smoke|normal|long>] (default: $run_type)"
     echo "  [--run-count <run-count>] (default: $run_count)"
     echo "  [--format <format>] (default: $format)"
     echo "  [--prefix <prefix>] (default: empty)"
-}
-
-size_to_bytes() {
-    local size="$1"
-    local value unit multiplier
-
-    if [[ "$size" =~ ^([0-9]+)$ ]]; then
-        echo "${BASH_REMATCH[1]}"
-        return 0
-    fi
-
-    if [[ "$size" =~ ^([0-9]+)([KkMmGgTtPp])$ ]]; then
-        value="${BASH_REMATCH[1]}"
-        unit="${BASH_REMATCH[2]}"
-        case "$unit" in
-            [Kk]) multiplier=$((1024));;
-            [Mm]) multiplier=$((1024**2));;
-            [Gg]) multiplier=$((1024**3));;
-            [Tt]) multiplier=$((1024**4));;
-            [Pp]) multiplier=$((1024**5));;
-            *)
-                return 1
-                ;;
-        esac
-        echo $((value * multiplier))
-        return 0
-    fi
-
-    return 1
 }
 
 if ! which fio >/dev/null; then
@@ -79,17 +52,17 @@ while [[ "$#" > 0 ]]; do case $1 in
     --filename)
         filename="$2";
         shift;;
-    --filesize)
-        filesize="$2";
-        shift;;
-    --numjobs)
-        numjobs="$2";
+    --size-percent)
+        size_percent="$2";
         shift;;
     --results-dir)
         results_dir="$2";
         shift;;
-    --fill-disk)
-        fill_disk=true
+    --clean-device)
+        clean_device=true
+        ;;
+    --use-aio)
+        use_aio=true
         ;;
     --ioengine)
         ioengine="$2";
@@ -135,17 +108,21 @@ if [[ ! -e "$filename" ]]; then
     exit 1
 fi
 
+if ! [[ "$size_percent" =~ ^[0-9]+$ ]] || (( size_percent < 1 || size_percent > 100 )); then
+    echo "size-percent must be an integer in [1,100], got: $size_percent"
+    exit 1
+fi
+
 if ! [[ "$run_count" =~ ^[1-9][0-9]*$ ]]; then
     echo "run-count must be a positive integer, got: $run_count"
     exit 1
 fi
 
-fill_size_percent=100
 case "$run_type" in
     smoke)
         ramp_time=2s
         runtime=10s
-        fill_size_percent=5
+        size_percent=5
         ;;
     normal)
         # Use explicitly provided/default values.
@@ -217,55 +194,41 @@ else
     echo "filename must be a block device or regular file: $filename"
     exit 1
 fi
-
-filesize_bytes="$(size_to_bytes "$filesize")"
-if [[ $? -ne 0 || -z "$filesize_bytes" ]]; then
-    echo "unsupported filesize format: $filesize (expected like 2500G, 4K, 1048576)"
+test_size_bytes=$((target_size_bytes * size_percent / 100))
+if (( test_size_bytes <= 0 )); then
+    echo "calculated test size is zero bytes for size-percent=$size_percent and target size=$target_size_bytes"
     exit 1
 fi
 
-multi_stream_offset_bytes="$(size_to_bytes "$multi_stream_seq_test_offset")"
-if [[ $? -ne 0 || -z "$multi_stream_offset_bytes" ]]; then
-    echo "unsupported multi_stream_seq_test_offset format: $multi_stream_seq_test_offset"
-    exit 1
-fi
-
-if (( filesize_bytes > target_size_bytes )); then
-    echo "filesize ($filesize) exceeds target size ($target_size_bytes bytes)"
-    exit 1
-fi
-
-required_span_bytes=$((filesize_bytes + (numjobs - 1) * multi_stream_offset_bytes))
-if (( required_span_bytes > target_size_bytes )); then
-    echo "multistream layout does not fit target size: required $required_span_bytes bytes, available $target_size_bytes bytes"
-    echo "adjust --filesize, --numjobs, or --offset_increment base (multi_stream_seq_test_offset)"
-    exit 1
+if [[ "$use_aio" == "true" ]]; then
+    ioengine=libaio
+    ioengine_args=""
 fi
 
 #
 # fill the disk with random data
 #
 
-if [[ "$fill_disk" == "true" ]]; then
-    echo "Filling disk (preconditioning)..."
-    script_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-    bash "$script_dir/fill_disk.sh" \
-        --filename "$filename" \
-        --size-percent "$fill_size_percent"
-    if [[ $? -ne 0 ]]; then
-        echo "fill_disk failed"
-        exit 1
-    fi
-else
+if [[ "$clean_device" == "true" ]]; then
     if [[ -b "$filename" ]]; then
-        echo "Skipping fill; running blkdiscard on $filename..."
+        echo "Skipping precondition; running blkdiscard on $filename..."
         sudo blkdiscard "$filename"
         if [[ $? -ne 0 ]]; then
             echo "blkdiscard failed"
             exit 1
         fi
     else
-        echo "Skipping fill; blkdiscard requires a block device (got: $filename)"
+        echo "Skipping precondition; blkdiscard requires a block device (got: $filename)"
+    fi
+else
+    echo "Filling disk (preconditioning)..."
+    script_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
+    bash "$script_dir/precondition.sh" \
+        --filename "$filename" \
+        --size-percent "$size_percent"
+    if [[ $? -ne 0 ]]; then
+        echo "precondition failed"
+        exit 1
     fi
 fi
 
@@ -281,7 +244,7 @@ for run_id in $(seq 1 "$run_count"); do
   #
   echo "Running test: write_bandwidth_test"
   sudo fio --name=write_bandwidth_test \
-    --filename="$filename" --filesize=$filesize \
+    --filename="$filename" --size="${size_percent}%" \
     --time_based --ramp_time=$ramp_time --runtime=$runtime \
     --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
     --bs=1M \
@@ -301,7 +264,7 @@ for run_id in $(seq 1 "$run_count"); do
   #
   echo "Running test: write_iops_test_4K"
   sudo fio --name=write_iops_test \
-    --filename="$filename" --filesize=$filesize \
+    --filename="$filename" --size="${size_percent}%" \
     --time_based --ramp_time=$ramp_time --runtime=$runtime \
     --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
     --bs=4K --iodepth=$iops_depth --rw=randwrite --numjobs=1 \
@@ -316,7 +279,7 @@ for run_id in $(seq 1 "$run_count"); do
   #
   echo "Running test: write_iops_test_8K"
   sudo fio --name=write_iops_test \
-    --filename="$filename" --filesize=$filesize \
+    --filename="$filename" --size="${size_percent}%" \
     --time_based --ramp_time=$ramp_time --runtime=$runtime \
     --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
     --bs=8K --iodepth=$iops_depth --rw=randwrite --numjobs=1 \
@@ -331,7 +294,7 @@ for run_id in $(seq 1 "$run_count"); do
   #
   echo "Running test: write_latency_test_4K"
   sudo fio --name=write_latency_test \
-    --filename="$filename" --filesize=$filesize \
+    --filename="$filename" --size="${size_percent}%" \
     --time_based --ramp_time=$ramp_time --runtime=$runtime \
     --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
     --bs=4K --iodepth=$latency_depth --rw=randwrite --numjobs=1 --iodepth_batch_submit=$latency_depth  \
@@ -346,7 +309,7 @@ for run_id in $(seq 1 "$run_count"); do
   #
   echo "Running test: write_latency_test_8K"
   sudo fio --name=write_latency_test \
-    --filename="$filename" --filesize=$filesize \
+    --filename="$filename" --size="${size_percent}%" \
     --time_based --ramp_time=$ramp_time --runtime=$runtime \
     --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
     --bs=8K --iodepth=$latency_depth --rw=randwrite --numjobs=1 --iodepth_batch_submit=$latency_depth  \
@@ -361,7 +324,7 @@ for run_id in $(seq 1 "$run_count"); do
   #
   echo "Running test: read_bandwidth_test"
   sudo fio --name=read_bandwidth_test \
-    --filename="$filename" --filesize=$filesize \
+    --filename="$filename" --size="${size_percent}%" \
     --time_based --ramp_time=$ramp_time --runtime=$runtime \
     --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
     --bs=1M --iodepth=$bandwidth_depth --rw=read --numjobs=1 --offset_increment=$multi_stream_seq_test_offset \
@@ -376,7 +339,7 @@ for run_id in $(seq 1 "$run_count"); do
   #
   echo "Running test: read_iops_test_4K"
   sudo fio --name=read_iops_test \
-    --filename="$filename" --filesize=$filesize \
+    --filename="$filename" --size="${size_percent}%" \
     --time_based --ramp_time=$ramp_time --runtime=$runtime \
     --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
     --bs=4K --iodepth=$iops_depth --rw=randread --numjobs=1 \
@@ -391,7 +354,7 @@ for run_id in $(seq 1 "$run_count"); do
   #
   echo "Running test: read_iops_test_8K"
   sudo fio --name=read_iops_test \
-    --filename="$filename" --filesize=$filesize \
+    --filename="$filename" --size="${size_percent}%" \
     --time_based --ramp_time=$ramp_time --runtime=$runtime \
     --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
     --bs=8K --iodepth=$iops_depth --rw=randread --numjobs=1 \
@@ -406,7 +369,7 @@ for run_id in $(seq 1 "$run_count"); do
   #
   echo "Running test: read_latency_test_4K"
   sudo fio --name=read_latency_test \
-    --filename="$filename" --filesize=$filesize \
+    --filename="$filename" --size="${size_percent}%" \
     --time_based --ramp_time=$ramp_time --runtime=$runtime \
     --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
     --bs=4K --iodepth=$latency_depth --rw=randread --numjobs=1 \
@@ -421,7 +384,7 @@ for run_id in $(seq 1 "$run_count"); do
   #
   echo "Running test: read_latency_test_8K"
   sudo fio --name=read_latency_test \
-    --filename="$filename" --filesize=$filesize \
+    --filename="$filename" --size="${size_percent}%" \
     --time_based --ramp_time=$ramp_time --runtime=$runtime \
     --ioengine=$ioengine $ioengine_args --direct=1 --verify=0 --randrepeat=0 \
     --bs=8K --iodepth=$latency_depth --rw=randread --numjobs=1 \
