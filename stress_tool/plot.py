@@ -632,6 +632,175 @@ def _plot_latency_bars_qd_1_4_16(
     return True
 
 
+def _background_write_ratio(group: Dict[str, Any]) -> float | None:
+    params = group.get("Params")
+    if not isinstance(params, dict) or params.get("BackgroundWriteRatio") is None:
+        return None
+    try:
+        return float(params["BackgroundWriteRatio"])
+    except (TypeError, ValueError):
+        return None
+
+
+def _ratio_label(ratio: float) -> str:
+    return f"{ratio:.1f}" if ratio.is_integer() else f"{ratio:g}"
+
+
+def _select_matrix_latency_run(item: Dict[str, Any]) -> Dict[str, Any] | None:
+    runs = [run for run in item.get("Runs", []) if isinstance(run, dict)]
+    aggregate = [run for run in runs if str(run.get("Device", "")) == "SUM"]
+    candidates = aggregate or runs
+    stats = item.get("IOPS")
+    if not isinstance(stats, dict) or not candidates:
+        return None
+    target = _parse_float(stats.get("median"))
+    if math.isnan(target):
+        return None
+    return min(candidates, key=lambda run: abs(_parse_float(run.get("IOPS")) - target))
+
+
+def _extract_background_matrices(
+    groups: List[Dict[str, Any]],
+) -> Tuple[List[int], List[float], List[List[float]], List[List[float]], str]:
+    by_ratio: Dict[float, Dict[str, Any]] = {}
+    for group in groups:
+        ratio = _background_write_ratio(group)
+        if ratio is None:
+            raise SystemExit(
+                "Background heatmap requires Params.BackgroundWriteRatio in every group."
+            )
+        if ratio in by_ratio:
+            raise SystemExit(f"Duplicate BackgroundWriteRatio in input: {ratio:g}")
+        by_ratio[ratio] = group
+
+    ratios = sorted(by_ratio)
+    qds: List[int] = []
+    iops_matrix: List[List[float]] = []
+    latency_matrix: List[List[float]] = []
+    for ratio in ratios:
+        group = by_ratio[ratio]
+        items = {
+            int(item["InFlight"]): item
+            for item in group.get("InFlights", [])
+            if isinstance(item, dict) and item.get("InFlight") is not None
+        }
+        current_qds = sorted(items)
+        if not qds:
+            qds = current_qds
+        elif current_qds != qds:
+            raise SystemExit(
+                f"Queue-depth grid for BackgroundWriteRatio={ratio:g} does not match the other groups."
+            )
+
+        iops_row: List[float] = []
+        latency_row: List[float] = []
+        for qd in qds:
+            item = items[qd]
+            stats = item.get("IOPS")
+            iops_row.append(
+                _iops_to_kiops(stats.get("median")) if isinstance(stats, dict) else float("nan")
+            )
+            run = _select_matrix_latency_run(item)
+            latency_row.append(
+                _extract_latency_percentile_us(run, "p99.00")
+                if run is not None
+                else float("nan")
+            )
+        iops_matrix.append(iops_row)
+        latency_matrix.append(latency_row)
+
+    if not qds or not ratios:
+        raise SystemExit("Background heatmap has no benchmark points.")
+
+    checksum_modes = {
+        str(group.get("Params", {}).get("Checksums", "unknown"))
+        for group in groups
+        if isinstance(group.get("Params"), dict)
+    }
+    checksum_label = ", ".join(sorted(checksum_modes)) or "unknown"
+    return qds, ratios, iops_matrix, latency_matrix, checksum_label
+
+
+def _cell_label(value: float) -> str:
+    if math.isnan(value):
+        return "-"
+    return f"{value:.0f}" if abs(value) >= 100 else f"{value:.1f}"
+
+
+def _annotate_heatmap(ax, image_obj, values: List[List[float]]) -> None:
+    cmap = image_obj.get_cmap()
+    norm = image_obj.norm
+    for row_idx, row in enumerate(values):
+        for col_idx, value in enumerate(row):
+            if math.isnan(value):
+                color = "black"
+            else:
+                red, green, blue, _ = cmap(norm(value))
+                luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+                color = "black" if luminance > 0.58 else "white"
+            ax.text(
+                col_idx,
+                row_idx,
+                _cell_label(value),
+                ha="center",
+                va="center",
+                color=color,
+                fontsize=10,
+                fontweight="semibold",
+            )
+
+
+def _plot_background_heatmap(groups: List[Dict[str, Any]], out_path: str) -> None:
+    try:
+        import matplotlib  # type: ignore
+    except ModuleNotFoundError as e:
+        raise SystemExit(
+            "Missing dependency: matplotlib\n"
+            "Install it with: pip3 install matplotlib\n"
+            f"Original error: {e}"
+        )
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LinearSegmentedColormap
+
+    qds, ratios, iops, latency, checksum_label = _extract_background_matrices(groups)
+    fig, axes = plt.subplots(1, 2, figsize=(15, 6.7), constrained_layout=True)
+
+    iops_cmap = LinearSegmentedColormap.from_list(
+        "read_iops", ["#174a9c", "#2fa8c4", "#70d548", "#16833b"]
+    )
+    images = [
+        axes[0].imshow(iops, aspect="auto", cmap=iops_cmap),
+        axes[1].imshow(latency, aspect="auto", cmap="RdYlGn_r"),
+    ]
+    panel_titles = ["Read IOPS (kIOPS) — higher is better", "Read p99 latency (us) — lower is better"]
+
+    for ax, image_obj, values, panel_title in zip(
+        axes, images, [iops, latency], panel_titles
+    ):
+        ax.set_title(panel_title, fontsize=14, fontweight="bold", pad=12)
+        ax.set_xlabel("Configured InFlight (shared read + background-write QD)")
+        ax.set_xticks(range(len(qds)), [str(qd) for qd in qds])
+        ax.set_yticks(range(len(ratios)), [_ratio_label(ratio) for ratio in ratios])
+        ax.set_ylabel("Background writes per measured read")
+        ax.set_xticks([x - 0.5 for x in range(1, len(qds))], minor=True)
+        ax.set_yticks([y - 0.5 for y in range(1, len(ratios))], minor=True)
+        ax.grid(which="minor", color="white", linewidth=1.3)
+        ax.tick_params(which="minor", bottom=False, left=False)
+        _annotate_heatmap(ax, image_obj, values)
+        fig.colorbar(image_obj, ax=ax, orientation="horizontal", pad=0.15, shrink=0.9)
+
+    fig.suptitle(
+        f"DDisk foreground reads under background writes — checksums {checksum_label}",
+        fontsize=17,
+        fontweight="bold",
+    )
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    fig.savefig(out_path, dpi=180)
+    plt.close(fig)
+
+
 def main() -> int:
     p = argparse.ArgumentParser(
         description="Plot YDB stress tool results (new InFlights format)."
@@ -657,6 +826,11 @@ def main() -> int:
         action="append",
         default=[],
         help="Optional label for each input file (repeat per file).",
+    )
+    p.add_argument(
+        "--background-heatmap",
+        action="store_true",
+        help="Write one annotated IOPS+p99 heatmap figure for background-write matrix input.",
     )
     args = p.parse_args()
 
@@ -706,6 +880,12 @@ def main() -> int:
 
     if not groups:
         raise SystemExit("No result groups found in input JSON.")
+
+    if args.background_heatmap:
+        out_heatmap = f"{prefix}_heatmap.png"
+        _plot_background_heatmap(groups, out_heatmap)
+        print(out_heatmap)
+        return 0
 
     multi_count = sum(1 for g in groups if _is_multi_device(g))
     single_count = len(groups) - multi_count
@@ -818,4 +998,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -331,11 +331,117 @@ def _render_table(headers: List[str], rows: List[List[str]]) -> str:
     return "\n".join(out_lines)
 
 
+def _background_write_ratio(group: Dict[str, Any]) -> Optional[float]:
+    params = group.get("Params")
+    if not isinstance(params, dict) or params.get("BackgroundWriteRatio") is None:
+        return None
+    try:
+        return float(params["BackgroundWriteRatio"])
+    except (TypeError, ValueError):
+        return None
+
+
+def _ratio_label(ratio: float) -> str:
+    return f"{ratio:.1f}" if ratio.is_integer() else f"{ratio:g}"
+
+
+def _matrix_groups(groups: List[Dict[str, Any]]) -> List[Tuple[float, Dict[str, Any]]]:
+    by_ratio: Dict[float, Dict[str, Any]] = {}
+    for group in groups:
+        ratio = _background_write_ratio(group)
+        if ratio is None:
+            raise SystemExit(
+                "Background-write matrix requires Params.BackgroundWriteRatio in every group."
+            )
+        if ratio in by_ratio:
+            raise SystemExit(f"Duplicate BackgroundWriteRatio in input: {ratio:g}")
+        by_ratio[ratio] = group
+    return sorted(by_ratio.items())
+
+
+def _matrix_queue_depths(matrix_groups: List[Tuple[float, Dict[str, Any]]]) -> List[int]:
+    expected: Optional[List[int]] = None
+    for ratio, group in matrix_groups:
+        qds = sorted(
+            int(item["InFlight"])
+            for item in group.get("InFlights", [])
+            if isinstance(item, dict) and item.get("InFlight") is not None
+        )
+        if expected is None:
+            expected = qds
+        elif qds != expected:
+            raise SystemExit(
+                f"Queue-depth grid for BackgroundWriteRatio={ratio:g} does not match the other groups."
+            )
+    return expected or []
+
+
+def _background_matrix_text(groups: List[Dict[str, Any]]) -> str:
+    matrix_groups = _matrix_groups(groups)
+    qds = _matrix_queue_depths(matrix_groups)
+    if not qds:
+        raise SystemExit("Background-write matrix has no queue-depth points.")
+
+    iops_rows: List[List[str]] = []
+    latency_rows: List[List[str]] = []
+    for ratio, group in matrix_groups:
+        iops_by_qd: Dict[int, float] = {}
+        latency_by_qd: Dict[int, float] = {}
+        device_filter = "SUM" if _is_multi_device(group) else None
+        for item in group.get("InFlights", []):
+            if not isinstance(item, dict) or item.get("InFlight") is None:
+                continue
+            qd = int(item["InFlight"])
+            stats = item.get("IOPS")
+            if isinstance(stats, dict):
+                iops_by_qd[qd] = _iops_to_kiops(stats.get("median"))
+            run = _select_median_iops_run(item, device_filter=device_filter)
+            if run is not None:
+                latency_by_qd[qd] = _extract_latency_percentile_us(run, "p99.00")
+
+        ratio_label = _ratio_label(ratio)
+        iops_rows.append(
+            [ratio_label] + [_fmt_num(iops_by_qd.get(qd, float("nan")), 1) for qd in qds]
+        )
+        latency_rows.append(
+            [ratio_label] + [_fmt_num(latency_by_qd.get(qd, float("nan")), 1) for qd in qds]
+        )
+
+    checksum_modes = {
+        str(group.get("Params", {}).get("Checksums", "unknown"))
+        for _, group in matrix_groups
+        if isinstance(group.get("Params"), dict)
+    }
+    checksum_label = ", ".join(sorted(checksum_modes)) or "unknown"
+    headers = ["writes/read"] + [str(qd) for qd in qds]
+    sections = [
+        f"DDisk foreground reads under background writes (checksums: {checksum_label})",
+        "Configured InFlight is shared by measured reads and background writes.",
+        "",
+        "Read IOPS (kIOPS, median; higher is better)",
+        _render_table(headers, iops_rows),
+        "",
+        "Read p99 latency (us, from median-IOPS run; lower is better)",
+        _render_table(headers, latency_rows),
+    ]
+    return "\n".join(sections) + "\n"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Print YDB stress tool results as human-readable tables (new InFlights format)."
     )
     ap.add_argument("input_json", help="Path to resulting JSON file (array of groups).")
+    ap.add_argument(
+        "--background-matrix",
+        action="store_true",
+        help="Print compact background-writes/read matrices for median IOPS and p99 latency.",
+    )
+    ap.add_argument(
+        "--output",
+        default="",
+        help="Write the table to this file instead of stdout.",
+    )
     args = ap.parse_args()
 
     with open(args.input_json, "r", encoding="utf-8") as f:
@@ -346,6 +452,15 @@ def main() -> int:
     groups: List[Dict[str, Any]] = [g for g in data if isinstance(g, dict)]
     if not groups:
         raise SystemExit("No result groups found in input JSON.")
+
+    if args.background_matrix:
+        matrix_text = _background_matrix_text(groups)
+        if args.output:
+            with open(args.output, "w", encoding="utf-8") as stream:
+                stream.write(matrix_text)
+        else:
+            print(matrix_text, end="")
+        return 0
 
     test_type = str(groups[0].get("TestType", "")).strip()
     title_suffix = f" ({test_type})" if test_type else ""
@@ -417,15 +532,17 @@ def main() -> int:
         runs_sections.append("")
     runs_txt = "\n".join(runs_sections).rstrip() + "\n"
 
-    # Print to stdout (human-readable).
-    print(speed_txt)
-    print(iops_txt)
-    print(lat_txt)
-    print(runs_txt)
+    output_text = "\n".join(
+        [speed_txt.rstrip(), iops_txt.rstrip(), lat_txt.rstrip(), runs_txt.rstrip()]
+    ) + "\n"
+    if args.output:
+        with open(args.output, "w", encoding="utf-8") as stream:
+            stream.write(output_text)
+    else:
+        print(output_text, end="")
 
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

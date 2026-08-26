@@ -4,7 +4,7 @@ Tools for running [ydb_stress_tool](https://github.com/ydb-platform/ydb/tree/mai
 
 ## Prerequisites
 
-- `jq >= 1.7` command-line tool must be installed (version)
+- `jq >= 1.7` (only required by `res_to_csv.sh`)
 - Root/sudo access for running the stress tool
 - A block device for testing
 - Python 3 (for plotting)
@@ -87,6 +87,11 @@ The `LogMode` field is set to `DDISK_WRITE` or `DDISK_READ` depending on the mod
   [--areas-count <N>] \
   [--area-size <bytes>] \
   [--expected-chunk-size <bytes>] \
+  [--init-inflight <N>] \
+  [--background-write-ratio <0..1>]... \
+  [--background-write-size-kib <N>] \
+  [--disable-ddisk-checksums] \
+  [--config-output-dir <directory>] \
   [--node-id <N>] \
   [--pdisk-id <N>] \
   [--ddisk-slot-id <N>] \
@@ -96,11 +101,24 @@ The `LogMode` field is set to `DDISK_WRITE` or `DDISK_READ` depending on the mod
 
 #### Arguments (high level)
 - **`--reads`**: Perform read load instead of write load (default: writes)
+- **`--duration`**: Measured duration per queue depth (default: `30` seconds)
+- **`--warmup`**: Delay before measurements (default: `15` seconds)
+- **`--run-count`**: Repetitions per queue depth (default: `1`); single-run output is normalized to the same `InFlights` shape as multi-run output
 - **`--disk`**: Path to the block device (required, repeatable for multi-device)
-- **`--areas-count`**: Number of `Areas` in config. Default: equals max `InFlight` (`--inflight-to`) (if set, forced for all inflights)
+- **`--areas-count`**: Number of `Areas` in config (default: `32`)
 - **`--area-size`**: `AreaSize` in bytes (default: `134217728`)
 - **`--expected-chunk-size`**: `ExpectedChunkSize` in bytes (default: `134217728`)
+- **`--init-inflight`**: Initialization concurrency (default: `128`); independent of the measured queue-depth sweep
+- **`--background-write-ratio`**: Unmeasured background writes per measured read, in `[0,1]`. Repeat the option to run a matrix; default: `0.0`. Background writes share the configured inflight limit with reads.
+- **`--background-write-size-kib`**: Background write size (default: `4` KiB; power of two and at least 4)
+- **`--disable-ddisk-checksums`**: Disable DDisk and load-actor checksums for this invocation
+- **`--config-output-dir`**: Keep each generated ratio config in an existing directory as well as running it
 - **`--node-id` / `--pdisk-id` / `--ddisk-slot-id`**: DDiskId components (defaults: `1`)
+
+Every generated area is random and explicitly uses `InitType: INIT_ZEROES_FULL`.
+This makes read results hit the device in both checksum modes instead of using
+the in-memory zero shortcut for uninitialized blocks. The default 32 × 128 MiB
+layout is a 4 GiB NBS-shaped working set.
 
 #### Example (single device, write)
 ```bash
@@ -111,7 +129,11 @@ The `LogMode` field is set to `DDISK_WRITE` or `DDISK_READ` depending on the mod
 #### Example (single device, read)
 ```bash
 ./run_stress_tool_ddisk.sh --tool ./ydb_stress_tool --reads --label "ddisk read" \
-  --disk /dev/nvme_01 --output ddisk_read_result.json --run-count 3 --inflight-from 1 --inflight-to 32
+  --disk /dev/nvme_01 --output ddisk_read_result.json \
+  --inflight-from 1 --inflight-to 128 \
+  --background-write-ratio 0.0 --background-write-ratio 0.1 \
+  --background-write-ratio 0.25 --background-write-ratio 0.5 \
+  --background-write-ratio 1.0
 ```
 
 #### Example (multi-device)
@@ -192,6 +214,8 @@ Plots:
 - Throughput (`Speed`) vs `InFlight` (min/max whiskers, median dot)
 - IOPS vs `InFlight` (min/max whiskers, median dot)
 - Latency p50/p90/p95/p99 vs `InFlight` from the **median-IOPS run**
+- With `--background-heatmap`: a single report figure containing annotated
+  read-kIOPS and read-p99 heatmaps over background-write ratio × InFlight
 
 **Multi-device behavior:**
 - **Single input file with multi-device data:** plots one series per device.
@@ -209,6 +233,14 @@ python3 plot.py result.json /tmp/pdisk_write
 #   /tmp/pdisk_write_speed.png
 #   /tmp/pdisk_write_iops.png
 #   /tmp/pdisk_write_latency.png
+```
+
+#### Background-write heatmap
+
+```bash
+python3 plot.py ddisk_checksums_enabled.json \
+  --background-heatmap --prefix /tmp/ddisk_checksums_enabled
+# writes /tmp/ddisk_checksums_enabled_heatmap.png
 ```
 
 #### Example (multi-device, single file — per-device series)
@@ -229,6 +261,8 @@ Prints the same information as `plot.py`, but as **human-readable tables** to st
 - IOPS vs `InFlight` (min/median/max)
 - Latency percentiles p50/p90/p95/p99 vs `InFlight` from the **median-IOPS run** (SUM run for multi-device)
 - Per-run table with all runs including per-device and SUM rows (Device column added for multi-device)
+- With `--background-matrix`: compact plain-text read-kIOPS and read-p99
+  matrices over the same grid used by the heatmap
 
 #### Usage
 ```bash
@@ -238,6 +272,13 @@ python3 table.py <input_json>
 #### Example
 ```bash
 python3 table.py result.json
+```
+
+#### Background-write matrix
+
+```bash
+python3 table.py ddisk_checksums_enabled.json --background-matrix \
+  --output ddisk_checksums_enabled_table.txt
 ```
 
 ## Complete Workflow Example
