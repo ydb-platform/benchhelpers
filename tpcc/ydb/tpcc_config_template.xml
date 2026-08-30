@@ -4,7 +4,7 @@
     <!-- Connection details -->
     <type>YDB</type>
     <driver>tech.ydb.jdbc.YdbDriver</driver>
-    <url>jdbc:ydb:{grpc_scheme}://{ydb_host}:2135{db_path}?sessionTimeout=300s&amp;sessionPoolSizeMax={max_sessions}{auth_url_part}</url>
+    <url>jdbc:ydb:{grpc_scheme}://{ydb_host}:2135{db_path}?sessionTimeout=300s&amp;useQueryService=true&amp;sessionPoolSizeMax={max_sessions}{auth_url_part}</url>
     <isolation>TRANSACTION_SERIALIZABLE</isolation>
     {auth_params}
 
