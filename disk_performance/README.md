@@ -1,213 +1,166 @@
 # NVMe performance measurements
 
-This folder contains the scripts to run the NVMe oriented performance tests.
+Run `fio_device.sh` with a device to get practical NVMe characterization across **fresh, medium, and sustained** profiles. Each profile is prepared once, then measured with repeated, time-bounded fio workloads. Results include per-profile read/write heatmaps, raw repetitions, medians, variation, and device-state drift references.
 
-## Table of Contents
+## Run
 
-- [fio_device.sh](#fio_devicesh)
-- [precondition.sh](#preconditionsh)
-- [aio vs. uring](#aio-vs-uring)
+**All data on the selected target is discarded and overwritten.** Store results outside the tested NVMe.
 
-## fio_device.sh
-
-This script runs a number of fio tests on a single device. Device must be unmounted before running the script.
-All fio jobs run with `--numjobs=1`.
-
-We measure:
-1. Sequential throughput: read/write 1M at QD64.
-2. Random IOPS: read/write 4K and 8K at QD256.
-3. Random latency: read/write 4K and 8K at QD1.
-
-The test suite is repeated multiple times (`--run-count`) and variance is calculated across runs.
-By default, `fio_device.sh` uses `io_uring` with `--hipri=1 --sqthread_poll=1`.
-Use `--use-aio` if you want to force `libaio` mode.
-
-By default, `fio_device.sh` runs preconditioning before the benchmark loop.
-To run against a freshly discarded block device without preconditioning, use `--clean-device`.
-
-Note, `blkdiscard` is applied only once before the run loop, so read latency can drift between runs; reported latencies are taken from the median run.
-
-### Example
-
-Running on INTEL SSDPE2KE032T8 NVMe:
-```
-./fio_device.sh --filename /dev/nvme3n1p2 --results-dir ~/fio_device_logs/fio_device_nvme3_aged/ [--run-count 10] [--size-percent 100]
-./fio_device.sh --filename /dev/nvme3n1p2 --clean-device --results-dir ~/fio_device_logs/fio_device_nvme3_fresh/
+```bash
+sudo ./fio_device.sh --filename /dev/nvmeXn1
 ```
 
-Output example:
-```
-THROUGHPUT SUMMARY
-Operation                  QD    BW, MiB/s     IOPS (K)     p50 us     p90 us     p95 us     p99 us   p99.9 us
---------------------------------------------------------------------------------------------------------------
-Random read 4K            256         1708          437         67        489        503        544        630
---------------------------------------------------------------------------------------------------------------
-Random write 4K           256         1699          435         24        407        552        561        577
---------------------------------------------------------------------------------------------------------------
-Random read 8K            256         2999          383        284        518        548        749        941
---------------------------------------------------------------------------------------------------------------
-Random write 8K           256         2749          351        354       1187       1376       1883       2244
---------------------------------------------------------------------------------------------------------------
-Read 1M                    64         3223            3      19791      20316      20578      20971      22675
---------------------------------------------------------------------------------------------------------------
-Write 1M                   64         2855            2      21889      24510      25952      27394      28573
+The script displays identity, configuration, workload counts, preparation budgets, and an estimated time schedule before asking you to type the full target path. `--yes` skips that confirmation. A new timestamped results directory is created by default; `--results-dir` selects another location and must be new or empty.
 
-LATENCY SUMMARY
-Operation                  QD    BW, MiB/s     IOPS (K)     p50 us     p90 us     p95 us     p99 us   p99.9 us
---------------------------------------------------------------------------------------------------------------
-Random read 4K              1           79           20         51        100        101        102        103
---------------------------------------------------------------------------------------------------------------
-Random write 4K             1          353           90          8          9          9         24         30
---------------------------------------------------------------------------------------------------------------
-Random read 8K              1          105           13         70        125        165        168        171
---------------------------------------------------------------------------------------------------------------
-Random write 8K             1          610           78         10         11         13         25         36
+Partitions require explicit opt-in:
 
-LATENCY RUNS DETAIL
-   Run Operation                QD    BW, MiB/s     IOPS (K)     p50 us     p90 us     p95 us     p99 us   p99.9 us
-# Random read 4K
--------------------------------------------------------------------------------------------------------------------
-     1 Random read 4K            1          172           44          7         69         99        101        102
--------------------------------------------------------------------------------------------------------------------
-     2 Random read 4K            1          129           33          7         98        100        101        103
--------------------------------------------------------------------------------------------------------------------
-     3 Random read 4K            1          106           27          7         99        100        101        103
--------------------------------------------------------------------------------------------------------------------
-     4 Random read 4K            1           92           23         10        100        100        102        103
--------------------------------------------------------------------------------------------------------------------
-     5 Random read 4K            1           83           21         51        100        101        102        103
--------------------------------------------------------------------------------------------------------------------
-     6 Random read 4K            1           76           19         51        100        101        102        103
--------------------------------------------------------------------------------------------------------------------
-     7 Random read 4K            1           71           18         52        100        101        102        103
--------------------------------------------------------------------------------------------------------------------
-     8 Random read 4K            1           68           17         54        100        101        102        103
--------------------------------------------------------------------------------------------------------------------
-     9 Random read 4K            1           65           16         63        100        101        102        103
--------------------------------------------------------------------------------------------------------------------
-    10 Random read 4K            1           62           16         68        100        101        102        104
-
-# Random read 8K
--------------------------------------------------------------------------------------------------------------------
-     1 Random read 8K            1          232           29          8        101        124        166        168
--------------------------------------------------------------------------------------------------------------------
-     2 Random read 8K            1          171           21          8        121        160        166        168
--------------------------------------------------------------------------------------------------------------------
-     3 Random read 8K            1          138           17         51        123        164        168        168
--------------------------------------------------------------------------------------------------------------------
-     4 Random read 8K            1          120           15         62        124        164        168        171
--------------------------------------------------------------------------------------------------------------------
-     5 Random read 8K            1          110           14         69        124        164        168        171
--------------------------------------------------------------------------------------------------------------------
-     6 Random read 8K            1          101           12         72        156        166        168        171
--------------------------------------------------------------------------------------------------------------------
-     7 Random read 8K            1           96           12         80        127        166        168        171
--------------------------------------------------------------------------------------------------------------------
-     8 Random read 8K            1           90           11         96        162        166        168        171
--------------------------------------------------------------------------------------------------------------------
-     9 Random read 8K            1           89           11         96        158        166        168        171
--------------------------------------------------------------------------------------------------------------------
-    10 Random read 8K            1           85           11         97        162        166        168        173
-
-# Random write 4K
--------------------------------------------------------------------------------------------------------------------
-     1 Random write 4K           1          353           90          8          9          9         23         29
--------------------------------------------------------------------------------------------------------------------
-     2 Random write 4K           1          352           90          8          9          9         24         29
--------------------------------------------------------------------------------------------------------------------
-     3 Random write 4K           1          352           90          8          9          9         24         29
--------------------------------------------------------------------------------------------------------------------
-     4 Random write 4K           1          353           90          9          9          9         24         30
--------------------------------------------------------------------------------------------------------------------
-     5 Random write 4K           1          353           90          8          9          9         24         30
--------------------------------------------------------------------------------------------------------------------
-     6 Random write 4K           1          353           90          8          9          9         24         30
--------------------------------------------------------------------------------------------------------------------
-     7 Random write 4K           1          352           90          8          9          9         24         30
--------------------------------------------------------------------------------------------------------------------
-     8 Random write 4K           1          354           90          8          9          9         24         30
--------------------------------------------------------------------------------------------------------------------
-     9 Random write 4K           1          353           90          8          9          9         24         30
--------------------------------------------------------------------------------------------------------------------
-    10 Random write 4K           1          354           90          9          9          9         24         30
-
-# Random write 8K
--------------------------------------------------------------------------------------------------------------------
-     1 Random write 8K           1          611           78         10         11         13         24         35
--------------------------------------------------------------------------------------------------------------------
-     2 Random write 8K           1          613           78         10         10         13         24         35
--------------------------------------------------------------------------------------------------------------------
-     3 Random write 8K           1          611           78         10         11         13         25         36
--------------------------------------------------------------------------------------------------------------------
-     4 Random write 8K           1          610           78         10         11         13         25         36
--------------------------------------------------------------------------------------------------------------------
-     5 Random write 8K           1          608           77         10         11         13         25         36
--------------------------------------------------------------------------------------------------------------------
-     6 Random write 8K           1          610           78         10         11         13         25         36
--------------------------------------------------------------------------------------------------------------------
-     7 Random write 8K           1          611           78         10         10         13         25         36
--------------------------------------------------------------------------------------------------------------------
-     8 Random write 8K           1          607           77         10         11         14         25         36
--------------------------------------------------------------------------------------------------------------------
-     9 Random write 8K           1          610           78         10         11         13         25         36
--------------------------------------------------------------------------------------------------------------------
-    10 Random write 8K           1          608           77         10         11         13         25         36
-
-THROUGHPUT RUNS VARIANCE
-Operation                QD     BW min     BW max    BW median  BW stddev
--------------------------------------------------------------------------
-Random read 4K          256       1689       1737         1708      15.07
--------------------------------------------------------------------------
-Random write 4K         256       1683       1703         1699       6.09
--------------------------------------------------------------------------
-Random read 8K          256       2988       3038         2999      16.55
--------------------------------------------------------------------------
-Random write 8K         256       2712       2771         2749      14.53
--------------------------------------------------------------------------
-Read 1M                  64       3174       3223         3223      15.93
--------------------------------------------------------------------------
-Write 1M                 64       2833       2887         2855      18.34
-
-LATENCY RUNS VARIANCE
-Operation                QD     BW min     BW max    BW median  BW stddev
--------------------------------------------------------------------------
-Random read 4K            1         62        172           79      33.09
--------------------------------------------------------------------------
-Random write 4K           1        352        354          353       0.70
--------------------------------------------------------------------------
-Random read 8K            1         85        232          105      44.15
--------------------------------------------------------------------------
-Random write 8K           1        607        613          610       1.70
+```bash
+sudo ./fio_device.sh --filename /dev/nvmeXn1p2 --allow-partition \
+  --results-dir /path/on/other/storage/nvme-results
 ```
 
-To plot:
+An NVMe namespace (`nvmeXn1`) is the block device exposed by the SSD. A partition (`nvmeXn1p2`) selects a range within it. Writes/discards remain inside the selected partition, but caches, flash management, spare capacity, and temperature are shared with the rest of the device. Occupancy means a percentage of the **test partition**, and allocation elsewhere is uncontrolled. The report records partition/namespace sizes and their ratio. The namespace tree, including sibling partitions, must be free of mounts, swap, holders, and open device users.
+
+```bash
+# Read-only checks and preview; no target or result writes.
+sudo ./fio_device.sh --filename /dev/nvmeXn1p2 --allow-partition --dry-run
+
+# Used-state characterization only.
+sudo ./fio_device.sh --filename /dev/nvmeXn1p2 --allow-partition --profiles medium
+
+# Denser optional matrix, with a custom repeat count and measured duration.
+sudo ./fio_device.sh --filename /dev/nvmeXn1 --matrix full \
+  --run-count 3 --ramp-time 3s --measurement-time 10s
 ```
-python3.10 ./aggregate.py ~/fio_device_logs/fio_device_nvme3/ --plot --prefix fio_device_latency
+
+Ctrl-C stops active work and preserves partial results; it cannot restore discarded data and does not automatically resume the run. No destructive hardware test is part of automated tests.
+
+## Preparation and interpretation
+
+The default occupied and measured ranges are **80% of the target**. `--occupancy-percent` controls the initialized occupancy for medium and sustained; `--size-percent` controls the measured active range and defaults to occupancy. For medium/sustained the measured range cannot exceed initialized occupancy. Ranges round down to whole MiB.
+
+| Profile | One-time preparation | Default preparation cap |
+|---|---|---|
+| `fresh` | Discard, then initialize the measured range once, with no additional aging. | 30 minutes including discard/fill. |
+| `medium` | Discard, initialize 80% once, lightly overwrite randomly for at most 120 seconds **and at most 5% of occupied bytes**, then recover 60 seconds. | 30 minutes including discard/fill/overwrite/recovery. |
+| `sustained` | Discard, initialize 80% once, then apply bounded high-QD 4 KiB random-write conditioning. | 60 minutes **including discard and fill**. |
+
+Measurements do not rebuild preparation between cases or repeats. Device state evolves during a profile; early/late 4 KiB QD1 read references quantify some of that drift separately from matrix samples. Fresh means the initial profile baseline, not that every subsequent write runs on a newly discarded device.
+
+Sustained preparation records whether its conditioning workload appeared stable or reached its time cap. Stability checks use five approximately one-minute windows of write throughput and mean completion latency: range/mean at most 20%, fitted change/mean at most 10%, and two consecutive passing assessments. This can describe a temporary plateau; it does not prove cache exhaustion or long-term steady state. That status is separate from the success of subsequent measurements. There is **no full-capacity write floor for each low-QD test**, and no unlimited conditioning loop. This is practical characterization, **not steady-state certification for every workload or SNIA compliance**. SNIA's distinction between initial and workload-dependent conditioning is useful background, but its standard is a different protocol: [SNIA SSS PTS 2.0.2](https://www.snia.org/sites/default/files/2025-02/SNIA-SSS-PTS-2.0.2.pdf).
+
+If initialization cannot finish within the preparation cap, the run stops before measurements. After a complete fill, capped conditioning or shortened medium recovery can still produce measurements, but those cells carry `*` qualifications and the preparation table explains the incomplete steps. `not_requested` describes fresh preparation or explicitly disabled medium conditioning; skipped conditioning due to insufficient time is recorded as capped.
+
+Discard is the reset mechanism. The script does not format namespaces or change firmware, write cache, IRQ placement, or power settings. Uninitialized space is discarded, so occupancy also affects capacity available to the controller for reclamation. Data elsewhere on a partitioned device can affect results.
+
+## Matrix, repetitions, and runtime
+
+| Preset | Sequential cases | Random cases | Cases/profile |
+|---|---|---|---:|
+| `balanced` (default) | 128 KiB/1 MiB; read/write; QD1/64 | 4 KiB/8 KiB; read% 100,90,70,50,0; QD1,4,16,64 | 48 |
+| `full` | Same eight sequential cases | 4 KiB/8 KiB; read% 100,95,90,80,70,50,30,10,0; QD1,4,16,32,64 | 98 |
+
+Default: **five repeats/case, three-second excluded warmup, ten measured seconds/repeat**. Balanced therefore schedules 240 samples/profile and 720 samples across three profiles. Each profile's sample schedule is `48 × 5 × (3 + 10) = 3,120 seconds`, or **52 minutes**, before process overhead, references, and preparation. Default preparation caps add at most two hours across the three profiles; the printed whole-run budget also allows process overhead. Full matrix schedules approximately 106 minutes/profile before those additions.
+
+`--max-run-time` sets a whole-device-work deadline. When omitted, a finite cap is derived from preparation caps, sample/reference durations, and process-overhead allowances. It is a bound on device work, not a promise that optional report rendering finishes at exactly that deadline. The estimate and budget remain in the manifest/report. A cap or interrupted run can yield partial results; completed repetitions remain visible with their reduced sample count.
+
+With the defaults, the schedule including references and a two-second/sample overhead allowance is **60.5 minutes/profile**; the automatically calculated device-work cap is **5 hours 6 minutes 30 seconds** for all three profiles. Preparation can finish early. This cap is not an ETA or a guarantee under kernel faults: the runner bounds its waits and sends termination signals, but uninterruptible kernel I/O may persist and is reported as an error.
+
+| Preset with default timings | Samples/profile | Measurement schedule/profile, including references and overhead | All three profiles: device-work cap |
+|---|---:|---:|---:|
+| `balanced` | 240 | 60 min 30 sec | **5 h 6 min 30 sec** |
+| `full` | 490 | 123 min | **8 h 14 min** |
+| `--run-type smoke` | 20 | 1 min 28 sec | **12 min 24 sec** |
+
+These totals include all preparation caps plus five minutes of shared allowance. Running only fresh or medium has a default balanced cap of **1 h 35 min 30 sec**; sustained alone has **2 h 5 min 30 sec**. Four saturation probes add one minute per selected profile with default timings. Custom durations, ratios and repeat counts recalculate the cap and can extend it beyond these hours; setting a shorter `--max-run-time` stops the run rather than compressing the matrix.
+
+Preparation feasibility still depends on capacity and write speed: initializing 80% of a 4 TB target within 30 minutes requires at least 1.78 GB/s average, with additional time needed for discard and medium overwrite/recovery. A larger or slower SSD may need higher preparation caps or a smaller initialized/measured range. The preview records the bytes to initialize, and fill progress records the estimated remaining time.
+
+Mixed cases use one fio `randrw` job with `rwmixread`. Ratios describe read/write **operation percentages**; both directions share the total QD and use equal block sizes. Achieved operation/byte ratios are reported separately. Pure endpoints are reused as heatmap rows without duplicate cases.
+
+The ratio × QD layout follows [`../stress_tool/`](../stress_tool/) at commit `b517443f9bceecbb65e3aa4bc63dc62e3af4d342`. That tool's background ratio means writes per read: for equal-size operations, read percentage is `100 / (1 + ratio)`; ratio 0.25 means 80/20, while ratio 1 means 50/50. Its scheduler differs from fio's mixed-job scheduler, so matching axes do not imply identical workloads.
+
+Defaults use one direct-I/O worker, ordinary `io_uring`, explicit seeds/payload policy, independently sampled random offsets, and single-I/O submission batching. CPU placement, achieved depth, and CPU use are recorded. One worker may not saturate every NVMe. `--saturation-probe` adds four single-sample random QD256 diagnostics per profile (4/8 KiB read/write); these are distinct from the main matrix.
+
+## Controls and dependencies
+
+| Option | Default / meaning |
+|---|---|
+| `--profiles` | `fresh,medium,sustained`; unique subset. Old names `used-recovered` and `sustained-steady` are aliases. |
+| `--matrix` | `balanced`; `full` provides the dense optional grid. |
+| `--read-percentages` | Override preset random ratios with unique comma-separated integers 0–100. |
+| `--run-count` | `5` planned repetitions per case; the first failure stops the run and preserves successful repetitions. |
+| `--ramp-time` | `3s`, excluded warmup; zero allowed. |
+| `--measurement-time`, `--runtime` | `10s`, measured time per repetition. |
+| `--occupancy-percent` | `80`, medium/sustained occupancy. |
+| `--size-percent` | Occupancy percentage by default; measured range. |
+| `--medium-conditioning-time` | `120s`, also capped at 5% of occupied bytes; zero allowed. |
+| `--recovery-time` | `60s`, medium recovery; zero allowed. |
+| `--max-preparation-time` | `30m`, all fresh/medium preparation. |
+| `--max-conditioning-time` | `60m`, all sustained preparation, including fill. |
+| `--max-run-time` | Finite automatically calculated whole-run device-work cap. |
+| `--saturation-probe` | Add four QD256 diagnostics/profile. |
+| `--use-aio` | Use `libaio` instead of `io_uring`. |
+| `--polling` | Specialized io_uring polling with registered files and separate physical SQ-poll CPU; requires support and conflicts with `--use-aio`. |
+| `--prefix` | `nvme`, report title label. |
+| `--run-type smoke` | Reduced matrix/range/durations for destructive workflow checks, not performance evidence. **Still discards the entire target.** |
+
+Durations accept seconds or suffixes `s`, `m`, `h`, `d`. `--clean-device` remains a deprecated alias for fresh-only. Standalone probe/random-pass options from the old scripts are not supported. See `--help` for the full interface and [fio's official manual](https://fio.readthedocs.io/en/latest/fio_doc.html) for engine and mixed-I/O semantics.
+
+Required: Linux, Python 3, fio with the chosen engine, plus `blkdiscard`, `lsblk`, `blockdev`, `findmnt`, `swapon`, and `fuser`. `nvme-cli` enables identification and SMART/temperature/health monitoring; missing telemetry is explicitly recorded. The script does not install packages automatically.
+
+**Matplotlib is optional.** HTML heatmap tables, text and CSV work without it; installing it adds embedded PNG heatmaps/QD/time-series plots:
+
+```bash
+python3 -m pip install -r requirements.txt
 ```
-![Random read 4K latency by run](img/fio_device_latency_random_read_4k.png)
-![Random read 8K latency by run](img/fio_device_latency_random_read_8k.png)
-![Random write 4K latency by run](img/fio_device_latency_random_write_4k.png)
-![Random write 8K latency by run](img/fio_device_latency_random_write_8k.png)
 
-## precondition.sh
+`sudo` may use another Python environment. An isolated alternative is `python3 -m pip install --target /absolute/dependency/directory -r requirements.txt`, followed by `sudo env PYTHONPATH=/absolute/dependency/directory ./fio_device.sh ...`. There is no hardcoded machine-specific dependency directory.
 
-Preconditions a disk target (or selected `--size-percent`) with sequential fill plus optional random-write runs.
-For block devices it applies `blkdiscard` first and prints probe latency/bandwidth summaries between stages.
+## Output and statistics
 
-In other words, it runs the following:
-1. `blkdiscard` once (block devices only).
-2. Optional short initial random-write probe (`4K`, `iodepth=32`) when `--probes` is enabled.
-3. Repeat `--sequential-run-count` times (default `2`): sequential fill (`1M`) over `--size-percent` of the target.
-4. Repeat `--rand-run-count` times (default `1`): random preconditioning (`8K`).
-5. Optional sequential fill after each random run when `--fill-after-rand` is set.
-6. Optional probe after each random run when `--probes` is enabled.
+| Artifact | Contents |
+|---|---|
+| `report.html` | Offline profile tables/heatmaps, repeat spread/sample qualifications, preparation progress/status, budget, read-reference drift, device/telemetry, optional embedded plots. |
+| `result.txt` | Terminal-friendly matrices and status summaries. |
+| `results.csv` | One directional summary row per case: median metrics, repeat min/median/max/sample SD, counts, achieved ratios, quality/approximation flags. |
+| `raw-runs.csv` | Separate rows for individual repetitions, including failures, run index, seed, elapsed time, counts, and raw-run metrics. |
+| `manifest.json` | Versioned schema, all point/run records, preparation, budgets, reference measurements, device and telemetry. |
+| `<profile>/<point>/<run>/` | Exact command, fio JSON+ output/stderr, final job result, and one-second throughput logs. Latency histograms are embedded in JSON+; separate histogram log files are not produced. |
+| `preparation/` | One-time preparation records and raw commands/results. |
 
-It can also be used as a standalone benchmark together with an external disk metrics collector. In particular, after filling an NVMe device and then running random writes, you may observe a dramatic performance drop, as shown below:
+Heatmaps show **median read/write kIOPS and median per-run read/write p99 completion latency**. A median of run-level p99 values is not a pooled p99. Pooled percentiles from summed histogram counts are separate CSV/raw fields. Rate/latency medians may form a synthetic summary rather than a single representative run; counts sum successful runs, and achieved ratios use pooled counts. Spread uses sample standard deviation (one successful run has SD zero, not evidence of repeatability).
 
-![Fill disk run](img/fill_disk_2026-02-23_23-16-55.png)
+Corresponding heatmaps share scales across profiles. `N/A` means an inactive direction. Results based on successful but incomplete repeats remain numeric with `*` qualifications; absent results stay gray. Advisory tail-sample flags identify sparse percentiles without claiming statistical confidence. Maximum-latency approximations are labeled; median run maximum and maximum observed across runs are distinct fields. CSV units are bytes/s and nanoseconds; displayed units are explicit. Completion latency does not establish application durability or transaction latency.
 
+The manifest updates after every repetition; HTML/CSV/text reports update during preparation, after each case, and at run termination. This keeps report rendering out of active measurements and limits its overhead. No fixed ranking between profiles is assumed: inspect drift, temperature, CPU/depth, achieved ratios, and repeat spread. Fio/device failures and reported critical health changes stop device work and preserve completed samples. A final SMART check runs before declaring completion when telemetry is available. Read-only engine capability failures and run-stop reasons are retained in the manifest and reports. Host writes use target kernel counters when available; missing counters make the reported total a labeled lower bound that may omit warmup writes. Early/late reference writes are included in accounting.
 
-## aio vs. uring
+Optional time-series plots show one representative successful repeat per point, selected by total IOPS nearest the point median and labeled explicitly. All repeats remain in raw files. Long logs use bounded min/mean/max downsampling with spike retention; raw logs stay unchanged. Histogram payloads remain in JSON/manifest files rather than the HTML to keep report refreshes small. Optional plotting errors leave HTML tables, CSV, and text usable. CSV also preserves p90 and the scope of the achieved-depth distribution; fio's depth counters can include cumulative job activity rather than only the selected measurement interval.
 
-See [aio_vs_uring/README.md](aio_vs_uring/README.md) for details.
+```bash
+python3 ./aggregate.py /path/to/results
+```
 
+The aggregator accepts current schema 2 and historical schema 1 manifests. Schema 1 keeps its historical measurement semantics. Directories without a manifest retain the old aggregation path, including legacy `--plot` behavior.
+
+The namespace-wide advisory lock is held across preparation, idle recovery, measurements and reporting, preventing another instance of this runner from testing a sibling partition concurrently. It cannot stop unrelated programs from opening the device after validation; keep the device otherwise idle.
+
+## Standalone preparation and development
+
+```bash
+sudo ./precondition.sh --filename /dev/nvmeXn1p2 --allow-partition \
+  --profiles medium --results-dir /path/on/other/storage/preparation
+```
+
+Standalone preparation requires exactly one profile, performs only its bounded baseline preparation, and writes its records. It does not run the measurement matrix or certify steady state for arbitrary later workloads.
+
+Automated tests use fixtures/mocked commands and require no real NVMe:
+
+```bash
+python3 -m unittest discover -p 'test_profile*.py' -v
+python3 -m unittest discover -p 'test_nvme*.py' -v
+```
+
+Tests cover both matrices and all profiles with simulated slow fill/nonconverging conditioning, timeout/interruption paths, preparation qualifications, safety checks and partial reports. When fio is installed, diskless `null` engine tests exercise real subprocess handling and excluded warmup counters. These checks validate orchestration, not hardware performance. Existing schema 1 hardware results do not validate the current schema 2 workflow.
+
+See [aio_vs_uring/README.md](aio_vs_uring/README.md) for separate aio-versus-io_uring experiments.

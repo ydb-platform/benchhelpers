@@ -141,6 +141,20 @@ def main():
         print(f"results dir does not exist: {args.results_dir}", file=sys.stderr)
         return 1
 
+    manifest_path = os.path.join(args.results_dir, "manifest.json")
+    if os.path.isfile(manifest_path):
+        from profile_report import render_report
+        with open(manifest_path, encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        if manifest.get("schema_version") not in (1, 2):
+            print("unsupported benchmark manifest schema", file=sys.stderr)
+            return 1
+        paths = render_report(args.results_dir, manifest, plots=True)
+        with open(paths["result.txt"], encoding="utf-8") as handle:
+            print(handle.read(), end="")
+        print(f"report: {paths['report.html']}", file=sys.stderr)
+        return 0
+
     run_dirs = collect_run_dirs(args.results_dir)
 
     throughput_ops = [
