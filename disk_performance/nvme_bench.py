@@ -5,7 +5,9 @@ import datetime as dt
 import contextlib
 import contextvars
 import fcntl
+import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -15,12 +17,25 @@ import stat
 import subprocess
 import sys
 import time
+import warnings
 
 PROFILES = ['fresh', 'medium', 'sustained']
 PROFILE_ALIASES = {'used-recovered': 'medium', 'sustained-steady': 'sustained'}
 READ_PERCENTAGES = [100, 95, 90, 80, 70, 50, 30, 10, 0]
 BALANCED_RATIOS = [100, 90, 70, 50, 0]
 ALIGN = 1024 * 1024
+COMPARISON_ANCHORS = [
+    ('sr1m_qd64', 'sequential', 1048576, 64, 100),
+    ('rr4k_qd1', 'random', 4096, 1, 100),
+    ('rr4k_qd64', 'random', 4096, 64, 100),
+    ('rr8k_qd64', 'random', 8192, 64, 100),
+    ('rw4k_qd32', 'random', 4096, 32, 70),
+    ('wr4k_qd64', 'random', 4096, 64, 0),
+    ('wr4k_qd1', 'random', 4096, 1, 0),
+]
+TRIAL_ORDERS = [('fresh', 'medium', 'sustained'),
+                ('medium', 'sustained', 'fresh'),
+                ('sustained', 'fresh', 'medium')]
 COMMAND_DEADLINE = contextvars.ContextVar('nvme_command_deadline', default=None)
 COMMAND_CANCELLED = contextvars.ContextVar('nvme_command_cancelled', default=None)
 
@@ -114,14 +129,19 @@ def parser():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument('--filename', required=True, help='NVMe target; ALL DATA ON THIS TARGET WILL BE LOST')
     p.add_argument('--profiles', default=','.join(PROFILES), help='comma-separated profiles to run')
-    p.add_argument('--occupancy-percent', type=int, default=80, help='occupied percentage of target for medium AND sustained')
+    p.add_argument('--occupancy-percent', type=int, default=80, help='identical initialized occupancy for every profile')
     p.add_argument('--size-percent', type=int, default=None, help='measurement range percentage; default occupancy-percent, cannot exceed it')
-    p.add_argument('--matrix', choices=['balanced', 'full'], default='balanced', help='48 or 98 cases per profile before custom ratios')
-    p.add_argument('--run-count', type=positive_int, default=5, help='repeated samples per matrix case')
-    p.add_argument('--ramp-time', type=nonnegative_duration, default=3, help='warmup excluded from each sample')
+    p.add_argument('--protocol', choices=['comparison', 'sweep'], default=None)
+    p.add_argument('--matrix', choices=['balanced', 'full'], default=None, help='sweep matrix; implies --protocol sweep')
+    p.add_argument('--trials', type=positive_int, default=None)
+    p.add_argument('--seed', type=positive_int, default=20260909)
+    p.add_argument('--workers', type=int, choices=[1, 2, 4], default=4)
+    p.add_argument('--numa-node', type=int, default=0)
+    p.add_argument('--run-count', type=positive_int, default=None, help='local repeats per workload')
+    p.add_argument('--ramp-time', type=nonnegative_duration, default=None, help='warmup excluded from each sample')
     p.add_argument('--recovery-time', type=nonnegative_duration, default=60, help='medium idle recovery, included in preparation limit')
     p.add_argument('--medium-conditioning-time', type=nonnegative_duration, default=120, help='medium overwrite cap; also limited to 5%% of occupied bytes')
-    p.add_argument('--measurement-time', type=duration, default=10, help='measured seconds per repeat, all profiles')
+    p.add_argument('--measurement-time', type=duration, default=None, help='measured seconds per repeat, all profiles')
     p.add_argument('--runtime', type=duration, help='alias for --measurement-time')
     p.add_argument('--max-preparation-time', type=duration, default=1800, help='fresh/medium preparation limit INCLUDING discard, fill and recovery')
     p.add_argument('--max-conditioning-time', type=duration, default=3600, help='sustained preparation limit INCLUDING discard and fill')
@@ -145,6 +165,22 @@ def parse_args(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     p = parser()
     args = p.parse_args(argv)
+    explicit = {item.split('=', 1)[0] for item in argv}
+    if args.protocol is None:
+        args.protocol = 'sweep' if '--matrix' in explicit else 'comparison'
+        if '--matrix' in explicit:
+            print('--matrix without --protocol selects --protocol sweep (migration)', file=sys.stderr)
+    if args.protocol == 'comparison' and any(x in explicit for x in ('--matrix', '--read-percentages', '--saturation-probe', '--use-aio', '--polling')):
+        p.error('matrix and specialized sweep options require --protocol sweep')
+    args.matrix = args.matrix or 'balanced'
+    args.trials = args.trials or (3 if args.protocol == 'comparison' else 1)
+    if args.prepare_only and '--trials' not in explicit:
+        args.trials = 1
+    if args.protocol == 'sweep' and args.trials != 1:
+        p.error('sweep supports one evolving-state pass; use comparison for independent trials')
+    args.run_count = args.run_count or (1 if args.protocol == 'comparison' else 5)
+    args.ramp_time = 5 if args.ramp_time is None and args.protocol == 'comparison' else (3 if args.ramp_time is None else args.ramp_time)
+    args.measurement_time = 20 if args.measurement_time is None and args.protocol == 'comparison' else (10 if args.measurement_time is None else args.measurement_time)
     if args.runtime is not None:
         if any(arg.split('=', 1)[0] == '--measurement-time' for arg in argv):
             p.error('use either --runtime or --measurement-time')
@@ -164,8 +200,8 @@ def parse_args(argv=None):
         args.size_percent = args.occupancy_percent
     if not 1 <= args.size_percent <= 100:
         p.error('size-percent must be in [1,100]')
-    if any(x != 'fresh' for x in args.profiles) and args.size_percent > args.occupancy_percent:
-        p.error('size-percent cannot exceed occupancy-percent for medium/sustained')
+    if args.size_percent > args.occupancy_percent:
+        p.error('size-percent cannot exceed occupancy-percent for any profile')
     if args.read_percentages is None:
         args.read_percentages = list(BALANCED_RATIOS if args.matrix == 'balanced' else READ_PERCENTAGES)
     if args.polling and args.use_aio:
@@ -181,10 +217,29 @@ def parse_args(argv=None):
         args.max_preparation_time = 60
         args.max_conditioning_time = 60
         args.read_percentages = [100, 50, 0]
+        if args.protocol == 'comparison':
+            args.trials = 1
     return args
 
 
 def build_points(args):
+    if args.protocol == 'comparison':
+        points = []
+        for trial in range(1, args.trials + 1):
+            for profile in TRIAL_ORDERS[(trial - 1) % len(TRIAL_ORDERS)]:
+                if profile not in args.profiles:
+                    continue
+                prep_id = f't{trial:02d}_{profile}'
+                for anchor, pattern, bs, qd, read_pct in COMPARISON_ANCHORS:
+                    ident = f'{prep_id}_{anchor}'
+                    point = dict(id=ident, trial=trial, anchor=anchor, preparation_id=prep_id,
+                                 profile=profile, pattern=pattern, bs=bs, qd=qd, read_pct=read_pct,
+                                 status='pending', history=[], runs=[], kind='anchor',
+                                 run_count=args.run_count, relative_dir=f'trial_{trial:02d}/{profile}/{anchor}')
+                    if anchor == 'wr4k_qd1':
+                        point['stage'] = 'after_wr4k_qd64_before_final_read_references'
+                    points.append(point)
+        return points
     random_qds = ([1, 4, 16, 64] if args.matrix == 'balanced' else [1, 4, 16, 32, 64]) if args.run_type == 'normal' else [1]
     ratios = args.read_percentages
     specs = [('sequential', bs, qd, r) for r in [100, 0]
@@ -193,21 +248,93 @@ def build_points(args):
     # Identical across profiles: pure reads first, increasingly write-heavy groups last.
     specs.sort(key=lambda x: (-x[3], x[0] != 'sequential', x[1], x[2]))
     points = []
-    for profile in args.profiles:
-        for pattern, bs, qd, read_pct in specs:
-            ident = f'{pattern}_{bs}_qd{qd}_r{read_pct}'
-            points.append(dict(id=ident, profile=profile, pattern=pattern, bs=bs, qd=qd,
-                               read_pct=read_pct, status='pending', history=[], runs=[],
-                               kind='matrix', run_count=args.run_count,
-                               relative_dir=f'{profile}/{ident}'))
-        if args.saturation_probe:
-            for bs in [4096, 8192]:
-                for read_pct in [100, 0]:
-                    ident = f'saturation_{bs}_qd256_r{read_pct}'
-                    points.append(dict(id=ident, profile=profile, pattern='random', bs=bs, qd=256,
-                                       read_pct=read_pct, status='pending', history=[], runs=[],
-                                       kind='saturation', run_count=1, relative_dir=f'{profile}/{ident}'))
+    for trial in range(1, args.trials + 1):
+        for profile in args.profiles:
+            prep_id = f't{trial:02d}_{profile}'
+            for pattern, bs, qd, read_pct in specs:
+                anchor = f'{pattern}_{bs}_qd{qd}_r{read_pct}'
+                ident = f'{prep_id}_{anchor}'
+                points.append(dict(id=ident, trial=trial, anchor=anchor, preparation_id=prep_id,
+                                   profile=profile, pattern=pattern, bs=bs, qd=qd,
+                                   read_pct=read_pct, status='pending', history=[], runs=[],
+                                   kind='matrix', run_count=args.run_count,
+                                   relative_dir=f'trial_{trial:02d}/{profile}/{anchor}'))
+            if args.saturation_probe:
+                for bs in [4096, 8192]:
+                    for read_pct in [100, 0]:
+                        anchor = f'saturation_{bs}_qd256_r{read_pct}'
+                        ident = f'{prep_id}_{anchor}'
+                        points.append(dict(id=ident, trial=trial, anchor=anchor, preparation_id=prep_id,
+                                           profile=profile, pattern='random', bs=bs, qd=256,
+                                           read_pct=read_pct, status='pending', history=[], runs=[],
+                                           kind='saturation', run_count=1,
+                                           relative_dir=f'trial_{trial:02d}/{profile}/{anchor}'))
     return points
+
+
+def build_schedule(args, points):
+    """Materialize all preparation and observation identities before device work."""
+    by_prep = {}
+    for point in points:
+        by_prep.setdefault(point['preparation_id'], []).append(point)
+    schedule, references = [], []
+    for trial in range(1, args.trials + 1):
+        order = TRIAL_ORDERS[(trial - 1) % len(TRIAL_ORDERS)] if args.protocol == 'comparison' else args.profiles
+        for profile in order:
+            if profile not in args.profiles:
+                continue
+            prep_id = f't{trial:02d}_{profile}'
+            schedule.append(dict(kind='preparation', trial=trial, profile=profile, id=prep_id))
+            if args.prepare_only:
+                continue
+            def sweep_reference(stage):
+                ident = f'{prep_id}_reference_{stage}'
+                ref = dict(id=ident, trial=trial, anchor='rr4k_qd1', stage=stage,
+                           preparation_id=prep_id, profile=profile, pattern='random', bs=4096,
+                           qd=1, read_pct=100, status='pending', runs=[], kind='reference',
+                           run_count=1, relative_dir=f'trial_{trial:02d}/{profile}/reference_{stage}')
+                references.append(ref)
+                schedule.append(dict(kind='reference', trial=trial, profile=profile, id=ident,
+                                     preparation_id=prep_id, anchor='rr4k_qd1', stage=stage))
+            if args.protocol == 'sweep':
+                sweep_reference('early')
+            for point in by_prep.get(prep_id, []):
+                schedule.append(dict(kind='observation', trial=trial, profile=profile, id=point['id'],
+                                     preparation_id=prep_id, anchor=point['anchor'],
+                                     **({'stage': point['stage']} if point.get('stage') else {})))
+            if args.protocol == 'comparison':
+                for anchor, _, bs, qd, read_pct in (COMPARISON_ANCHORS[1], COMPARISON_ANCHORS[2]):
+                    ident = f'{prep_id}_reference_{anchor}'
+                    ref = dict(id=ident, trial=trial, anchor=anchor, preparation_id=prep_id,
+                               profile=profile, pattern='random', bs=bs, qd=qd, read_pct=read_pct,
+                               status='pending', history=[], runs=[], kind='reference', run_count=1,
+                               relative_dir=f'trial_{trial:02d}/{profile}/reference_{anchor}')
+                    references.append(ref)
+                    schedule.append(dict(kind='reference', trial=trial, profile=profile, id=ident,
+                                         preparation_id=prep_id, anchor=anchor))
+            else:
+                # Sweep retains the historical QD1 read drift references.
+                sweep_reference('late')
+    return schedule, references
+
+
+def sample_seed(base, trial, anchor, worker, repeat):
+    key = f'{base}:{trial}:{anchor}:{worker}:{repeat}'.encode('ascii')
+    return int.from_bytes(hashlib.sha256(key).digest()[:4], 'big') % (2**31 - 2) + 1
+
+
+def job_bytes(result, direction):
+    if not result:
+        return 0
+    if 'read' in result:
+        return result[direction]['io_bytes']
+    return sum(job[direction]['io_bytes'] for job in result.values())
+
+
+def job_runtime(result):
+    if 'read' in result:
+        return result.get('job_runtime', 0)
+    return max((job.get('job_runtime', 0) for job in result.values()), default=0)
 
 
 def flatten(nodes):
@@ -231,6 +358,32 @@ def cpulist(value):
         ends = part.split('-')
         result.extend(range(int(ends[0]), int(ends[-1]) + 1))
     return result
+
+
+def numa_placement(node, allowed=None):
+    """Choose distinct physical cores in the requested online/permitted node."""
+    if node < 0:
+        raise RuntimeError('NUMA node must be nonnegative')
+    root = Path(f'/sys/devices/system/node/node{node}')
+    online = cpulist(read_text(root / 'cpulist'))
+    if not online or read_text(root / 'cpulist') is None:
+        raise RuntimeError(f'NUMA node {node} is unavailable')
+    permitted = set(os.sched_getaffinity(0) if allowed is None else allowed)
+    online_cpus = set(cpulist(read_text('/sys/devices/system/cpu/online')))
+    pool = sorted(permitted & set(online) & online_cpus)
+    if not pool:
+        raise RuntimeError(f'no online permitted CPUs in NUMA node {node}')
+    physical = []
+    seen = set()
+    for cpu in pool:
+        core = (read_text(f'/sys/devices/system/cpu/cpu{cpu}/topology/physical_package_id'),
+                read_text(f'/sys/devices/system/cpu/cpu{cpu}/topology/core_id'))
+        if core in seen:
+            continue
+        seen.add(core)
+        physical.append(cpu)
+    return dict(numa_node=node, cpu_pool=pool, physical_cpus=physical,
+                memory_policy=f'bind:{node}', permitted_cpus=sorted(permitted))
 
 
 def inspect_device(args):
@@ -274,12 +427,9 @@ def inspect_device(args):
     controller = re.match(r'nvme\d+', namespace)[0]
     ctrl_sys = Path('/sys/class/nvme') / controller
     numa = read_text(ctrl_sys / 'device/numa_node')
-    allowed = sorted(os.sched_getaffinity(0))
-    local = cpulist(read_text(f'/sys/devices/system/node/node{numa}/cpulist')) if numa and numa != '-1' else []
-    candidates = [cpu for cpu in allowed if cpu in local] or allowed
-    cpu = candidates[0]
-    siblings = cpulist(read_text(f'/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list'))
-    poll_cpu = next((c for c in candidates if c not in siblings), None)
+    placement = numa_placement(args.numa_node)
+    cpu = placement['physical_cpus'][0]
+    poll_cpu = placement['physical_cpus'][1] if len(placement['physical_cpus']) > 1 else None
     if args.polling and poll_cpu is None:
         raise RuntimeError('polling needs a second available physical CPU')
     info = dict(path=str(path), namespace=f'/dev/{namespace}', controller=f'/dev/{controller}',
@@ -288,7 +438,7 @@ def inspect_device(args):
                 major_minor=f'{os.major(st.st_rdev)}:{os.minor(st.st_rdev)}',
                 model=read_text(ctrl_sys / 'model'), serial=read_text(ctrl_sys / 'serial'),
                 firmware=read_text(ctrl_sys / 'firmware_rev'), numa_node=numa,
-                cpu=cpu, poll_cpu=poll_cpu, layout=tree,
+                cpu=cpu, poll_cpu=poll_cpu, layout=tree, placement=placement,
                 scheduler=read_text(ns_sys / 'queue/scheduler'),
                 write_cache=read_text(ns_sys / 'queue/write_cache'),
                 link_speed=read_text(ctrl_sys / 'device/current_link_speed'),
@@ -387,10 +537,14 @@ class Runner:
         self.initial_warning = None
         self.run_deadline = None
         self.last_job = None
-        self.manifest = dict(schema_version=2, started_at=now(), status='running',
+        points = build_points(args)
+        schedule, references = build_schedule(args, points)
+        self.manifest = dict(schema_version=3, started_at=now(), status='running',
                              runner_pid=os.getpid(),
-                             config=vars(args).copy(), device=device, points=build_points(args),
-                             warnings=[], telemetry=[], preparation=[], references=[])
+                             config=vars(args).copy(), device=device, points=points, schedule=schedule,
+                             warnings=[], telemetry=[], preparation=[], references=references)
+        if args.protocol == 'comparison':
+            self.manifest['config']['comparison_protocol_revision'] = 2
         self.manifest['config']['queue_depths'] = sorted({p['qd'] for p in self.manifest['points'] if p['kind'] == 'matrix' and p['pattern'] == 'random'})
         if args.run_type == 'smoke':
             self.manifest['config']['read_percentages'] = [100, 50, 0]
@@ -399,34 +553,44 @@ class Runner:
             self.manifest['warnings'].append('Partition test: occupancy is a percentage of the partition; other namespace state is uncontrolled')
         if not shutil.which('nvme'):
             self.manifest['warnings'].append('nvme-cli unavailable: SMART and health monitoring unavailable')
-        self.manifest['warnings'].append('Profiles describe the initial state, not an immutable state: writes during the matrix change the device. Not an SNIA steady-state certification.')
+        self.manifest['warnings'].append('Profiles describe preparation state; ordered writes change the device. Stability describes only the conditioning workload, not universal SSD/SNIA steady state.')
         self.prepare_number = 0
 
     def minimum_writes(self):
-        preparation = sum(self.occupied_size(profile) for profile in self.args.profiles)
-        return dict(preparation_bytes=preparation, sustained_write_floor_bytes=0,
-                    total_bytes=preparation,
-                    note='One initialization per profile. Additional bounded conditioning and measurement writes are not included; there is no write-volume minimum.')
+        prep = [s for s in self.manifest['schedule'] if s['kind'] == 'preparation']
+        initialization = sum(self.occupied_size(s['profile']) for s in prep)
+        medium = sum(((self.occupied_size(s['profile']) * 5 + 99) // 100 + 4095) // 4096 * 4096
+                     for s in prep if s['profile'] == 'medium')
+        sustained = sum(self.occupied_size(s['profile']) for s in prep if s['profile'] == 'sustained')
+        return dict(preparation_bytes=initialization, medium_write_target_bytes=medium,
+                    sustained_write_floor_bytes=sustained,
+                    total_bytes=initialization + medium + sustained,
+                    note='Initialization is mandatory per preparation; sustained requires at least one occupied-range volume. Medium targets five percent of occupied bytes within 120 seconds. Additional stability and measurement writes are not included.')
 
     def preparation_limit(self, profile):
         return self.args.max_conditioning_time if profile == 'sustained' else self.args.max_preparation_time
 
     def budget(self):
         profiles = {}
+        prep_schedule = [s for s in self.manifest['schedule'] if s['kind'] == 'preparation']
         for profile in self.args.profiles:
             points = [] if self.args.prepare_only else [p for p in self.manifest['points'] if p['profile'] == profile]
+            refs = [] if self.args.prepare_only else [p for p in self.manifest['references'] if p['profile'] == profile]
             samples = sum(p['run_count'] for p in points)
-            refs = 0 if self.args.prepare_only else 2
+            ref_samples = sum(p['run_count'] for p in refs)
+            profile_preps = sum(s['profile'] == profile for s in prep_schedule)
             profiles[profile] = dict(case_count=len(points), sample_count=samples,
                 measurement_work_s=samples * (self.args.ramp_time + self.args.measurement_time),
-                measurement_overhead_allowance_s=2 * (samples + refs),
-                reference_work_s=refs * (self.args.ramp_time + self.args.measurement_time),
-                preparation_cap_s=self.preparation_limit(profile),
-                occupied_bytes=self.occupied_size(profile), measurement_bytes=self.size(profile))
+                measurement_overhead_allowance_s=2 * (samples + ref_samples),
+                reference_work_s=ref_samples * (self.args.ramp_time + self.args.measurement_time),
+                preparation_cap_s=profile_preps * self.preparation_limit(profile),
+                occupied_bytes=self.occupied_size(profile), measurement_bytes=self.size(profile),
+                preparation_count=profile_preps)
         result = {key: sum(p[key] for p in profiles.values()) for key in
                   ('case_count', 'sample_count', 'measurement_work_s', 'measurement_overhead_allowance_s', 'reference_work_s', 'preparation_cap_s')}
-        result.update(profiles=profiles, preparation_count=len(profiles),
-                      minimum_initialization_bytes=self.minimum_writes()['total_bytes'])
+        result.update(profiles=profiles, preparation_count=len(prep_schedule),
+                      reference_count=len(self.manifest['references']),
+                      minimum_initialization_bytes=self.minimum_writes()['preparation_bytes'])
         automatic = sum(result[k] for k in ('measurement_work_s', 'measurement_overhead_allowance_s', 'reference_work_s', 'preparation_cap_s')) + 300
         result['run_cap_s'] = self.args.max_run_time or automatic
         result['note'] = ('Timing is a schedule, not a throughput prediction. Preparation caps include discard, fill, conditioning and recovery. '
@@ -517,7 +681,7 @@ class Runner:
         return self.range_size(self.args.size_percent)
 
     def occupied_size(self, profile):
-        return self.size(profile) if profile == 'fresh' else self.range_size(self.args.occupancy_percent)
+        return self.range_size(self.args.occupancy_percent)
 
     def range_size(self, percent):
         size = self.device['size_bytes']
@@ -532,15 +696,85 @@ class Runner:
     def fio_base(self):
         result = ['fio', f"--filename={self.device['path']}", '--direct=1', '--numjobs=1',
                   '--thread=1', '--ioengine=' + ('libaio' if self.args.use_aio else 'io_uring'),
-                  '--randrepeat=1', '--randseed=20260909', '--refill_buffers=1',
+                  '--randrepeat=1', f'--randseed={self.args.seed}', '--refill_buffers=1',
                   '--scramble_buffers=1', '--verify=0', '--norandommap=1',
                   '--iodepth_batch_submit=1', '--iodepth_batch_complete_min=1',
                   '--percentile_list=50:90:95:99:99.9', '--lat_percentiles=1', '--clat_percentiles=1',
-                  '--output-format=json+', f"--cpus_allowed={self.device['cpu']}"]
+                  '--output-format=json+', f"--numa_mem_policy=bind:{self.args.numa_node}"]
         if self.args.polling:
             result += ['--hipri=1', '--sqthread_poll=1', '--registerfiles=1',
                        f"--sqthread_poll_cpu={self.device['poll_cpu']}"]
         return result
+
+    def worker_layout(self, pattern, qd, size, requested=None):
+        count = 1 if pattern == 'sequential' else min(self.args.workers if requested is None else requested, qd)
+        cores = self.device.get('placement', {}).get('physical_cpus', [self.device['cpu']])
+        if len(cores) < count:
+            raise RuntimeError(f'NUMA node {self.args.numa_node} has {len(cores)} physical cores; {count} workers required')
+        if size % (count * 4096):
+            raise RuntimeError('eligible range cannot be divided into equal aligned worker shards')
+        shard = size // count
+        depths = [qd // count + (1 if i < qd % count else 0) for i in range(count)]
+        return [dict(worker=i, name=f'worker_{i:02d}', cpu=cores[i], qd=depths[i],
+                     offset=i * shard if pattern == 'random' else 0,
+                     size=shard if pattern == 'random' else size) for i in range(count)]
+
+    def schedule_preview(self):
+        points = {p['id']: p for p in self.manifest['points'] + self.manifest['references']}
+        preview = []
+        for entry in self.manifest['schedule']:
+            row = entry.copy()
+            if entry['kind'] == 'preparation':
+                occupied = self.occupied_size(entry['profile'])
+                row.update(occupied_bytes=occupied,
+                           measurement_bytes=self.size(entry['profile']),
+                           preparation_cap_s=self.preparation_limit(entry['profile']),
+                           fill=dict(pattern='sequential_write', bs=1048576, qd=32,
+                                     cpu=self.device['cpu'], size=occupied))
+                if entry['profile'] == 'medium':
+                    row['conditioning'] = dict(pattern='random_write',
+                                               required_write_bytes=((occupied * 5 + 99) // 100 + 4095) // 4096 * 4096,
+                                               time_cap_s=self.args.medium_conditioning_time,
+                                               recovery_s=self.args.recovery_time)
+                elif entry['profile'] == 'sustained':
+                    workers = self.worker_layout('random', 128, occupied, requested=4)
+                    for worker in workers:
+                        worker['seed'] = sample_seed(self.args.seed, entry['trial'], 'condition', worker['worker'], 1)
+                    row['conditioning'] = dict(pattern='random_write', aggregate_qd=128,
+                                               minimum_write_bytes=occupied, workers=workers,
+                                               time_cap_s=self.preparation_limit('sustained'))
+            else:
+                point = points[entry['id']]
+                row.update(bs=point['bs'], qd=point['qd'], read_pct=point['read_pct'],
+                           pattern=point['pattern'], relative_dir=point['relative_dir'],
+                           samples=[dict(index=index,
+                                         workers=self.workload_command(point, index,
+                                                                       self.directory / point['relative_dir'] / f'run_{index:02d}')[1])
+                                    for index in range(1, point['run_count'] + 1)])
+            preview.append(row)
+        return preview
+
+    def workload_command(self, point, repeat, directory):
+        size = self.size(point['profile'])
+        layout = self.worker_layout(point['pattern'], point['qd'], size)
+        rw = 'read' if point['read_pct'] == 100 else ('write' if point['read_pct'] == 0 else 'rw')
+        if point['pattern'] == 'random':
+            rw = 'rand' + rw
+        cmd = []
+        for worker in layout:
+            seed = sample_seed(self.args.seed, point['trial'], point['anchor'], worker['worker'], repeat)
+            worker['seed'] = seed
+            cmd += [f"--name={worker['name']}", f'--rw={rw}',
+                    f"--rwmixread={point['read_pct']}", f"--bs={point['bs']}",
+                    f"--iodepth={worker['qd']}", f"--iodepth_batch_complete_max={worker['qd']}",
+                    f"--cpus_allowed={worker['cpu']}", f'--randseed={seed}',
+                    f"--offset={worker['offset']}", f"--size={worker['size']}",
+                    '--time_based=1', f'--runtime={self.args.measurement_time}s',
+                    f'--ramp_time={self.args.ramp_time}s', '--status-interval=30',
+                    '--log_avg_msec=1000', '--bwavgtime=1000', '--iopsavgtime=1000',
+                    f'--write_bw_log={directory / ("series_bw_" + worker["name"])}',
+                    f'--write_iops_log={directory / ("series_iops_" + worker["name"])}']
+        return cmd, layout
 
     def fio(self, args, directory, on_snapshot=None, deadline=None):
         from profile_metrics import snapshot
@@ -554,6 +788,8 @@ class Runner:
             deadline = min(deadline, self.run_deadline)
         directory.mkdir(parents=True, exist_ok=True)
         cmd = self.fio_base() + args
+        names = [arg.split('=', 1)[1] for arg in args if arg.startswith('--name=')]
+        expected = names if names else None
         (directory / 'command.json').write_text(json.dumps(cmd, indent=2))
         last, requested, timed_out = None, False, False
         self.last_job = None
@@ -566,7 +802,8 @@ class Runner:
                     while True:
                         running = self.process.poll() is None
                         for payload in decoder.feed(stream.read()):
-                            last = snapshot(payload)
+                            validated = snapshot(payload, expected_names=expected)
+                            last = validated[names[0]] if len(names) == 1 else validated
                             self.last_job = last
                             if on_snapshot and not requested and on_snapshot(last):
                                 requested = True
@@ -615,20 +852,24 @@ class Runner:
             raise RuntimeError(f'no valid fio result: {directory / "fio.stdout"}')
         return last
 
-    def prepare(self, profile, read_pct=None):
-        """Exactly one reset and initialization for a profile, never for a case."""
+    def prepare(self, profile, trial=1):
+        """Reset and fully initialize one trial/profile before any observations."""
         self.check_budget()
         self.last_job = None
         self.prepare_number += 1
-        directory = self.directory / 'preparation' / f'{self.prepare_number:04d}_{profile}'
+        prep_id = f't{trial:02d}_{profile}'
+        directory = self.directory / 'preparation' / prep_id
         directory.mkdir(parents=True)
         began = time.monotonic()
         deadline = began + self.preparation_limit(profile)
-        record = dict(profile=profile, size_bytes=self.occupied_size(profile),
+        record = dict(id=prep_id, trial=trial, profile=profile, size_bytes=self.occupied_size(profile),
                       measurement_bytes=self.size(profile), started_at=now(), status='running',
-                      conditioning_status='not_requested', host_write_bytes=0, phase='validate', quality=[],
+                      conditioning_status='not_requested', host_write_bytes=0, phase='validate', quality=[], qualified=False,
                       budget_s=self.preparation_limit(profile),
                       relative_dir=str(directory.relative_to(self.directory)))
+        record['required_write_bytes'] = (record['size_bytes'] if profile == 'sustained' else
+                                          record['size_bytes'] * 5 // 100 if profile == 'medium' else 0)
+        record['exposure_write_bytes'] = 0
         self.manifest['preparation'].append(record)
         before = self.host_writes()
         completed_bytes = 0
@@ -638,12 +879,12 @@ class Runner:
         def progress(job):
             record['elapsed_s'] = time.monotonic() - began
             record['remaining_s'] = max(0, deadline - time.monotonic())
-            self.record_writes(record, before, phase_prior + job['write']['io_bytes'])
+            self.record_writes(record, before, phase_prior + job_bytes(job, 'write'))
             if record['phase'] == 'fill':
-                record['fill_fraction'] = job['write']['io_bytes'] / record['size_bytes']
-                rate = job['write']['io_bytes'] / max(.001, job.get('job_runtime', 0) / 1000)
-                record['estimated_fill_remaining_s'] = (record['size_bytes'] - job['write']['io_bytes']) / rate if rate else None
-            self.save(report=True)
+                record['fill_fraction'] = job_bytes(job, 'write') / record['size_bytes']
+                rate = job_bytes(job, 'write') / max(.001, job_runtime(job) / 1000)
+                record['estimated_fill_remaining_s'] = (record['size_bytes'] - job_bytes(job, 'write')) / rate if rate else None
+            self.save()
             print(f'  {profile} {record["phase"]}: {record["elapsed_s"] / 60:.1f} min, '
                   f'{record["host_write_bytes"] / 1e12:.3f} TB written; {record["remaining_s"] / 60:.1f} min budget left', flush=True)
             return False
@@ -661,89 +902,145 @@ class Runner:
                 command(['blkdiscard', self.device['path']], timeout=self.remaining(deadline))
                 record['phase'] = 'fill'
                 self.last_job = None
-                final = self.fio(['--name=prepare', '--rw=write', '--bs=1M', '--iodepth=32',
+                final = self.fio(['--name=prepare', f"--cpus_allowed={self.device['cpu']}", '--rw=write', '--bs=1M', '--iodepth=32',
                                   '--iodepth_batch_complete_max=32', f'--size={record["size_bytes"]}',
                                   '--status-interval=30'], directory / 'fill', progress, deadline=deadline)
-                completed_bytes = final['write']['io_bytes']
+                completed_bytes = job_bytes(final, 'write')
                 if completed_bytes != record['size_bytes']:
                     raise RuntimeError('sequential preparation did not initialize its entire range')
                 record['fill_fraction'] = 1
                 self.check_budget()
-                if profile != 'fresh' and time.monotonic() >= deadline:
-                    record['conditioning_status'] = 'time_cap_reached'
-                    if profile == 'medium':
-                        record['recovery_status'] = 'time_cap_reached'
-                if profile != 'fresh' and time.monotonic() < deadline:
+                if profile == 'fresh':
+                    record['qualified'] = True
+                    record['conditioning_status'] = 'not_required'
+                elif profile == 'medium':
                     phase_prior = completed_bytes
-                    self.last_job = None
                     record['phase'] = 'conditioning'
-                    interval = 60
-                    windows, previous, streak = [], None, 0
-
-                    def condition_progress(job):
-                        nonlocal previous, streak
-                        from profile_metrics import window_metrics, check_stability
-                        elapsed = job.get('job_runtime', 0) / 1000
-                        if profile == 'sustained' and (previous is None or elapsed - previous.get('job_runtime', 0) / 1000 >= interval * .9):
-                            windows.append(window_metrics(previous, job))
-                            windows[:] = windows[-5:]
-                            previous = job
-                            assessment = check_stability(windows, 0)
-                            eligible = elapsed >= 5 * interval
-                            streak = streak + 1 if eligible and assessment['stable'] else 0
-                            record['conditioning'] = dict(**assessment, consecutive_windows=streak,
-                                                           elapsed_s=elapsed, queue_depth=32, block_size=4096)
-                            if streak >= 2:
-                                record['conditioning_status'] = 'observed_stable'
-                        progress(job)
-                        return record['conditioning_status'] == 'observed_stable'
-
-                    seconds = int(self.remaining(deadline))
+                    self.last_job = None
+                    target = ((record['size_bytes'] * 5 + 99) // 100 + 4095) // 4096 * 4096
+                    record['required_write_bytes'] = target
+                    seconds = max(0, min(self.args.medium_conditioning_time,
+                                         math.floor(deadline - time.monotonic() - self.args.recovery_time)))
                     if self.args.run_type == 'smoke':
                         seconds = min(seconds, 2)
-                    cmd = ['--name=condition', '--rw=randwrite', '--rwmixread=0', '--bs=4096',
-                           '--iodepth=32', '--iodepth_batch_complete_max=32', f'--size={record["size_bytes"]}',
-                           f'--status-interval={interval if self.args.run_type == "normal" else 1}']
-                    if profile == 'medium':
-                        # Preserve the recovery allowance instead of spending it on overwrites.
-                        seconds = max(0, min(seconds - self.args.recovery_time, self.args.medium_conditioning_time))
-                        cap = max(4096, record['size_bytes'] * 5 // 100 // 4096 * 4096)
-                        record['conditioning_write_cap_bytes'] = cap
-                        # time_based would make fio IGNORE the io_size stopping condition.
-                        cmd += [f'--io_size={cap}']
-                        record['conditioning_status'] = ('bounded_light' if seconds else
-                            'time_cap_reached' if self.args.medium_conditioning_time else 'not_requested')
-                    else:
-                        cmd += ['--time_based=1']
-                        record['conditioning_status'] = 'time_cap_reached'
-                    if seconds > 0:
+                    record['conditioning_status'] = 'time_cap_reached'
+                    if seconds:
+                        self.last_job = None
                         try:
-                            final = self.fio(cmd + [f'--runtime={seconds}s'], directory / 'conditioning',
-                                             condition_progress, deadline=deadline)
-                            completed_bytes += final['write']['io_bytes']
+                            final = self.fio(['--name=condition', f"--cpus_allowed={self.device['cpu']}",
+                                              '--rw=randwrite', '--bs=4096', '--iodepth=32',
+                                              '--iodepth_batch_complete_max=32', f'--size={record["size_bytes"]}',
+                                              f'--io_size={target}', f'--runtime={seconds}s', '--status-interval=30'],
+                                             directory / 'conditioning', progress, deadline=deadline)
+                            record['exposure_write_bytes'] = job_bytes(final, 'write')
                         except BudgetExpired:
-                            self.check_budget()  # A global timeout must NOT be downgraded to a qualification.
-                            completed_bytes += (self.last_job or {}).get('write', {}).get('io_bytes', 0)
-                            record['conditioning_status'] = 'time_cap_reached'
-                    if profile == 'medium':
-                        record['phase'] = 'recovery'
-                        recovery_began = time.monotonic()
-                        requested_end = recovery_began + self.args.recovery_time
-                        end = min(requested_end, deadline)
-                        record['recovery_status'] = 'complete' if requested_end <= deadline else 'time_cap_reached'
-                        next_update = recovery_began
-                        while time.monotonic() < end:
                             self.check_budget()
-                            record['elapsed_s'] = time.monotonic() - began
-                            record['recovery_remaining_s'] = end - time.monotonic()
-                            self.telemetry()
-                            if time.monotonic() >= next_update:
-                                self.save(report=True)
-                                next_update = time.monotonic() + 10
-                            time.sleep(min(1, max(0, end - time.monotonic())))
-                        record['recovery_elapsed_s'] = time.monotonic() - recovery_began
+                            record['exposure_write_bytes'] = job_bytes(self.last_job, 'write')
+                    record['conditioning_status'] = ('exposure_complete' if record['exposure_write_bytes'] >= target
+                                                     else 'time_cap_reached')
+                    record['phase'] = 'recovery'
+                    recovery_began = time.monotonic()
+                    end = min(recovery_began + self.args.recovery_time, deadline)
+                    while time.monotonic() < end:
+                        self.check_budget()
+                        self.telemetry()
+                        time.sleep(min(1, max(0, end - time.monotonic())))
+                    record['recovery_elapsed_s'] = time.monotonic() - recovery_began
+                    record['recovery_status'] = ('complete' if record['recovery_elapsed_s'] >= self.args.recovery_time - .01
+                                                 else 'time_cap_reached')
+                    record['qualified'] = (record['conditioning_status'] == 'exposure_complete' and
+                                           record['recovery_status'] == 'complete')
+                else:
+                    from profile_metrics import window_metrics, check_stability
+                    phase_prior = completed_bytes
+                    record['phase'] = 'conditioning'
+                    self.last_job = None
+                    layout = self.worker_layout('random', 128, record['size_bytes'], requested=4)
+                    if len(layout) != 4:
+                        raise RuntimeError('sustained conditioning requires four physical worker cores')
+                    names = [worker['name'] for worker in layout]
+                    cmd = []
+                    for worker in layout:
+                        cmd += [f"--name={worker['name']}", '--rw=randwrite', '--bs=4096', '--iodepth=32',
+                                '--iodepth_batch_complete_max=32', f"--cpus_allowed={worker['cpu']}",
+                                f"--offset={worker['offset']}", f"--size={worker['size']}",
+                                f"--randseed={sample_seed(self.args.seed, trial, 'condition', worker['worker'], 1)}",
+                                '--time_based=1']
+                    seconds = max(0, math.floor(deadline - time.monotonic()))
+                    if self.args.run_type == 'smoke':
+                        seconds = min(seconds, 2)
+                    windows, prior, streak, saw_cpu_unqualified = [], None, 0, False
+                    def condition_progress(jobs):
+                        nonlocal prior, streak, saw_cpu_unqualified
+                        elapsed = job_runtime(jobs)
+                        prev_elapsed = job_runtime(prior) if prior else 0
+                        interval = 1000 if self.args.run_type == 'smoke' else 60000
+                        volume_ok = all(jobs[name]['write']['io_bytes'] >= layout[i]['size']
+                                        for i, name in enumerate(names))
+                        if volume_ok and prior is None:
+                            # Conditioning windows begin only after every shard
+                            # has met its own write-volume floor.
+                            prior = jobs
+                            record['floor_reached_at_s'] = elapsed / 1000
+                        elif volume_ok and elapsed - prev_elapsed > interval * 1.1:
+                            # A delayed status snapshot is not a one-minute
+                            # window; start a new sequence at this baseline.
+                            prior = jobs
+                            windows.clear()
+                            streak = 0
+                            record['conditioning'] = {'stable': False, 'reason': 'status interval gap',
+                                                      'elapsed_s': elapsed / 1000,
+                                                      'consecutive_assessments': 0, 'window_count': 0}
+                        elif volume_ok and elapsed - prev_elapsed >= interval * .9:
+                            window = window_metrics(prior, jobs, expected_names=names,
+                                                    interval_ms=elapsed - prev_elapsed)
+                            windows.append(window)
+                            windows[:] = windows[-5:]
+                            prior = jobs
+                            cpu_ok = all(all(w.get('cpu_user') is not None and w.get('cpu_system') is not None and
+                                             w['cpu_user'] + w['cpu_system'] < 90
+                                             for w in candidate.get('workers', {}).values()) and
+                                         len(candidate.get('workers', {})) == 4 for candidate in windows)
+                            saw_cpu_unqualified = saw_cpu_unqualified or not cpu_ok
+                            assessment = check_stability(windows, 0)
+                            passing = len(windows) == 5 and assessment['stable'] and cpu_ok
+                            streak = streak + 1 if passing else 0
+                            record['conditioning'] = dict(**assessment, consecutive_assessments=streak,
+                                                           elapsed_s=elapsed / 1000, worker_cpu_qualified=cpu_ok,
+                                                           volume_qualified=volume_ok, queue_depth_aggregate=128,
+                                                           worker_queue_depth=32, window_count=len(windows))
+                            record['worker_exposure_bytes'] = {name: jobs[name]['write']['io_bytes'] for name in names}
+                            record['exposure_write_bytes'] = sum(record['worker_exposure_bytes'].values())
+                            if streak >= 2:
+                                record['conditioning_status'] = 'observed_stable'
+                                record['qualified'] = True
+                        progress(jobs)
+                        return record['qualified']
+                    record['conditioning_status'] = 'time_cap_reached'
+                    if seconds:
+                        self.last_job = None
+                        try:
+                            final = self.fio([f'--runtime={seconds}s',
+                                              f'--status-interval={1 if self.args.run_type == "smoke" else 60}'] + cmd,
+                                             directory / 'conditioning', condition_progress, deadline=deadline)
+                            record['worker_exposure_bytes'] = {name: final[name]['write']['io_bytes'] for name in names}
+                            record['exposure_write_bytes'] = sum(record['worker_exposure_bytes'].values())
+                        except BudgetExpired:
+                            self.check_budget()
+                            partial = self.last_job or {}
+                            record['worker_exposure_bytes'] = {name: partial.get(name, {}).get('write', {}).get('io_bytes', 0)
+                                                               for name in names}
+                            record['exposure_write_bytes'] = sum(record['worker_exposure_bytes'].values())
+                    if not record['qualified']:
+                        if not all(record.get('worker_exposure_bytes', {}).get(name, 0) >= layout[i]['size']
+                                   for i, name in enumerate(names)):
+                            record['conditioning_status'] = 'volume_unmet'
+                        elif saw_cpu_unqualified:
+                            record['conditioning_status'] = 'cpu_unqualified'
                 if record['conditioning_status'] == 'time_cap_reached':
                     record['quality'].append('Preparation time cap reached; requested conditioning was not completed')
+                if record['conditioning_status'] in ('volume_unmet', 'cpu_unqualified'):
+                    record['quality'].append(f"Sustained conditioning {record['conditioning_status'].replace('_', ' ')}")
                 if record.get('recovery_status') == 'time_cap_reached':
                     record['quality'].append('Preparation time cap reached; medium recovery was shortened')
                 record.update(status='complete', phase='done', finished_at=now())
@@ -751,11 +1048,18 @@ class Runner:
             record['error'] = str(exc)
             raise
         finally:
-            if record['status'] == 'running':
-                # Include the latest partial fio counters on interruption/error.
-                completed_bytes = max(completed_bytes, phase_prior + (self.last_job or {}).get('write', {}).get('io_bytes', 0))
-            self.record_writes(record, before, completed_bytes)
+            # Track fill and conditioning as separate cumulative fio jobs.
+            # The kernel counter is preferred, but fallback totals must include
+            # all completed and partial conditioning writes exactly once.
+            if record['phase'] == 'fill':
+                completed_bytes = max(completed_bytes, job_bytes(self.last_job, 'write'))
+            conditioning_bytes = record['exposure_write_bytes']
+            if profile != 'fresh' and record['phase'] in ('conditioning', 'recovery', 'done'):
+                conditioning_bytes = max(conditioning_bytes, job_bytes(self.last_job, 'write'))
+            record['exposure_write_bytes'] = conditioning_bytes
+            self.record_writes(record, before, completed_bytes + conditioning_bytes)
             record['elapsed_s'] = time.monotonic() - began
+            record['headroom_s'] = self.preparation_limit(profile) - record['elapsed_s']
             self.save(report=True)
         return record
 
@@ -769,20 +1073,16 @@ class Runner:
             self.check_budget()
             relative = f'{point["relative_dir"]}/run_{index:02d}'
             directory = self.directory / relative
-            # Matched seed schedule across profiles, different offsets for each repeat.
-            seed = 20260909 + index
-            sample = dict(index=index, status='running', relative_dir=relative, seed=seed, started_at=now())
+            cmd, layout = self.workload_command(point, index, directory)
+            seed = [worker['seed'] for worker in layout]
+            sample = dict(index=index, status='running', relative_dir=relative, seed=seed,
+                          worker_layout=layout, requested_aggregate_qd=point['qd'], started_at=now(),
+                          log_intervals=dict(mode='averaged_contiguous', average_ms=1000,
+                                             origin_ms=0, time_reference='post_ramp_measurement_epoch',
+                                             ramp_time_ms=self.args.ramp_time * 1000,
+                                             directions=(['read'] if point['read_pct'] == 100 else
+                                                         ['write'] if point['read_pct'] == 0 else ['read', 'write'])))
             point['runs'].append(sample)
-            rw = 'read' if point['read_pct'] == 100 else ('write' if point['read_pct'] == 0 else 'rw')
-            if point['pattern'] == 'random':
-                rw = 'rand' + rw
-            cmd = [f'--name={point["id"]}', f'--rw={rw}', f'--rwmixread={point["read_pct"]}',
-                   f'--bs={point["bs"]}', f'--iodepth={point["qd"]}',
-                   f'--iodepth_batch_complete_max={point["qd"]}', f'--randseed={seed}',
-                   f'--size={self.size(point["profile"])}', '--time_based=1',
-                   f'--runtime={self.args.measurement_time}s', f'--ramp_time={self.args.ramp_time}s',
-                   '--status-interval=30', '--log_avg_msec=1000',
-                   f'--write_bw_log={directory / "series"}', f'--write_iops_log={directory / "series"}']
             start, before = time.monotonic(), self.host_writes()
             self.last_job = None
             self.save()
@@ -790,9 +1090,12 @@ class Runner:
             try:
                 final = self.fio(cmd, directory)
                 # A clean early exit is still not a complete requested sample.
-                if final.get('job_runtime', 0) < self.args.measurement_time * 1000 * .95:
+                jobs = final if len(layout) > 1 else {layout[0]['name']: final}
+                if any(job_runtime(job) < self.args.measurement_time * 1000 * .95 for job in jobs.values()):
                     raise RuntimeError('fio sample ended before its requested measurement duration')
-                sample.update(status='complete', metrics=window_metrics(None, final))
+                metrics = (window_metrics(None, final, expected_names=[worker['name'] for worker in layout])
+                           if len(layout) > 1 else window_metrics(None, final))
+                sample.update(status='complete', metrics=metrics)
             except BaseException as exc:
                 sample.update(status='interrupted' if isinstance(exc, (InterruptedError, KeyboardInterrupt)) else
                               ('timed_out' if isinstance(exc, BudgetExpired) else 'failed'), error=str(exc))
@@ -801,12 +1104,18 @@ class Runner:
                 raise
             finally:
                 final = final or self.last_job
-                self.record_writes(sample, before, (final or {}).get('write', {}).get('io_bytes', 0))
+                self.record_writes(sample, before, job_bytes(final, 'write'))
+                sample['ramp_write_bytes'] = (max(0, sample['host_write_bytes'] - sample['measured_write_bytes'])
+                                              if sample['host_write_accounting'] == 'target_kernel_counter' else None)
+                sample['ramp_write_accounting'] = ('kernel_total_minus_measured_estimate' if sample['ramp_write_bytes'] is not None
+                                                   else 'unavailable')
                 sample.update(elapsed_s=time.monotonic() - start, finished_at=now())
                 successful = [run['metrics'] for run in point['runs'] if run['status'] == 'complete']
                 if successful:
                     point['metrics'] = aggregate_runs(successful)
-                    if sum(point['metrics'].get(k, 0) or 0 for k in ('cpu_user', 'cpu_system')) >= 90:
+                    if any((worker.get('cpu_user') or 0) + (worker.get('cpu_system') or 0) >= 90
+                           for worker in point['metrics'].get('workers', {}).values()) or (not point['metrics'].get('workers') and
+                           sum(point['metrics'].get(k, 0) or 0 for k in ('cpu_user', 'cpu_system')) >= 90):
                         warning = 'Worker CPU >=90%; throughput may be host-limited (not proof of a device limit)'
                         if warning not in point['quality']:
                             point['quality'].append(warning)
@@ -821,17 +1130,18 @@ class Runner:
         point['status'] = 'complete'
         self.save(report=True)
 
-    def reference(self, profile, stage):
-        point = dict(id=f'reference_{stage}', profile=profile, pattern='random', bs=4096, qd=1,
-                     read_pct=100, status='pending', kind='reference', run_count=1, runs=[], history=[],
-                     relative_dir=f'{profile}/reference_{stage}')
-        self.manifest['references'].append(point)
+    def reference(self, point):
         self.measure(point)
-        if stage == 'late':
-            early = next(p for p in self.manifest['references'] if p['profile'] == profile and p['id'] == 'reference_early')
-            initial = early['metrics']['read']['iops']
+        if self.args.protocol == 'comparison':
+            anchor = next((p for p in self.manifest['points'] if p['trial'] == point['trial'] and
+                           p['profile'] == point['profile'] and p['anchor'] == point['anchor']), None)
+        else:
+            anchor = next((p for p in self.manifest['references'] if p['trial'] == point['trial'] and
+                           p['profile'] == point['profile'] and p.get('stage') == 'early'), None)
+        if anchor and anchor is not point and anchor.get('metrics'):
+            initial = anchor['metrics']['read']['iops']
             point['iops_change_percent'] = (point['metrics']['read']['iops'] / initial - 1) * 100 if initial else None
-            point['note'] = 'Single-sample read drift indicator only; cannot establish stable write performance throughout the matrix.'
+            point['note'] = 'Single local reference drift indicator; no equivalence or steady-state claim.'
         self.save(report=True)
 
     def run(self, capability_check=False):
@@ -849,36 +1159,46 @@ class Runner:
                     self.save()
                     # Verify the chosen engine before any discard, within the
                     # same failure/report lifecycle as preparation and samples.
-                    self.fio(['--name=capability_check', '--readonly', '--rw=read', '--bs=4K',
+                    self.fio(['--name=capability_check', f"--cpus_allowed={self.device['cpu']}", '--readonly', '--rw=read', '--bs=4K',
                               '--iodepth=1', '--iodepth_batch_complete_max=1', '--size=1M',
                               '--time_based=1', '--runtime=1s'], self.directory / 'capability_check')
                     active.update(status='complete', finished_at=now())
                     active = None
-                completed = 0
-                for profile in self.args.profiles:
-                    active = None
-                    prep = self.prepare(profile)
-                    if self.args.prepare_only:
+                completed, prep, prior_writes, prior_exact = 0, None, 0, True
+                point_by_id = {p['id']: p for p in self.manifest['points'] + self.manifest['references']}
+                for entry in self.manifest['schedule']:
+                    self.check_budget()
+                    if entry['kind'] == 'preparation':
+                        active = None
+                        prep = self.prepare(entry['profile'], entry['trial'])
+                        prior_writes = 0
+                        prior_exact = self.host_writes() is not None
                         continue
-                    self.reference(profile, 'early')
-                    profile_written = 0
-                    for point in (p for p in self.manifest['points'] if p['profile'] == profile):
-                        active = point
-                        self.check_budget()
-                        completed += 1
-                        print(f'[{completed}/{len(self.manifest["points"])}] {profile} {point["id"]} '
-                              f'({point["run_count"]} × {self.args.measurement_time}s + {self.args.ramp_time}s warmup)', flush=True)
-                        point['preparation'] = prep['relative_dir']
-                        point['conditioning_status'] = prep['conditioning_status']
-                        point['recovery_status'] = prep.get('recovery_status')
-                        point['quality'] = list(prep.get('quality', []))
-                        point['profile_measurement_writes_before_bytes'] = profile_written
+                    point = point_by_id[entry['id']]
+                    active = point
+                    completed += 1
+                    point['preparation'] = prep['relative_dir']
+                    point['conditioning_status'] = prep['conditioning_status']
+                    point['recovery_status'] = prep.get('recovery_status')
+                    point['preparation_qualified'] = prep['qualified']
+                    point['quality'] = list(prep.get('quality', []))
+                    if not prep['qualified']:
+                        point['quality'].append('Exploratory: preparation did not qualify')
+                    point['prior_write_bytes'] = prior_writes
+                    point['prior_write_accounting'] = ('target_kernel_counter' if prior_exact
+                                                       else 'measured_only_lower_bound')
+                    point['profile_measurement_writes_before_bytes'] = prior_writes
+                    print(f'[{completed}/{len(point_by_id)}] trial {entry["trial"]} {entry["profile"]} {point["anchor"]} '
+                          f'({point["run_count"]} × {self.args.measurement_time}s + {self.args.ramp_time}s ramp)', flush=True)
+                    if entry['kind'] == 'reference':
+                        self.reference(point)
+                    else:
                         self.measure(point)
-                        profile_written += point['host_write_bytes']
-                        metrics = point['metrics']
-                        print(f'  median read {metrics["read"]["iops"]:.0f} / write {metrics["write"]["iops"]:.0f} IOPS', flush=True)
-                    active = None
-                    self.reference(profile, 'late')
+                    prior_writes += point.get('host_write_bytes', 0)
+                    prior_exact = prior_exact and point.get('host_write_accounting') == 'target_kernel_counter'
+                    metrics = point['metrics']
+                    print(f'  read {metrics["read"]["iops"]:.0f} / write {metrics["write"]["iops"]:.0f} IOPS', flush=True)
+                active = None
                 self.telemetry(force=True)
                 self.manifest['status'] = 'complete'
         except (Exception, KeyboardInterrupt) as exc:
@@ -915,6 +1235,11 @@ def main(argv=None):
     if directory.exists() and (not directory.is_dir() or any(directory.iterdir())):
         raise RuntimeError('results directory must not exist or must be empty')
     probe = Runner(args, device, directory)
+    required_cores = max(4 if 'sustained' in args.profiles else 1,
+                         args.workers if any(p['pattern'] == 'random' and p['qd'] >= args.workers
+                                             for p in probe.manifest['points']) else 1)
+    if len(device['placement']['physical_cpus']) < required_cores:
+        raise RuntimeError(f'NUMA node {args.numa_node} has only {len(device["placement"]["physical_cpus"])} distinct physical cores; {required_cores} required')
     writes = probe.minimum_writes()
     budget = probe.budget()
     probe.manifest['budget'] = budget
@@ -922,7 +1247,7 @@ def main(argv=None):
     test_count = 0 if args.prepare_only else len(probe.manifest['points'])
     if args.dry_run:
         print(json.dumps(dict(device=device, config=vars(args), test_count=test_count, minimum_writes=writes, budget=budget,
-                              output=str(directory)), indent=2))
+                              schedule=probe.schedule_preview(), output=str(directory)), indent=2))
     else:
         print(f"Target: {device['path']} | {device['model']} | serial {device['serial']} | "
               f"{device['size_bytes'] / 1e12:.3f} TB", flush=True)
@@ -933,8 +1258,8 @@ def main(argv=None):
             print(f"  {profile}: {plan['case_count']} cases; ~{work / 60:.1f} min measurements incl. 2s/sample overhead allowance; "
                   f"preparation capped at {plan['preparation_cap_s'] / 60:.0f} min incl. fill; "
                   f"occupied {plan['occupied_bytes'] / 1e12:.3f} TB, measured range {plan['measurement_bytes'] / 1e12:.3f} TB", flush=True)
-        print(f"Exactly {budget['preparation_count']} preparations; {writes['total_bytes'] / 1e12:.3f} TB total initialization. "
-              'Conditioning and measurements add writes; no per-case write quota.', flush=True)
+        print(f"Exactly {budget['preparation_count']} preparations; {writes['preparation_bytes'] / 1e12:.3f} TB initialization; "
+              f"{writes['total_bytes'] / 1e12:.3f} TB minimum planned fill plus exposure. ", flush=True)
         print(f"Whole-run device-work cap: {budget['run_cap_s'] / 3600:.2f} h (not an ETA; preparation can finish early). "
               'Cleanup and final report generation follow. A cap may leave an incomplete report.', flush=True)
         print(f'Results: {directory}', flush=True)
@@ -944,17 +1269,23 @@ def main(argv=None):
     if os.geteuid() != 0:
         raise RuntimeError('run this command with sudo; it requires raw-device access')
     with NamespaceLock(device):
-        command(probe.fio_base() + ['--name=validate', '--rw=read', '--size=1M', '--parse-only'])
-        if not args.yes:
-            answer = input(f'ALL DATA ON {device["path"]} WILL BE LOST. Type its full path to continue: ')
-            if answer != device['path']:
-                raise RuntimeError('confirmation did not match; nothing changed')
-        checked = inspect_device(args)
-        if any(checked[k] != device[k] for k in ('major_minor', 'serial', 'size_bytes', 'start_bytes')):
-            raise RuntimeError('device identity/layout changed during confirmation')
-        directory.mkdir(parents=True, exist_ok=True)
-        os.environ.setdefault('MPLCONFIGDIR', str(directory / '.matplotlib'))
-        return probe.run(capability_check=True)
+        original_affinity = os.sched_getaffinity(0)
+        os.sched_setaffinity(0, set(device['placement']['cpu_pool']))
+        try:
+            command(probe.fio_base() + ['--name=validate', f"--cpus_allowed={device['cpu']}",
+                                        '--rw=read', '--size=1M', '--parse-only'])
+            if not args.yes:
+                answer = input(f'ALL DATA ON {device["path"]} WILL BE LOST. Type its full path to continue: ')
+                if answer != device['path']:
+                    raise RuntimeError('confirmation did not match; nothing changed')
+            checked = inspect_device(args)
+            if any(checked[k] != device[k] for k in ('major_minor', 'serial', 'size_bytes', 'start_bytes')):
+                raise RuntimeError('device identity/layout changed during confirmation')
+            directory.mkdir(parents=True, exist_ok=True)
+            os.environ.setdefault('MPLCONFIGDIR', str(directory / '.matplotlib'))
+            return probe.run(capability_check=True)
+        finally:
+            os.sched_setaffinity(0, original_affinity)
 
 
 if __name__ == '__main__':

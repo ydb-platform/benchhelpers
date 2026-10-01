@@ -3,7 +3,8 @@
 import copy
 import unittest
 
-from profile_metrics import aggregate_runs, check_stability, snapshot, window_metrics
+from profile_metrics import (aggregate_runs, aggregate_trials, check_stability,
+                             paired_profile_ratios, snapshot, window_metrics)
 
 
 def direction(bins, runtime=60000, bs=4096):
@@ -135,6 +136,74 @@ class WindowMetricsTests(unittest.TestCase):
         original = copy.deepcopy(payload)
         window_metrics(None, payload)
         self.assertEqual(payload, original)
+
+
+class WorkerMetricsTests(unittest.TestCase):
+    @staticmethod
+    def workers():
+        first = job({"100": 10}, runtime=1000)
+        second = job({"300": 30}, runtime=2000)
+        first["jobname"] = "worker_0"
+        second["jobname"] = "worker_1"
+        second["usr_cpu"] = 40
+        second["iodepth_level"] = {"8": 100}
+        return [first, second]
+
+    def test_snapshot_requires_all_named_jobs_and_validates_each(self):
+        jobs = self.workers()
+        named = snapshot({"jobs": jobs[::-1]}, ["worker_0", "worker_1"])
+        self.assertEqual(list(named), ["worker_0", "worker_1"])
+        for broken in ([jobs[0]], [jobs[0], jobs[0]],
+                       [jobs[0], dict(jobs[1], jobname="unexpected")]):
+            with self.assertRaises(ValueError):
+                snapshot({"jobs": broken}, ["worker_0", "worker_1"])
+        failed = copy.deepcopy(jobs)
+        failed[1]["error"] = 5
+        with self.assertRaisesRegex(ValueError, "fio job error"):
+            snapshot({"jobs": failed}, ["worker_0", "worker_1"])
+        missing_bins = copy.deepcopy(jobs)
+        missing_bins[1]["read"]["clat_ns"]["bins"] = {}
+        with self.assertRaisesRegex(ValueError, "coverage"):
+            snapshot({"jobs": missing_bins}, ["worker_0", "worker_1"])
+
+    def test_shared_interval_sums_counts_histograms_and_weighted_latency(self):
+        jobs = self.workers()
+        original = copy.deepcopy(jobs)
+        named = snapshot({"jobs": jobs}, ["worker_0", "worker_1"])
+        metrics = window_metrics(None, named, expected_names=["worker_0", "worker_1"])
+        self.assertEqual(metrics["interval_ms"], 2000)
+        self.assertEqual(metrics["read"]["io_count"], 40)
+        self.assertEqual(metrics["read"]["iops"], 20)
+        self.assertEqual(metrics["read"]["bw_bytes"], 40 * 4096 / 2)
+        self.assertEqual(metrics["read"]["clat_mean_ns"], 250)
+        self.assertEqual(metrics["read"]["lat_mean_ns"], 260)
+        self.assertEqual(metrics["read"]["histogram_ns"], {"100": 10, "300": 30})
+        self.assertEqual(metrics["read"]["percentiles_ns"]["50"], 300)
+        self.assertEqual(metrics["workers"]["worker_0"]["cpu_user"], 10)
+        self.assertEqual(metrics["workers"]["worker_1"]["cpu_user"], 40)
+        self.assertEqual(metrics["workers"]["worker_1"]["depth"], {"8": 100})
+        self.assertEqual(metrics["depth_scope"], "per_worker_cumulative_job")
+        self.assertEqual(jobs, original)
+
+    def test_explicit_interval_and_one_worker_regression_are_checked(self):
+        jobs = self.workers()
+        named = snapshot({"jobs": jobs}, ["worker_0", "worker_1"])
+        explicit = window_metrics(None, named, ["worker_0", "worker_1"], interval_ms=4000)
+        self.assertEqual(explicit["read"]["iops"], 10)
+        regressed = copy.deepcopy(named)
+        regressed["worker_1"]["read"]["total_ios"] = 1
+        with self.assertRaisesRegex(ValueError, "decreased"):
+            window_metrics(named, regressed, ["worker_0", "worker_1"])
+        with self.assertRaisesRegex(ValueError, "shared measurement time"):
+            window_metrics(None, named, ["worker_0", "worker_1"], interval_ms=0)
+
+    def test_within_trial_keeps_worker_cpu_and_depth(self):
+        named = snapshot({"jobs": self.workers()}, ["worker_0", "worker_1"])
+        metrics = window_metrics(None, named, ["worker_0", "worker_1"])
+        trial = aggregate_runs([metrics])
+        self.assertEqual(trial["worker_names"], ["worker_0", "worker_1"])
+        self.assertEqual(trial["workers"]["worker_1"]["cpu_user"], 40)
+        self.assertEqual(trial["workers"]["worker_1"]["depth"], {"8": 100})
 
 
 class StabilityTests(unittest.TestCase):
@@ -285,6 +354,56 @@ class RepeatAggregationTests(unittest.TestCase):
         original = copy.deepcopy(runs)
         aggregate_runs(runs)
         self.assertEqual(runs, original)
+
+
+class TrialAggregationTests(unittest.TestCase):
+    def test_missing_worker_cpu_stays_missing_for_qualification(self):
+        first = job({"100": 100})
+        second = job({"100": 100})
+        first["jobname"] = "a"
+        second["jobname"] = "b"
+        first.pop("usr_cpu", None)
+        result = window_metrics(None, {"a": first, "b": second}, expected_names=["a", "b"])
+        self.assertIsNone(result["workers"]["a"]["cpu_user"])
+        self.assertIsNotNone(result["workers"]["b"]["cpu_user"])
+
+    def test_trial_median_range_and_histogram_are_separate(self):
+        trials = {
+            "trial_a": aggregate_runs([window_metrics(None, job({"100": 10}))]),
+            "trial_b": aggregate_runs([window_metrics(None, job({"1000": 30}))]),
+            "trial_c": aggregate_runs([window_metrics(None, job({"10000": 1000}))]),
+        }
+        result = aggregate_trials(trials)
+        self.assertEqual(result["independent_preparations"], 3)
+        self.assertEqual(result["local_run_count"], 3)
+        self.assertEqual(result["read"]["percentiles_ns"]["99"], 1000)
+        self.assertEqual(result["read"]["pooled_percentiles_ns"]["99"], 10000)
+        self.assertEqual(result["trial_statistics"]["read"]["iops"]["range"], 990 / 60)
+        self.assertEqual(result["read"]["histogram_ns"], {"100": 10, "1000": 30, "10000": 1000})
+
+    def test_pairing_uses_matched_trial_values(self):
+        profile = {"a": {"total_iops": 20, "total_bw_bytes": 80,
+                         "read": {"iops": 20, "bw_bytes": 80, "clat_mean_ns": 50,
+                                  "percentiles_ns": {"99": 100}},
+                         "write": {}},
+                   "b": {"total_iops": 100, "total_bw_bytes": 400,
+                         "read": {"iops": 100, "bw_bytes": 400, "clat_mean_ns": 100,
+                                  "percentiles_ns": {"99": 200}},
+                         "write": {}}}
+        baseline = {"a": {"total_iops": 10, "total_bw_bytes": 40,
+                          "read": {"iops": 10, "bw_bytes": 40, "clat_mean_ns": 100,
+                                   "percentiles_ns": {"99": 200}},
+                          "write": {}},
+                    "b": {"total_iops": 50, "total_bw_bytes": 200,
+                          "read": {"iops": 50, "bw_bytes": 200, "clat_mean_ns": 50,
+                                   "percentiles_ns": {"99": 100}},
+                          "write": {}}}
+        result = paired_profile_ratios(profile, baseline)
+        self.assertEqual(result["total_iops"]["per_trial"], {"a": 2, "b": 2})
+        self.assertEqual(result["read"]["clat_mean_ns"]["per_trial"], {"a": 0.5, "b": 2})
+        self.assertEqual(result["read"]["clat_mean_ns"]["statistics"]["range"], 1.5)
+        with self.assertRaisesRegex(ValueError, "identities"):
+            paired_profile_ratios(profile, {"a": baseline["a"]})
 
 
 if __name__ == "__main__":

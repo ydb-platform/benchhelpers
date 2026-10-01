@@ -1,6 +1,5 @@
-"""Orchestration integration fixtures; subprocess/device access is intercepted."""
+"""Device-free orchestration tests. No test here opens a block device."""
 import contextlib
-import csv
 import io
 import json
 import os
@@ -8,9 +7,8 @@ from pathlib import Path
 import signal
 import shutil
 import stat
-import statistics
-import tempfile
 import time
+import tempfile
 import types
 import unittest
 from unittest import mock
@@ -20,17 +18,24 @@ import nvme_bench as bench
 
 TARGET = '/dev/nvme999n1p2'
 DEVICE = dict(path=TARGET, namespace='/dev/nvme999n1', controller='/dev/nvme999',
-              partition=True, size_bytes=100 * bench.ALIGN,
-              namespace_size_bytes=200 * bench.ALIGN, cpu=0, poll_cpu=2,
-              major_minor='259:99', serial='MOCK-NO-DEVICE', model='Mock NVMe', start_bytes=bench.ALIGN)
+              partition=True, size_bytes=100 * bench.ALIGN, namespace_size_bytes=200 * bench.ALIGN,
+              cpu=32, poll_cpu=33, major_minor='259:99', serial='MOCK', model='Mock NVMe',
+              start_bytes=bench.ALIGN,
+              placement=dict(numa_node=1, cpu_pool=list(range(32, 64)) + list(range(96, 128)),
+                             physical_cpus=list(range(32, 64)), memory_policy='bind:1'))
 
 
-def counters(read_ios, write_ios, seconds, bs=4096):
-    result = dict(error=0, job_runtime=int(seconds * 1000), usr_cpu=10, sys_cpu=5,
+def args(*extra):
+    return bench.parse_args(['--filename', TARGET, '--allow-partition', '--numa-node', '1', *extra])
+
+
+def job(name, writes, runtime_ms=1000, cpu=10, reads=0):
+    result = dict(jobname=name, error=0, job_runtime=runtime_ms, usr_cpu=cpu, sys_cpu=0,
                   iodepth_level={'1': 100})
-    for direction, count in [('read', read_ios), ('write', write_ios)]:
-        result[direction] = dict(io_bytes=count * bs, total_ios=count,
-                                 runtime=int(seconds * 1000) if count else 0,
+    for direction, nbytes in [('read', reads), ('write', writes)]:
+        count = nbytes // 4096
+        result[direction] = dict(io_bytes=nbytes, total_ios=count,
+                                 runtime=runtime_ms if count else 0,
                                  clat_ns=dict(N=count, mean=1000 if count else 0,
                                               max=1000 if count else 0,
                                               bins={'1000': count} if count else {}),
@@ -38,614 +43,659 @@ def counters(read_ios, write_ios, seconds, bs=4096):
     return result
 
 
-class SimulatedRunner(bench.Runner):
-    """Exercise orchestration/preparation/measurement with synthetic fio counters."""
-    instances = []
-    failure = None
-    fill_seconds = 1
-    clock = None
+class StaticPlanTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.directory = Path(self.temp.name)
 
-    def __init__(self, *args):
-        super().__init__(*args)
-        self.calls = []
-        self.saves = []
-        self.sample_values = [1000, 9000, 2000, 4000, 3000]
-        self.sample_numbers = {}
-        self.instances.append(self)
+    def runner(self, *options):
+        return bench.Runner(args(*options), DEVICE.copy(), self.directory)
 
-    def save(self, report=False, plots=False):
-        self.saves.append((report, plots))
-        if report:
-            (self.directory / 'result.txt').write_text('Mock report\n')
+    def test_comparison_schedule_rotates_and_has_unique_linked_records(self):
+        runner = self.runner()
+        manifest = runner.manifest
+        self.assertEqual(manifest['schema_version'], 3)
+        self.assertEqual(manifest['config']['comparison_protocol_revision'], 2)
+        self.assertEqual(len(manifest['points']), 63)
+        self.assertEqual(len(manifest['references']), 18)
+        self.assertEqual(len([x for x in manifest['schedule'] if x['kind'] == 'preparation']), 9)
+        self.assertEqual([x['profile'] for x in manifest['schedule'] if x['kind'] == 'preparation'],
+                         ['fresh', 'medium', 'sustained', 'medium', 'sustained', 'fresh',
+                          'sustained', 'fresh', 'medium'])
+        ids = [x['id'] for x in manifest['schedule']]
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertEqual(len({p['relative_dir'] for p in manifest['points'] + manifest['references']}), 81)
+        for trial in (1, 2, 3):
+            for profile in bench.PROFILES:
+                entries = [entry for entry in manifest['schedule']
+                           if entry['trial'] == trial and entry['profile'] == profile]
+                self.assertEqual([entry['anchor'] for entry in entries if entry['kind'] == 'observation'],
+                                 [anchor for anchor, *_ in bench.COMPARISON_ANCHORS])
+                self.assertEqual(entries[-3]['anchor'], 'wr4k_qd1')
+                self.assertEqual(entries[-3]['stage'], 'after_wr4k_qd64_before_final_read_references')
+                self.assertEqual([entry['kind'] for entry in entries[-3:]],
+                                 ['observation', 'reference', 'reference'])
+                self.assertEqual([entry['anchor'] for entry in entries[-2:]],
+                                 ['rr4k_qd1', 'rr4k_qd64'])
+        for point in manifest['points'] + manifest['references']:
+            self.assertIn(point['preparation_id'], ids)
+        self.assertEqual(runner.budget()['run_cap_s'], 24087)
+        self.assertEqual(runner.budget()['sample_count'], 63)
+        self.assertEqual(runner.budget()['reference_count'], 18)
 
-    def telemetry(self, force=False):
-        pass
+    def test_default_writes_use_full_identical_occupancy_and_exposure(self):
+        runner = self.runner('--size-percent', '40')
+        occupied = 80 * bench.ALIGN
+        self.assertEqual({runner.occupied_size(p) for p in bench.PROFILES}, {occupied})
+        self.assertEqual({runner.size(p) for p in bench.PROFILES}, {40 * bench.ALIGN})
+        writes = runner.minimum_writes()
+        self.assertEqual(writes['preparation_bytes'], 9 * occupied)
+        self.assertEqual(writes['sustained_write_floor_bytes'], 3 * occupied)
+        self.assertEqual(writes['medium_write_target_bytes'], 3 * occupied * 5 // 100)
+        with self.assertRaises(SystemExit):
+            args('--size-percent', '81')
 
-    def fio(self, args, directory, on_snapshot=None, deadline=None):
-        self.calls.append((args, directory, deadline))
-        limits = [limit for limit in (deadline, self.run_deadline) if limit is not None]
-        deadline = min(limits) if limits else None
-        options = dict(arg[2:].split('=', 1) for arg in args if '=' in arg)
-        directory = Path(directory)
-        case = next((p for p in self.manifest['points'] if p['id'] in directory.parts), None)
-        if case and self.failure:
-            raise self.failure
-        if 'time_based' not in options and 'io_size' not in options and options.get('rw') == 'write':
-            seconds = self.fill_seconds
-            if deadline is not None and self.clock.value + seconds > deadline:
-                self.clock.advance(max(0, deadline - self.clock.value))
-                raise bench.BudgetExpired('preparation deadline expired during fill')
-            self.clock.advance(seconds)
-            result = counters(0, int(options['size']) // 4096, seconds)
-            if on_snapshot:
-                on_snapshot(result)
-            return result
-        rw = options.get('rw', 'read')
-        ratio = int(options.get('rwmixread', 100 if rw in ('read', 'randread') else 0))
-        bs = options.get('bs', '4096')
-        bs = int(bs[:-1]) * {'K': 1024, 'M': 1024 ** 2}[bs[-1]] if bs[-1] in 'KM' else int(bs)
-        seconds_limit = float(options.get('runtime', '1s').rstrip('s'))
-        interval = float(options.get('status-interval', seconds_limit))
-        self.clock.advance(float(options.get('ramp_time', options.get('ramp-time', '0s')).rstrip('s')))
-        if case:
-            number = self.sample_numbers.get(case['id'], 0)
-            rate = self.sample_values[number % len(self.sample_values)]
-            self.sample_numbers[case['id']] = number + 1
-        else:
-            rate = 100000
-        volume_limit = int(options['io_size']) if 'io_size' in options else None
-        if volume_limit is not None:
-            seconds_limit = min(seconds_limit, volume_limit / (bs * rate))
-        if deadline is not None:
-            seconds_limit = min(seconds_limit, max(0, deadline - self.clock.value))
-        if seconds_limit <= 0:
-            raise bench.BudgetExpired('fio deadline expired')
-        elapsed = min(interval, seconds_limit)
-        previous = 0
-        while True:
-            self.clock.advance(elapsed - previous)
-            previous = elapsed
-            nios = round(elapsed * rate)
-            reads = nios * ratio // 100
-            result = counters(reads, nios - reads, elapsed, bs)
-            self.last_job = result
-            if on_snapshot and on_snapshot(result):
-                return result
-            if elapsed >= seconds_limit:
-                if deadline is not None and self.clock.value >= deadline:
-                    raise bench.BudgetExpired('fio deadline expired')
-                return result
-            elapsed = min(elapsed + interval, seconds_limit)
-            if elapsed > 4000:
-                raise AssertionError('mock workload did not converge')
+    def test_worker_shards_cover_range_and_depth_is_aggregate(self):
+        runner = self.runner()
+        layout = runner.worker_layout('random', 64, 80 * bench.ALIGN)
+        self.assertEqual([w['qd'] for w in layout], [16] * 4)
+        self.assertEqual([w['offset'] for w in layout], [i * 20 * bench.ALIGN for i in range(4)])
+        self.assertEqual(sum(w['size'] for w in layout), 80 * bench.ALIGN)
+        self.assertEqual(len({w['cpu'] for w in layout}), 4)
+        self.assertEqual(len(runner.worker_layout('random', 1, 80 * bench.ALIGN)), 1)
+        self.assertEqual(len(runner.worker_layout('sequential', 64, 80 * bench.ALIGN)), 1)
+        self.assertEqual([w['qd'] for w in runner.worker_layout('random', 5, 80 * bench.ALIGN)], [2, 1, 1, 1])
+        self.assertEqual(len(runner.worker_layout('random', 128, 80 * bench.ALIGN, requested=4)), 4)
+
+    def test_seeds_match_profiles_and_change_by_trial_worker_repeat(self):
+        runner = self.runner('--run-count', '2')
+        points = runner.manifest['points']
+        fresh = next(p for p in points if p['trial'] == 1 and p['profile'] == 'fresh' and p['anchor'] == 'rr4k_qd64')
+        medium = next(p for p in points if p['trial'] == 1 and p['profile'] == 'medium' and p['anchor'] == 'rr4k_qd64')
+        other = next(p for p in points if p['trial'] == 2 and p['profile'] == 'fresh' and p['anchor'] == 'rr4k_qd64')
+        def seeds(point, repeat):
+            return [w['seed'] for w in runner.workload_command(point, repeat, self.directory)[1]]
+        self.assertEqual(seeds(fresh, 1), seeds(medium, 1))
+        self.assertNotEqual(seeds(fresh, 1), seeds(other, 1))
+        self.assertNotEqual(seeds(fresh, 1), seeds(fresh, 2))
+        self.assertEqual(len(set(seeds(fresh, 1))), 4)
+        write_fresh = next(p for p in points if p['trial'] == 1 and p['profile'] == 'fresh'
+                           and p['anchor'] == 'wr4k_qd1')
+        write_medium = next(p for p in points if p['trial'] == 1 and p['profile'] == 'medium'
+                            and p['anchor'] == 'wr4k_qd1')
+        self.assertEqual(seeds(write_fresh, 1), seeds(write_medium, 1))
+        self.assertEqual(len(seeds(write_fresh, 1)), 1)
+        write_command, _ = runner.workload_command(write_fresh, 1, self.directory)
+        self.assertIn('--rw=randwrite', write_command)
+        self.assertIn('--runtime=20s', write_command)
+        self.assertIn('--ramp_time=5s', write_command)
+
+    def test_measure_persists_post_ramp_log_interval_origin(self):
+        runner = self.runner()
+        point = runner.manifest['points'][0]
+        with mock.patch.object(runner, 'host_writes', return_value=0), \
+             mock.patch.object(runner, 'save'), \
+             mock.patch.object(runner, 'fio', side_effect=RuntimeError('synthetic fio failure')):
+            with self.assertRaisesRegex(RuntimeError, 'synthetic fio failure'):
+                runner.measure(point)
+        metadata = point['runs'][0]['log_intervals']
+        self.assertEqual(metadata['mode'], 'averaged_contiguous')
+        self.assertEqual(metadata['average_ms'], 1000)
+        self.assertEqual(metadata['origin_ms'], 0)
+        self.assertEqual(metadata['ramp_time_ms'], runner.args.ramp_time * 1000)
+        self.assertEqual(metadata['time_reference'], 'post_ramp_measurement_epoch')
+
+    def test_protocol_migration_and_sweep_compatibility(self):
+        self.assertEqual(args().protocol, 'comparison')
+        with contextlib.redirect_stderr(io.StringIO()) as stream:
+            selected = args('--matrix', 'full')
+        self.assertEqual(selected.protocol, 'sweep')
+        self.assertIn('migration', stream.getvalue())
+        self.assertEqual(selected.trials, 1)
+        self.assertEqual(selected.run_count, 5)
+        points = bench.build_points(selected)
+        self.assertEqual(len(points), 3 * 98)
+        self.assertEqual({profile: sum(point['profile'] == profile for point in points)
+                          for profile in selected.profiles}, {profile: 98 for profile in selected.profiles})
+        sweep_schedule, sweep_refs = bench.build_schedule(selected, bench.build_points(selected))
+        first = [entry for entry in sweep_schedule if entry['profile'] == 'fresh']
+        self.assertEqual([entry['kind'] for entry in first[:3]],
+                         ['preparation', 'reference', 'observation'])
+        self.assertEqual(first[1]['stage'], 'early')
+        self.assertEqual(first[-1]['stage'], 'late')
+        self.assertEqual([ref['stage'] for ref in sweep_refs if ref['profile'] == 'fresh'], ['early', 'late'])
+        self.assertEqual(args('--profiles', 'fresh', '--prepare-only').trials, 1)
+        with self.assertRaises(SystemExit):
+            args('--protocol', 'comparison', '--matrix', 'full')
+        self.assertEqual(args('--profiles', 'used-recovered').profiles, ['medium'])
+
+    def test_dry_preview_includes_every_execution_layout(self):
+        runner = self.runner('--profiles', 'fresh', '--trials', '2')
+        preview = runner.schedule_preview()
+        self.assertEqual(len(preview), 2 * (1 + 7 + 2))
+        observations = [x for x in preview if x['kind'] != 'preparation']
+        self.assertTrue(all(x['samples'][0]['workers'] for x in observations))
+        self.assertEqual(preview[0]['occupied_bytes'], 80 * bench.ALIGN)
+
+    def test_smoke_keeps_anchor_worker_layouts_but_reduces_duration(self):
+        runner = self.runner('--run-type', 'smoke')
+        self.assertEqual(runner.args.trials, 1)
+        self.assertEqual(runner.args.measurement_time, 2)
+        self.assertEqual(len([x for x in runner.manifest['schedule'] if x['kind'] == 'preparation']), 3)
+        qd1 = next(p for p in runner.manifest['points'] if p['anchor'] == 'rr4k_qd1')
+        write_qd1 = next(p for p in runner.manifest['points'] if p['anchor'] == 'wr4k_qd1')
+        qd64 = next(p for p in runner.manifest['points'] if p['anchor'] == 'rr4k_qd64')
+        self.assertEqual(len(runner.workload_command(qd1, 1, self.directory)[1]), 1)
+        command, layout = runner.workload_command(write_qd1, 1, self.directory)
+        self.assertEqual(len(layout), 1)
+        self.assertIn('--rw=randwrite', command)
+        self.assertIn('--iodepth=1', command)
+        self.assertIn('--ramp_time=0s', command)
+        self.assertIn('--ioengine=io_uring', runner.fio_base())
+        self.assertIn('--direct=1', runner.fio_base())
+        self.assertEqual(len(runner.workload_command(qd64, 1, self.directory)[1]), 4)
+
+
+class PlacementTests(unittest.TestCase):
+    def test_online_permitted_pool_and_distinct_physical_cores(self):
+        def reader(path):
+            path = str(path)
+            if path.endswith('node1/cpulist'):
+                return '32-33,96-97'
+            if path.endswith('/cpu/online'):
+                return '0-127'
+            if 'physical_package_id' in path:
+                return '0'
+            if 'core_id' in path:
+                return '0' if 'cpu32/' in path or 'cpu96/' in path else '1'
+            return None
+        with mock.patch.object(bench, 'read_text', side_effect=reader):
+            placement = bench.numa_placement(1, {32, 33, 96, 97, 127})
+        self.assertEqual(placement['cpu_pool'], [32, 33, 96, 97])
+        self.assertEqual(placement['physical_cpus'], [32, 33])
+        self.assertEqual(placement['memory_policy'], 'bind:1')
+
+    def test_missing_node_and_no_permitted_cpu_fail(self):
+        with mock.patch.object(bench, 'read_text', return_value=None):
+            with self.assertRaisesRegex(RuntimeError, 'unavailable'):
+                bench.numa_placement(5, {32})
+        def reader(path):
+            return '32-63' if str(path).endswith('node1/cpulist') else '0-127'
+        with mock.patch.object(bench, 'read_text', side_effect=reader):
+            with self.assertRaisesRegex(RuntimeError, 'no online permitted'):
+                bench.numa_placement(1, {0, 1})
 
 
 class FakeClock:
     def __init__(self):
         self.value = 100.0
-
-    def advance(self, seconds):
+    def monotonic(self):
+        return self.value
+    def sleep(self, seconds):
         self.value += seconds
 
 
-class WorkflowTests(unittest.TestCase):
+class PreparationTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix='nvme-bench-test-')
-        self.directory = Path(self.temp.name)
+        self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        SimulatedRunner.instances = []
-        SimulatedRunner.failure = None
-        SimulatedRunner.fill_seconds = 1
+        self.directory = Path(self.temp.name)
         self.clock = FakeClock()
-        SimulatedRunner.clock = self.clock
+        self.patches = contextlib.ExitStack()
+        self.addCleanup(self.patches.close)
+        self.patches.enter_context(mock.patch.object(bench.time, 'monotonic', self.clock.monotonic))
+        self.patches.enter_context(mock.patch.object(bench.time, 'sleep', self.clock.sleep))
+        self.patches.enter_context(mock.patch.object(bench, 'inspect_device', return_value=DEVICE))
+        self.patches.enter_context(mock.patch.object(bench, 'command', return_value=types.SimpleNamespace(stdout='', stderr='', returncode=0)))
+        self.runner = bench.Runner(args('--profiles', 'medium', '--max-preparation-time', '5m'), DEVICE.copy(), self.directory)
+        self.runner.save = lambda **kwargs: None
+        self.runner.telemetry = lambda **kwargs: None
+        self.runner.host_writes = lambda: None
+        self.runner.start_deadline()
+
+    def test_medium_incomplete_exposure_is_exploratory_after_full_fill(self):
+        def fio(options, directory, on_snapshot=None, deadline=None):
+            if Path(directory).name == 'fill':
+                return job('prepare', 80 * bench.ALIGN)
+            return job('condition', 4096)
+        self.runner.fio = fio
+        record = self.runner.prepare('medium', 1)
+        self.assertEqual(record['status'], 'complete')
+        self.assertFalse(record['qualified'])
+        self.assertEqual(record['fill_fraction'], 1)
+        self.assertEqual(record['conditioning_status'], 'time_cap_reached')
+        self.assertEqual(record['recovery_status'], 'complete')
+        self.assertEqual(record['measured_write_bytes'], 80 * bench.ALIGN + 4096)
+        self.assertEqual(record['host_write_bytes'], 80 * bench.ALIGN + 4096)
+        self.assertEqual(record['host_write_accounting'], 'measured_only_lower_bound')
+        from profile_report import render_report
+        render_report(self.directory, self.runner.manifest, plots=False)
+        with (self.directory / 'preparations.csv').open() as handle:
+            import csv
+            prepared = next(csv.DictReader(handle))
+        self.assertEqual(int(prepared['host_write_bytes']), 80 * bench.ALIGN + 4096)
+
+    def test_incomplete_fill_stops_before_conditioning(self):
+        self.runner.fio = lambda *a, **k: job('prepare', 4096)
+        with self.assertRaisesRegex(RuntimeError, 'did not initialize'):
+            self.runner.prepare('medium', 1)
+        self.assertEqual(self.runner.manifest['preparation'][0]['qualified'], False)
+
+    def test_sustained_requires_post_floor_windows_and_cpu_headroom(self):
+        self.runner = bench.Runner(args('--profiles', 'sustained'), DEVICE.copy(), self.directory)
+        self.runner.save = lambda **kwargs: None
+        self.runner.telemetry = lambda **kwargs: None
+        self.runner.host_writes = lambda: None
+        self.runner.start_deadline()
+        callbacks = []
+        def fio(options, directory, on_snapshot=None, deadline=None):
+            if Path(directory).name == 'fill':
+                return job('prepare', 80 * bench.ALIGN)
+            shard = 20 * bench.ALIGN
+            latest = None
+            for minute in range(1, 9):
+                self.clock.sleep(60)
+                # Five stable windows before the floor cannot qualify.
+                nbytes = shard // 2 if minute <= 5 else shard * (minute - 4)
+                latest = {f'worker_{i:02d}': job(f'worker_{i:02d}', nbytes, minute * 60000)
+                          for i in range(4)}
+                callbacks.append(bool(on_snapshot(latest)))
+                if callbacks[-1]:
+                    break
+            return latest
+        self.runner.fio = fio
+        record = self.runner.prepare('sustained', 1)
+        self.assertFalse(record['qualified'])
+        self.assertEqual(record['floor_reached_at_s'], 360)
+        self.assertEqual(record['conditioning']['window_count'], 2)
+        self.assertFalse(any(callbacks))
+
+    def test_sustained_qualifies_only_after_two_post_floor_assessments(self):
+        self.runner = bench.Runner(args('--profiles', 'sustained'), DEVICE.copy(), self.directory)
+        self.runner.save = lambda **kwargs: None
+        self.runner.telemetry = lambda **kwargs: None
+        self.runner.host_writes = lambda: None
+        self.runner.start_deadline()
+        observations = []
+        def fio(options, directory, on_snapshot=None, deadline=None):
+            if Path(directory).name == 'fill':
+                return job('prepare', 80 * bench.ALIGN)
+            latest = None
+            for minute in range(1, 9):
+                self.clock.sleep(60)
+                latest = {f'worker_{i:02d}': job(f'worker_{i:02d}',
+                          20 * bench.ALIGN * minute, minute * 60000) for i in range(4)}
+                observations.append(bool(on_snapshot(latest)))
+                if observations[-1]:
+                    break
+            return latest
+        self.runner.fio = fio
+        record = self.runner.prepare('sustained', 1)
+        self.assertTrue(record['qualified'])
+        self.assertEqual(record['conditioning_status'], 'observed_stable')
+        self.assertEqual(record['floor_reached_at_s'], 60)
+        self.assertEqual(observations, [False] * 6 + [True])
+        self.assertEqual(record['conditioning']['consecutive_assessments'], 2)
+        self.assertEqual(record['measured_write_bytes'], 80 * bench.ALIGN + 4 * 20 * bench.ALIGN * 7)
+        self.assertEqual(record['host_write_bytes'], record['measured_write_bytes'])
+
+    def test_reset_kernel_counter_uses_fill_plus_sustained_exposure(self):
+        self.runner = bench.Runner(args('--profiles', 'sustained', '--run-type', 'smoke'),
+                                   DEVICE.copy(), self.directory)
+        self.runner.save = lambda **kwargs: None
+        self.runner.telemetry = lambda **kwargs: None
+        first_counter = iter([100])
+        self.runner.host_writes = lambda: next(first_counter, 50)
+        self.runner.start_deadline()
+        def fio(options, directory, on_snapshot=None, deadline=None):
+            if Path(directory).name == 'fill':
+                return job('prepare', self.runner.occupied_size('sustained'))
+            shard = self.runner.occupied_size('sustained') // 4
+            return {f'worker_{i:02d}': job(f'worker_{i:02d}', shard, 1000)
+                    for i in range(4)}
+        self.runner.fio = fio
+        record = self.runner.prepare('sustained', 1)
+        self.assertEqual(record['host_write_accounting'], 'measured_only_lower_bound')
+        self.assertEqual(record['exposure_write_bytes'], self.runner.occupied_size('sustained'))
+        self.assertEqual(record['measured_write_bytes'], 2 * self.runner.occupied_size('sustained'))
+        self.assertEqual(record['host_write_bytes'], record['measured_write_bytes'])
+
+    def test_sustained_missing_cpu_cannot_qualify(self):
+        self.runner = bench.Runner(args('--profiles', 'sustained'), DEVICE.copy(), self.directory)
+        self.runner.save = lambda **kwargs: None
+        self.runner.telemetry = lambda **kwargs: None
+        self.runner.host_writes = lambda: None
+        self.runner.start_deadline()
+        def fio(options, directory, on_snapshot=None, deadline=None):
+            if Path(directory).name == 'fill':
+                return job('prepare', 80 * bench.ALIGN)
+            latest = None
+            for minute in range(1, 9):
+                self.clock.sleep(60)
+                latest = {f'worker_{i:02d}': job(f'worker_{i:02d}',
+                          20 * bench.ALIGN * minute, minute * 60000) for i in range(4)}
+                latest['worker_00'].pop('usr_cpu')
+                self.assertFalse(on_snapshot(latest))
+            return latest
+        self.runner.fio = fio
+        record = self.runner.prepare('sustained', 1)
+        self.assertFalse(record['qualified'])
+        self.assertEqual(record['conditioning_status'], 'cpu_unqualified')
+
+
+class StreamAndSafetyTests(unittest.TestCase):
+    def test_json_stream_recovers_warning_braces_and_multiple_objects(self):
+        decoder = bench.JSONStream()
+        self.assertEqual(decoder.feed('warning {junk}\n{"jobs":['), [])
+        self.assertEqual(decoder.feed(']}\n{"jobs":[]}'), [{'jobs': []}, {'jobs': []}])
+
+    def test_expired_deadline_prevents_fio_launch(self):
+        with tempfile.TemporaryDirectory() as temp:
+            runner = bench.Runner(args(), DEVICE.copy(), Path(temp))
+            runner.run_deadline = bench.time.monotonic() - 1
+            with mock.patch.object(bench.subprocess, 'Popen', side_effect=AssertionError('launched')):
+                with self.assertRaises(bench.BudgetExpired):
+                    runner.fio(['--name=x', '--runtime=1s'], Path(temp) / 'x')
+
+    def test_lock_serializes_sibling_partitions(self):
+        with tempfile.TemporaryDirectory() as temp:
+            sibling = dict(DEVICE, path='/dev/nvme999n1p1')
+            with bench.NamespaceLock(DEVICE, Path(temp)):
+                with self.assertRaisesRegex(RuntimeError, 'another benchmark'):
+                    with bench.NamespaceLock(sibling, Path(temp)):
+                        pass
+
+    def test_output_on_target_dependency_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            def command(options, **kwargs):
+                if options[0] == 'findmnt':
+                    return types.SimpleNamespace(stdout=TARGET + '\n')
+                return types.SimpleNamespace(stdout=json.dumps({'blockdevices': [
+                    {'name': 'nvme999n1p2', 'path': TARGET}]}))
+            device = dict(DEVICE, layout={'blockdevices': [
+                {'name': 'nvme999n1', 'path': '/dev/nvme999n1', 'children': [
+                    {'name': 'nvme999n1p2', 'path': TARGET}]}]})
+            with mock.patch.object(bench, 'command', side_effect=command):
+                with self.assertRaisesRegex(RuntimeError, 'outside the tested'):
+                    bench.output_outside_target(Path(temp), device)
+
+    def test_truncated_fio_output_is_rejected_and_process_reaped(self):
+        with tempfile.TemporaryDirectory() as temp:
+            runner = bench.Runner(args('--profiles', 'fresh'), DEVICE.copy(), Path(temp))
+            runner.telemetry = lambda **kwargs: None
+            class Process:
+                pid = 999999
+                def poll(self):
+                    return 0
+                def wait(self, timeout=None):
+                    return 0
+            def spawn(options, stdout=None, stderr=None, **kwargs):
+                stdout.write('{"jobs":[')
+                stdout.flush()
+                return Process()
+            with mock.patch.object(bench.subprocess, 'Popen', side_effect=spawn):
+                with self.assertRaisesRegex(RuntimeError, 'truncated fio JSON'):
+                    runner.fio(['--name=sample', '--runtime=1s'], Path(temp) / 'sample')
+            self.assertIsNone(runner.process)
+
+    def test_new_health_warning_stops_run(self):
+        with tempfile.TemporaryDirectory() as temp:
+            runner = bench.Runner(args('--profiles', 'fresh'), DEVICE.copy(), Path(temp))
+            runner.start_deadline()
+            first = {'critical_warning': 0, 'media_errors': 0}
+            second = {'critical_warning': 1, 'media_errors': 0}
+            replies = [types.SimpleNamespace(returncode=0, stdout=json.dumps(item), stderr='')
+                       for item in (first, second)]
+            with mock.patch.object(bench.shutil, 'which', return_value='/mock/nvme'), \
+                 mock.patch.object(bench, 'command', side_effect=replies):
+                runner.telemetry(force=True)
+                with self.assertRaisesRegex(RuntimeError, 'health warning'):
+                    runner.telemetry(force=True)
+
+    def test_failed_measurement_preserves_partial_schema3_report(self):
+        with tempfile.TemporaryDirectory() as temp:
+            runner = bench.Runner(args('--profiles', 'fresh', '--trials', '1'), DEVICE.copy(), Path(temp))
+            runner.telemetry = lambda **kwargs: None
+            runner.host_writes = lambda: None
+            def prepared(profile, trial):
+                record = dict(id=f't{trial:02d}_{profile}', trial=trial, profile=profile,
+                              status='complete', qualified=True, conditioning_status='not_required',
+                              relative_dir='preparation/mock', quality=[], host_write_bytes=0)
+                runner.manifest['preparation'].append(record)
+                return record
+            runner.prepare = prepared
+            runner.measure = mock.Mock(side_effect=RuntimeError('mock fio failure'))
+            with mock.patch.object(bench.signal, 'signal'):
+                outcome = runner.run()
+            self.assertEqual(outcome, 1)
+            self.assertEqual(runner.manifest['status'], 'failed')
+            self.assertEqual(runner.manifest['points'][0]['status'], 'failed')
+            self.assertTrue((Path(temp) / 'manifest.json').exists())
+            self.assertTrue((Path(temp) / 'report.html').exists())
+            self.assertTrue((Path(temp) / 'result.txt').exists())
+
+
+class MainFakeRunner(bench.Runner):
+    """Keep real main/run/prepare/measure paths; replace only raw fio I/O."""
+    instances = []
+    mode = 'normal'
+    clock = None
+    child_check = None
+
+    def __init__(self, *values):
+        super().__init__(*values)
+        self.instances.append(self)
+
+    def telemetry(self, force=False):
+        pass
+
+    def host_writes(self):
+        return None
+
+    def fio(self, options, directory, on_snapshot=None, deadline=None):
+        if self.child_check:
+            self.child_check()
+        directory = Path(directory)
+        names = [value.split('=', 1)[1] for value in options if value.startswith('--name=')]
+        settings = {value.split('=', 1)[0]: value.split('=', 1)[1]
+                    for value in options if value.startswith('--') and '=' in value}
+        if directory.name == 'capability_check':
+            if self.mode == 'capability_failure':
+                raise RuntimeError('fio NUMA memory binding failed')
+            return job(names[0], 0, 1000, reads=4096)
+        if directory.name == 'fill':
+            size = int(settings['--size'])
+            if self.mode == 'fill_local_cap':
+                self.last_job = job(names[0], size // 2)
+                self.clock.value = deadline + 1
+                raise bench.BudgetExpired('preparation fill cap')
+            return job(names[0], size)
+        if directory.name == 'conditioning':
+            if self.mode == 'global_conditioning_cap':
+                self.last_job = job(names[0], 4096)
+                self.clock.value = self.run_deadline + 1
+                raise bench.BudgetExpired('global conditioning cap')
+            return job(names[0], int(settings.get('--io_size', 4096)))
+        if directory.name == 'run_01' and self.mode == 'cancel_measure':
+            raise InterruptedError('user cancellation')
+        if directory.name == 'run_02' and self.mode == 'fail_second_repeat':
+            raise RuntimeError('second local repeat failed')
+        rw = settings.get('--rw', 'read')
+        measured_ms = self.args.measurement_time * 1000
+        reads = 4096 * 100 if rw in ('read', 'randread') else 4096 * 70 if rw in ('rw', 'randrw') else 0
+        writes = 4096 * 30 if rw in ('rw', 'randrw') else 4096 * 100 if rw in ('write', 'randwrite') else 0
+        result = {name: job(name, writes, measured_ms, reads=reads) for name in names}
+        final = result[names[0]] if len(names) == 1 else result
+        self.last_job = final
+        return final
+
+
+class MainLifecycleTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.output = Path(self.temp.name, 'results')
+        MainFakeRunner.instances = []
+        MainFakeRunner.mode = 'normal'
+        MainFakeRunner.clock = None
+        self.current_affinity = {0, 1}
+        self.affinity_changes = []
+        self.commands = []
+        self.inspections = []
         self.stack = contextlib.ExitStack()
         self.addCleanup(self.stack.close)
-        self.stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
-        self.stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
-        self.stack.enter_context(mock.patch.object(bench.signal, 'signal'))
+        self.stack.enter_context(mock.patch.object(bench, 'Runner', MainFakeRunner))
+        self.stack.enter_context(mock.patch.object(bench, 'NamespaceLock',
+                                                   side_effect=lambda device: contextlib.nullcontext()))
+        self.stack.enter_context(mock.patch.object(bench, 'output_outside_target'))
         self.stack.enter_context(mock.patch.object(bench.shutil, 'which', return_value='/mock/tool'))
-        self.stack.enter_context(mock.patch.object(bench, 'inspect_device', return_value=DEVICE.copy()))
-        self.stack.enter_context(mock.patch.object(bench.time, 'sleep', side_effect=self.clock.advance))
-        self.stack.enter_context(mock.patch.object(bench.time, 'monotonic', side_effect=lambda: self.clock.value))
-        self.command = self.stack.enter_context(mock.patch.object(
-            bench, 'command', return_value=types.SimpleNamespace(returncode=0, stdout='', stderr='')))
-        original_stat = Path.stat
+        self.stack.enter_context(mock.patch.object(bench.os, 'geteuid', return_value=0))
+        self.stack.enter_context(mock.patch.object(bench.os, 'sched_getaffinity',
+                                                   side_effect=lambda pid: set(self.current_affinity)))
+        self.stack.enter_context(mock.patch.object(bench.os, 'sched_setaffinity', side_effect=self.set_affinity))
+        self.stack.enter_context(mock.patch.object(bench, 'inspect_device', side_effect=self.inspect))
+        self.stack.enter_context(mock.patch.object(bench, 'command', side_effect=self.command))
+        self.stack.enter_context(mock.patch.object(bench.signal, 'signal'))
+        MainFakeRunner.child_check = self.check_child_affinity
 
-        def fake_stat(path, *args, **kwargs):
-            if str(path) == TARGET:
-                return types.SimpleNamespace(st_rdev=os.makedev(259, 99))
-            return original_stat(path, *args, **kwargs)
+    def set_affinity(self, pid, pool):
+        self.current_affinity = set(pool)
+        self.affinity_changes.append(set(pool))
 
-        self.stack.enter_context(mock.patch.object(Path, 'stat', fake_stat))
-        # Any accidental raw subprocess launch fails before touching storage.
-        self.stack.enter_context(mock.patch.object(bench.subprocess, 'Popen', side_effect=AssertionError('unmocked subprocess')))
-        self.stack.enter_context(mock.patch.object(bench.subprocess, 'run', side_effect=AssertionError('unmocked command')))
+    def check_child_affinity(self):
+        self.assertEqual(self.current_affinity, set(DEVICE['placement']['cpu_pool']))
 
-    def args(self, *extra):
-        return bench.parse_args(['--filename', TARGET, '--allow-partition', '--yes',
-                                 '--results-dir', str(self.directory), *extra])
+    def inspect(self, options):
+        self.inspections.append(options)
+        return DEVICE.copy()
 
-    def test_balanced_default_and_optional_full_matrix_have_unique_cases(self):
-        points = bench.build_points(self.args())
-        self.assertEqual(len(points), 144)
-        self.assertEqual(len({(p['profile'], p['id']) for p in points}), 144)
-        for profile in bench.PROFILES:
-            selected = [p for p in points if p['profile'] == profile]
-            self.assertEqual(len(selected), 48)
-            random = [p for p in selected if p['pattern'] == 'random']
-            self.assertEqual(len(random), 40)
-            self.assertEqual({p['read_pct'] for p in random}, set(bench.BALANCED_RATIOS))
-            self.assertEqual(sum(p['read_pct'] == 100 for p in selected), 12)
-            first_write = next(i for i, p in enumerate(selected) if p['read_pct'] < 100)
-            self.assertEqual(first_write, 12)
-            self.assertEqual([p['read_pct'] for p in selected], sorted((p['read_pct'] for p in selected), reverse=True))
-        full = bench.build_points(self.args('--matrix', 'full'))
-        self.assertEqual(len(full), 294)
-        self.assertEqual(len({(p['profile'], p['id']) for p in full}), 294)
+    def command(self, options, **kwargs):
+        self.commands.append(options)
+        if options[0] in ('fio', 'blkdiscard'):
+            self.check_child_affinity()
+        return types.SimpleNamespace(returncode=0, stdout='', stderr='')
 
-    def test_deprecated_alias_conflicts_include_equals_syntax(self):
-        for extra in (['--runtime=1s', '--measurement-time=2s'],
-                      ['--clean-device', '--profiles=fresh']):
-            with self.subTest(extra=extra), self.assertRaises(SystemExit) as raised:
-                self.args(*extra)
-            self.assertEqual(raised.exception.code, 2)
+    def invoke(self, *extra):
+        return bench.main(['--filename', TARGET, '--allow-partition', '--numa-node', '1',
+                           '--profiles', 'fresh', '--trials', '1', '--run-type', 'smoke',
+                           '--results-dir', str(self.output), '--yes', *extra])
 
-    def test_zero_rounded_active_range_is_rejected(self):
-        args = self.args('--run-type', 'smoke', '--size-percent', '1')
-        runner = bench.Runner(args, DEVICE.copy(), self.directory)
-        with self.assertRaisesRegex(RuntimeError, 'below 1 MiB'):
-            runner.size('medium')
+    def test_full_main_binds_before_children_and_restores_after_run(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.invoke(), 0)
+        self.assertEqual(self.affinity_changes[0], set(DEVICE['placement']['cpu_pool']))
+        self.assertEqual(self.affinity_changes[-1], {0, 1})
+        self.assertEqual(self.current_affinity, {0, 1})
+        self.assertEqual(len([cmd for cmd in self.commands if cmd[0] == 'blkdiscard']), 1)
+        self.assertEqual(MainFakeRunner.instances[0].manifest['status'], 'complete')
+        self.assertEqual(len([p for p in MainFakeRunner.instances[0].manifest['points']
+                              if p['status'] == 'complete']), 7)
+        self.assertTrue((self.output / 'manifest.json').exists())
 
-    def test_ranges_are_80_percent_for_every_default_profile(self):
-        runner = bench.Runner(self.args(), DEVICE.copy(), self.directory)
-        for profile in bench.PROFILES:
-            self.assertEqual(runner.size(profile), 80 * bench.ALIGN)
-            self.assertEqual(runner.occupied_size(profile), 80 * bench.ALIGN)
-        smaller = bench.Runner(self.args('--size-percent', '40'), DEVICE.copy(), self.directory)
-        for profile in bench.PROFILES:
-            self.assertEqual(smaller.size(profile), 40 * bench.ALIGN)
-            self.assertEqual(smaller.occupied_size(profile), (40 if profile == 'fresh' else 80) * bench.ALIGN)
-        with self.assertRaises(SystemExit):
-            self.args('--size-percent', '90', '--occupancy-percent', '80')
+    def test_unsupported_fio_numa_policy_fails_before_discard_and_restores_affinity(self):
+        ordinary = self.command
+        def unsupported(options, **kwargs):
+            if options[0] == 'fio':
+                self.assertIn('--numa_mem_policy=bind:1', options)
+                self.check_child_affinity()
+                raise RuntimeError('unsupported numa_mem_policy')
+            return ordinary(options, **kwargs)
+        with mock.patch.object(bench, 'command', side_effect=unsupported):
+            with self.assertRaisesRegex(RuntimeError, 'unsupported numa'):
+                self.invoke()
+        self.assertEqual(self.current_affinity, {0, 1})
+        self.assertFalse(self.output.exists())
+        self.assertFalse(any(cmd[0] == 'blkdiscard' for cmd in self.commands))
 
-    def test_default_write_budget_has_once_per_profile_fill_and_no_workload_floor(self):
-        runner = bench.Runner(self.args(), DEVICE.copy(), self.directory)
-        budget = runner.minimum_writes()
-        expected_prep = sum(runner.occupied_size(profile) for profile in bench.PROFILES)
-        self.assertEqual(budget['preparation_bytes'], expected_prep)
-        self.assertEqual(budget['sustained_write_floor_bytes'], 0)
-        self.assertEqual(budget['total_bytes'], expected_prep)
+    def test_unavailable_numa_node_fails_before_mutation(self):
+        with mock.patch.object(bench, 'inspect_device', side_effect=RuntimeError('no online permitted CPUs')):
+            with self.assertRaisesRegex(RuntimeError, 'no online permitted'):
+                self.invoke()
+        self.assertFalse(self.affinity_changes)
+        self.assertFalse(self.commands)
 
-    def test_default_time_budget_is_hours_and_includes_five_samples(self):
-        runner = bench.Runner(self.args(), DEVICE.copy(), self.directory)
-        budget = runner.budget()
-        self.assertEqual(budget['case_count'], 144)
-        self.assertEqual(budget['sample_count'], 720)
-        self.assertGreaterEqual(budget['measurement_work_s'], 144 * 5 * 13)
-        self.assertEqual(budget['preparation_cap_s'], 30 * 60 + 30 * 60 + 60 * 60)
-        self.assertGreaterEqual(budget['run_cap_s'], budget['preparation_cap_s'] + 720 * 15)
-        self.assertLess(budget['run_cap_s'], 6 * 3600)
-        explicit = bench.Runner(self.args('--max-run-time', '4h'), DEVICE.copy(), self.directory)
-        self.assertEqual(explicit.budget()['run_cap_s'], 4 * 3600)
+    def test_identity_change_after_capability_parse_stops_before_discard(self):
+        values = [DEVICE.copy(), dict(DEVICE, serial='CHANGED')]
+        with mock.patch.object(bench, 'inspect_device', side_effect=values):
+            with self.assertRaisesRegex(RuntimeError, 'identity/layout changed'):
+                self.invoke()
+        self.assertEqual(self.current_affinity, {0, 1})
+        self.assertFalse(self.output.exists())
+        self.assertFalse(any(cmd[0] == 'blkdiscard' for cmd in self.commands))
 
-    def test_preparation_only_budget_has_no_measurement_or_reference_work(self):
-        runner = bench.Runner(self.args('--profiles', 'medium', '--prepare-only'), DEVICE.copy(), self.directory)
-        budget = runner.budget()
-        self.assertEqual(budget['sample_count'], 0)
-        self.assertEqual(budget['case_count'], 0)
-        self.assertEqual(budget['measurement_work_s'], 0)
-        self.assertEqual(budget['reference_work_s'], 0)
-        self.assertEqual(budget['preparation_cap_s'], 1800)
+    def test_capability_failure_after_parse_stops_before_discard_with_report(self):
+        MainFakeRunner.mode = 'capability_failure'
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(self.invoke(), 1)
+        self.assertFalse(any(cmd[0] == 'blkdiscard' for cmd in self.commands))
+        self.assertEqual(self.current_affinity, {0, 1})
+        self.assertEqual(MainFakeRunner.instances[0].manifest['capability_check']['status'], 'failed')
+        self.assertTrue((self.output / 'manifest.json').exists())
 
-    def test_all_presets_finish_with_bounded_nonconverging_conditioning(self):
-        # Simulate slow initialization and conditioning that never stabilizes;
-        # every case in all three profiles must still run within its budget.
-        for matrix, run_type, cap in [('balanced', 'normal', 18390), ('full', 'normal', 29640),
-                                      ('balanced', 'smoke', 744)]:
-            with self.subTest(matrix=matrix, run_type=run_type):
-                directory = self.directory / f'{matrix}_{run_type}'
-                directory.mkdir()
-                runner = SimulatedRunner(self.args('--matrix', matrix, '--run-type', run_type), DEVICE.copy(), directory)
-                runner.fill_seconds = 1500 if run_type == 'normal' else 1
-                began = self.clock.value
-                with mock.patch('profile_metrics.check_stability', return_value={'stable': False, 'checks': {}}):
-                    self.assertEqual(runner.run(), 0)
-                self.assertEqual(runner.budget()['run_cap_s'], cap)
-                self.assertLessEqual(self.clock.value - began, cap)
-                self.assertEqual(len(runner.manifest['preparation']), 3)
-                self.assertTrue(all(p['status'] == 'complete' for p in runner.manifest['points']))
-                self.assertEqual(runner.manifest['preparation'][-1]['conditioning_status'], 'time_cap_reached')
+    def test_local_fill_deadline_stops_before_measurement(self):
+        clock = FakeClock()
+        MainFakeRunner.mode = 'fill_local_cap'
+        MainFakeRunner.clock = clock
+        with mock.patch.object(bench.time, 'monotonic', clock.monotonic), \
+             mock.patch.object(bench.time, 'sleep', clock.sleep), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(self.invoke(), 1)
+        manifest = MainFakeRunner.instances[0].manifest
+        self.assertEqual(manifest['status'], 'timed_out')
+        self.assertEqual(manifest['preparation'][0]['phase'], 'fill')
+        self.assertTrue(all(point['status'] == 'pending' for point in manifest['points']))
+        self.assertEqual(self.current_affinity, {0, 1})
 
-    def test_expired_global_budget_prevents_new_fio_process(self):
-        runner = bench.Runner(self.args(), DEVICE.copy(), self.directory)
-        runner.run_deadline = self.clock.value - 1
-        with mock.patch.object(bench.subprocess, 'Popen') as popen:
-            with self.assertRaises(bench.BudgetExpired):
-                runner.fio(['--name=never-start', '--runtime=1s'], self.directory)
-        popen.assert_not_called()
+    def test_global_conditioning_deadline_is_not_exploratory_success(self):
+        clock = FakeClock()
+        MainFakeRunner.mode = 'global_conditioning_cap'
+        MainFakeRunner.clock = clock
+        with mock.patch.object(bench.time, 'monotonic', clock.monotonic), \
+             mock.patch.object(bench.time, 'sleep', clock.sleep), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(self.invoke('--profiles', 'medium', '--max-run-time', '20s'), 1)
+        manifest = MainFakeRunner.instances[0].manifest
+        self.assertEqual(manifest['status'], 'timed_out')
+        self.assertFalse(manifest['preparation'][0]['qualified'])
+        self.assertTrue(all(point['status'] == 'pending' for point in manifest['points']))
+        self.assertEqual(self.current_affinity, {0, 1})
 
-    def test_write_accounting_includes_ramp_from_target_kernel_counter(self):
-        runner = bench.Runner(self.args(), DEVICE.copy(), self.directory)
-        with mock.patch.object(bench, 'read_text', return_value='0 0 0 0 0 0 30 0'):
-            record = {}
-            runner.record_writes(record, 10 * 512, 8192)
-        self.assertEqual(record['measured_write_bytes'], 8192)
-        self.assertEqual(record['host_write_bytes'], 20 * 512)
-        self.assertEqual(record['host_write_accounting'], 'target_kernel_counter')
+    def test_cancellation_finalizes_partial_sample_and_manifest(self):
+        MainFakeRunner.mode = 'cancel_measure'
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(self.invoke(), 1)
+        manifest = MainFakeRunner.instances[0].manifest
+        self.assertEqual(manifest['status'], 'interrupted')
+        self.assertEqual(manifest['points'][0]['runs'][0]['status'], 'interrupted')
+        self.assertEqual(json.loads((self.output / 'manifest.json').read_text())['status'], 'interrupted')
+        self.assertEqual(self.current_affinity, {0, 1})
 
-    def test_missing_or_reset_kernel_counter_marks_bytes_as_lower_bound(self):
-        runner = bench.Runner(self.args(), DEVICE.copy(), self.directory)
-        for before, after in ((None, None), (100, 99)):
-            with self.subTest(before=before, after=after), mock.patch.object(runner, 'host_writes', return_value=after):
-                record = {}
-                runner.record_writes(record, before, 8192)
-                self.assertEqual(record['host_write_bytes'], 8192)
-                self.assertEqual(record['host_write_accounting'], 'measured_only_lower_bound')
-
-    def test_old_profile_names_remain_aliases_and_ramp_can_be_zero(self):
-        args = self.args('--profiles', 'used-recovered,sustained-steady', '--ramp-time', '0', '--run-count', '3')
-        self.assertEqual(args.profiles, ['medium', 'sustained'])
-        self.assertEqual(args.ramp_time, 0)
-        self.assertEqual(args.run_count, 3)
-        with self.assertRaises(SystemExit):
-            self.args('--run-count', '0')
-
-    def test_full_main_invocation_prepares_and_measures_all_profiles(self):
-        with mock.patch.object(bench, 'inspect_device', return_value=DEVICE.copy()) as inspect, \
-             mock.patch.object(bench, 'output_outside_target'), \
-             mock.patch.object(bench.os, 'geteuid', return_value=0), \
-             mock.patch.object(bench, 'NamespaceLock'), \
-             mock.patch.object(bench, 'Runner', SimulatedRunner):
-            self.assertEqual(bench.main(['--filename', TARGET, '--allow-partition', '--yes',
-                                         '--results-dir', str(self.directory)]), 0)
-        self.assertEqual(inspect.call_count, 5)
-        runner = SimulatedRunner.instances[-1]
-        self.assertEqual(runner.manifest['status'], 'complete')
-        self.assertTrue(all(p['status'] == 'complete' for p in runner.manifest['points']))
-        self.assertEqual(len(runner.manifest['preparation']), 3)
-        self.assertEqual(runner.saves[-1], (True, True))
-        discards = [call.args[0] for call in self.command.call_args_list if call.args[0][0] == 'blkdiscard']
-        self.assertEqual(discards, [['blkdiscard', TARGET]] * 3)
-        for profile in bench.PROFILES:
-            prep = [r for r in runner.manifest['preparation'] if r['profile'] == profile]
-            self.assertEqual(len(prep), 1)
-            for record in prep:
-                self.assertEqual(record['size_bytes'], 80 * bench.ALIGN)
-                self.assertEqual(record['status'], 'complete')
-            points = [p for p in runner.manifest['points'] if p['profile'] == profile]
-            self.assertEqual(len({p['preparation'] for p in points}), 1)
-            for point in points:
-                self.assertAlmostEqual(point['metrics']['achieved_read_pct'], point['read_pct'])
-                self.assertEqual(len(point['runs']), 5)
-                self.assertNotIn('host_write_floor_bytes', point.get('stability', {}))
-        self.assertEqual(sum(len(p['runs']) for p in runner.manifest['points']), 720)
-        self.assertEqual(len(runner.manifest['references']), 6)
-        self.assertTrue(all(p['status'] == 'complete' and len(p['runs']) == 1
-                            for p in runner.manifest['references']))
-        self.assertEqual(runner.budget()['reference_work_s'], 6 * 13)
-
-    def test_read_only_points_record_shared_preparation_reference(self):
-        runner = SimulatedRunner(self.args('--profiles', 'fresh'), DEVICE.copy(), self.directory)
-        self.assertEqual(runner.run(), 0)
-        reads = [p for p in runner.manifest['points'] if p['read_pct'] == 100]
-        self.assertEqual({p.get('preparation') for p in reads}, {reads[0]['preparation']})
-
-    def test_capability_failure_is_reported_without_discard(self):
-        runner = SimulatedRunner(self.args('--profiles', 'fresh'), DEVICE.copy(), self.directory)
-        with mock.patch.object(runner, 'fio', side_effect=RuntimeError('engine unsupported')):
-            self.assertEqual(runner.run(capability_check=True), 1)
-        self.assertEqual(runner.manifest['status'], 'failed')
-        self.assertEqual(runner.manifest['capability_check']['status'], 'failed')
-        self.assertEqual(runner.manifest['capability_check']['error'], 'engine unsupported')
-        self.assertEqual(runner.manifest['preparation'], [])
-        self.command.assert_not_called()
-        self.assertEqual(runner.saves[-1], (True, True))
-
-    def test_final_health_change_prevents_success(self):
-        runner = SimulatedRunner(self.args('--profiles', 'fresh', '--run-type', 'smoke'), DEVICE.copy(), self.directory)
-
-        def health(force=False):
-            if len(runner.manifest['references']) == 2:
-                self.assertTrue(force)
-                raise RuntimeError('new NVMe health warning')
-
-        with mock.patch.object(runner, 'telemetry', side_effect=health):
-            self.assertEqual(runner.run(), 1)
-        self.assertEqual(runner.manifest['status'], 'failed')
-        self.assertTrue(all(p['status'] == 'complete' for p in runner.manifest['points']))
-        self.assertIn('health warning', runner.manifest['error'])
-
-    def test_reference_budget_failure_is_finalized(self):
-        runner = SimulatedRunner(self.args('--profiles', 'fresh'), DEVICE.copy(), self.directory)
-
-        def expired_reference(point):
-            point['status'] = 'running'
-            raise bench.BudgetExpired('reference budget exhausted')
-
-        with mock.patch.object(runner, 'measure', side_effect=expired_reference):
-            self.assertEqual(runner.run(), 1)
-        self.assertEqual(runner.manifest['references'][0]['status'], 'timed_out')
-        self.assertIn('reference budget', runner.manifest['references'][0]['error'])
-
-    def test_report_refresh_once_per_case_but_manifest_preserves_every_repeat(self):
-        runner = SimulatedRunner(self.args('--profiles', 'fresh'), DEVICE.copy(), self.directory)
-        runner.measure(runner.manifest['points'][0])
-        self.assertEqual(sum(report for report, _ in runner.saves), 1)
-        self.assertEqual(len(runner.saves), 2 * runner.args.run_count + 1)
-
-    def test_mixed_command_uses_single_shared_depth_and_ratio(self):
-        runner = SimulatedRunner(self.args('--profiles', 'fresh', '--matrix', 'full'), DEVICE.copy(), self.directory)
-        runner.start_deadline()
-        point = next(p for p in runner.manifest['points'] if p['read_pct'] == 95 and p['qd'] == 32)
-        runner.measure(point)
-        args = runner.fio_base() + runner.calls[-1][0]
-        self.assertIn('--numjobs=1', args)
-        self.assertIn('--iodepth=32', args)
-        self.assertIn('--rw=randrw', args)
-        self.assertIn('--rwmixread=95', args)
-        self.assertEqual(sum(x.startswith('--iodepth=') for x in args), 1)
-        self.assertIn('--norandommap=1', args)
-        self.assertIn('--output-format=json+', args)
-        self.assertNotIn('--hipri=1', args)
-        self.assertIn('--runtime=10s', args)
-        self.assertIn('--ramp_time=3s', args)
-        self.assertEqual(len(point['runs']), 5)
-        self.assertAlmostEqual(point['metrics']['total_iops'], 3000)
-
-    def test_medium_write_limit_is_volume_or_time_without_time_based(self):
-        runner = SimulatedRunner(self.args('--profiles', 'medium'), DEVICE.copy(), self.directory)
-        runner.start_deadline()
-        runner.prepare('medium')
-        writes = [dict(x[2:].split('=', 1) for x in args if '=' in x) for args, _, _ in runner.calls]
-        aging = next(options for options in writes if 'io_size' in options)
-        self.assertNotIn('time_based', aging)
-        self.assertEqual(int(aging['size']), 80 * bench.ALIGN)
-        self.assertLessEqual(int(aging['io_size']), int(aging['size']) * .05)
-        self.assertEqual(aging['runtime'], '120s')
-
-    def test_sustained_measurements_are_bounded_even_for_large_read_heavy_targets(self):
-        device = dict(DEVICE, size_bytes=100 * 1024 ** 4)
-        runner = SimulatedRunner(self.args('--profiles', 'sustained', '--matrix', 'full'), device, self.directory)
-        runner.start_deadline()
-        point = next(p for p in runner.manifest['points'] if p['read_pct'] == 95 and p['qd'] == 1)
-        runner.measure(point)
-        self.assertEqual(point['status'], 'complete')
-        self.assertEqual(len(point['runs']), 5)
-        self.assertLess(self.clock.value - 100, 120)
-        for args, _, _ in runner.calls:
-            self.assertIn('--runtime=10s', args)
-            self.assertFalse(any(x.startswith('--io_size=') for x in args))
-
-    def test_preparation_deadline_includes_fill(self):
-        runner = SimulatedRunner(self.args('--profiles', 'sustained', '--max-conditioning-time', '60s'), DEVICE.copy(), self.directory)
-        runner.fill_seconds = 50
-        runner.start_deadline()
-        began = self.clock.value
-        record = runner.prepare('sustained')
-        self.assertLessEqual(self.clock.value - began, 60)
-        self.assertEqual(record['status'], 'complete')
-        self.assertEqual(record['conditioning_status'], 'time_cap_reached')
-        self.assertTrue(all(deadline is not None and deadline <= began + 60 for _, _, deadline in runner.calls))
-
-    def test_sustained_preparation_stops_after_observed_stability(self):
-        runner = SimulatedRunner(self.args('--profiles', 'sustained'), DEVICE.copy(), self.directory)
-        runner.start_deadline()
-        record = runner.prepare('sustained')
-        self.assertEqual(record['conditioning_status'], 'observed_stable')
-        self.assertEqual(record['conditioning']['consecutive_windows'], 2)
-        self.assertEqual(record['conditioning']['elapsed_s'], 360)
-        self.assertLess(record['elapsed_s'], 600)
-        self.assertEqual(len(runner.calls), 2)
-
-    def test_timeout_before_complete_fill_prevents_measurements(self):
-        runner = SimulatedRunner(self.args('--profiles', 'fresh', '--max-preparation-time', '10s'), DEVICE.copy(), self.directory)
-        runner.fill_seconds = 20
-        self.assertEqual(runner.run(), 1)
-        self.assertFalse(any(p['runs'] for p in runner.manifest['points']))
-        self.assertEqual(len(runner.calls), 1)
-
-    def test_global_conditioning_timeout_is_not_a_successful_qualification(self):
-        runner = SimulatedRunner(self.args('--profiles', 'sustained', '--max-run-time', '20s',
-                                           '--max-conditioning-time', '60s'), DEVICE.copy(), self.directory)
-        self.assertEqual(runner.run(), 1)
-        self.assertEqual(runner.manifest['status'], 'timed_out')
-        self.assertEqual(runner.manifest['preparation'][0]['status'], 'timed_out')
-        self.assertFalse(any(point['runs'] for point in runner.manifest['points']))
-        self.assertLessEqual(self.clock.value, 120)
-
-    def test_partial_repeat_failure_preserves_completed_samples_and_median(self):
-        runner = SimulatedRunner(self.args('--profiles', 'fresh'), DEVICE.copy(), self.directory)
-        runner.start_deadline()
-        point = next(p for p in runner.manifest['points'] if p['read_pct'] == 50)
-        original = runner.fio
-        invocation = 0
-
-        def fail_third(*args, **kwargs):
-            nonlocal invocation
-            invocation += 1
-            if invocation == 3:
-                raise RuntimeError('synthetic third sample failure')
-            return original(*args, **kwargs)
-
-        with mock.patch.object(runner, 'fio', side_effect=fail_third):
-            with self.assertRaisesRegex(RuntimeError, 'third sample'):
-                runner.measure(point)
-        self.assertEqual([sample['status'] for sample in point['runs']], ['complete', 'complete', 'failed'])
+    def test_second_local_repeat_failure_retains_first_complete_metrics(self):
+        MainFakeRunner.mode = 'fail_second_repeat'
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(self.invoke(), 1)
+        point = MainFakeRunner.instances[0].manifest['points'][0]
+        self.assertEqual([run['status'] for run in point['runs']], ['complete', 'failed'])
+        self.assertEqual(point['metrics']['run_count'], 1)
         self.assertEqual(point['status'], 'failed')
-        self.assertAlmostEqual(point['metrics']['total_iops'], 5000)
-        self.assertEqual(invocation, 3)
-        self.assertTrue(any('2/5' in message for message in point['quality']))
+        self.assertTrue((self.output / 'raw-runs.csv').exists())
 
-    def test_high_worker_cpu_is_a_quality_warning(self):
-        runner = SimulatedRunner(self.args('--profiles', 'fresh', '--run-count', '1'), DEVICE.copy(), self.directory)
-        runner.start_deadline()
-        point = runner.manifest['points'][0]
-        result = counters(10000, 0, 10)
-        result.update(usr_cpu=65, sys_cpu=30)
-        with mock.patch.object(runner, 'fio', return_value=result):
-            runner.measure(point)
-        self.assertEqual(point['status'], 'complete')
-        self.assertEqual(point['metrics']['cpu_user'], 65)
-        self.assertTrue(any('host-limited' in message for message in point['quality']))
-
-    def test_medium_preparation_reserves_time_for_recovery(self):
-        runner = SimulatedRunner(self.args('--profiles', 'medium', '--max-preparation-time', '100s',
-                                           '--recovery-time', '30s'), DEVICE.copy(), self.directory)
-        runner.fill_seconds = 50
-        runner.start_deadline()
-        record = runner.prepare('medium')
-        aging = next(dict(x[2:].split('=', 1) for x in args if '=' in x)
-                     for args, _, _ in runner.calls if any(x.startswith('--io_size=') for x in args))
-        self.assertLessEqual(int(aging['runtime'].rstrip('s')), 20)
-        self.assertEqual(record['recovery_status'], 'complete')
-        self.assertLessEqual(record['elapsed_s'], 100)
-
-    def test_medium_unperformed_conditioning_and_short_recovery_are_qualified(self):
-        runner = SimulatedRunner(self.args('--profiles', 'medium', '--max-preparation-time', '50s'), DEVICE.copy(), self.directory)
-        runner.fill_seconds = 45
-        self.assertEqual(runner.run(), 0)
-        record = runner.manifest['preparation'][0]
-        self.assertEqual(record['conditioning_status'], 'time_cap_reached')
-        self.assertEqual(record['recovery_status'], 'time_cap_reached')
-        self.assertEqual(record['recovery_elapsed_s'], 5)
-        self.assertEqual(len(record['quality']), 2)
-        for point in runner.manifest['points']:
-            self.assertEqual(point['quality'], record['quality'])
-            self.assertEqual(point['recovery_status'], 'time_cap_reached')
-
-    def test_explicitly_disabled_medium_conditioning_remains_not_requested(self):
-        runner = SimulatedRunner(self.args('--profiles', 'medium', '--medium-conditioning-time', '0',
-                                           '--recovery-time', '0'), DEVICE.copy(), self.directory)
-        record = runner.prepare('medium')
-        self.assertEqual(record['conditioning_status'], 'not_requested')
-        self.assertEqual(record['quality'], [])
-
-    def test_failed_identity_check_does_not_reuse_prior_job_write_bytes(self):
-        runner = SimulatedRunner(self.args('--profiles', 'fresh'), DEVICE.copy(), self.directory)
-        runner.last_job = counters(0, 1000000, 10)
-        with mock.patch.object(bench, 'inspect_device', return_value=dict(DEVICE, serial='REPLACED')):
-            self.assertEqual(runner.run(), 1)
-        self.assertEqual(runner.manifest['preparation'][0]['host_write_bytes'], 0)
-
-    def test_clean_but_short_fio_result_is_not_a_complete_sample(self):
-        runner = SimulatedRunner(self.args('--profiles', 'fresh'), DEVICE.copy(), self.directory)
-        runner.start_deadline()
-        point = runner.manifest['points'][0]
-        with mock.patch.object(runner, 'fio', return_value=counters(100, 0, 5)):
-            with self.assertRaisesRegex(RuntimeError, 'before its requested measurement duration'):
-                runner.measure(point)
-        self.assertEqual(point['status'], 'failed')
-        self.assertEqual(point['runs'][0]['status'], 'failed')
-        self.assertNotIn('metrics', point)
-
-    def test_identity_change_stops_before_discard(self):
-        runner = SimulatedRunner(self.args('--profiles', 'fresh'), DEVICE.copy(), self.directory)
-        with mock.patch.object(bench, 'inspect_device', return_value=dict(DEVICE, serial='REPLACED')):
-            self.assertEqual(runner.run(), 1)
-        self.command.assert_not_called()
-        self.assertIn('identity', runner.manifest['error'])
-        self.assertEqual(runner.manifest['preparation'][0]['status'], 'failed')
-
-    def test_incomplete_preparation_never_reaches_measurement(self):
-        runner = SimulatedRunner(self.args('--profiles', 'fresh'), DEVICE.copy(), self.directory)
-        with mock.patch.object(runner, 'fio', return_value=counters(0, 1, 1)) as fio:
-            self.assertEqual(runner.run(), 1)
-        self.assertEqual(fio.call_count, 1)
-        self.assertIn('initialize its entire range', runner.manifest['error'])
-        self.assertEqual(runner.manifest['preparation'][0]['status'], 'failed')
-
-    def test_fio_failure_stops_without_starting_next_point(self):
-        runner = SimulatedRunner(self.args('--profiles', 'fresh'), DEVICE.copy(), self.directory)
-        runner.failure = RuntimeError('synthetic fio I/O error')
-        self.assertEqual(runner.run(), 1)
-        self.assertEqual(runner.manifest['status'], 'failed')
-        self.assertEqual(runner.manifest['points'][0]['status'], 'failed')
-        self.assertTrue(all(p['status'] == 'pending' for p in runner.manifest['points'][1:]))
-        self.assertEqual(len(runner.manifest['preparation']), 1)
-        self.assertEqual(runner.saves[-1], (True, True))
-
-    def test_interrupt_preserves_partial_manifest(self):
-        runner = SimulatedRunner(self.args('--profiles', 'fresh'), DEVICE.copy(), self.directory)
-        runner.failure = InterruptedError('synthetic interrupt')
-        self.assertEqual(runner.run(), 1)
-        self.assertEqual(runner.manifest['status'], 'interrupted')
-        self.assertEqual(runner.manifest['points'][0]['status'], 'interrupted')
-        self.assertTrue(all(p['status'] == 'pending' for p in runner.manifest['points'][1:]))
-        self.assertEqual(runner.saves[-1], (True, True))
-
-    def test_signal_stops_active_process_group(self):
-        runner = SimulatedRunner(self.args(), DEVICE.copy(), self.directory)
-        runner.process = mock.Mock(pid=99999999)
-        runner.process.poll.return_value = None
-        with mock.patch.object(bench.os, 'killpg') as kill:
-            runner.interrupted(signal.SIGTERM, None)
-        self.assertTrue(runner.stop)
-        kill.assert_called_once_with(99999999, signal.SIGINT)
-
-    def test_signal_racing_process_exit_still_records_cancellation(self):
-        runner = SimulatedRunner(self.args(), DEVICE.copy(), self.directory)
-        runner.process = mock.Mock(pid=99999999)
-        runner.process.poll.return_value = None
-        with mock.patch.object(bench.os, 'killpg', side_effect=ProcessLookupError):
-            runner.interrupted(signal.SIGTERM, None)
-        self.assertTrue(runner.stop)
-
-    def test_truncated_final_json_does_not_reuse_previous_snapshot(self):
-        runner = SimulatedRunner(self.args(), DEVICE.copy(), self.directory)
-
-        def completed_process(cmd, stdout, stderr, **kwargs):
-            stdout.write(json.dumps({'jobs': [counters(100, 10, 1)]}) + '\n{"jobs":[')
-            stdout.flush()
-            process = mock.Mock(pid=99999999)
-            process.poll.return_value = 0
-            process.wait.return_value = 0
-            return process
-
-        with mock.patch.object(bench.subprocess, 'Popen', side_effect=completed_process):
-            with self.assertRaisesRegex(RuntimeError, 'truncated fio JSON'):
-                bench.Runner.fio(runner, [], self.directory)
-        self.assertIsNone(runner.process)
-        self.assertFalse((self.directory / 'final-job.json').exists())
-
-    def test_dry_run_does_not_create_output_or_execute_runner(self):
-        output = self.directory / 'not-created'
-        with mock.patch.object(bench, 'inspect_device', return_value=DEVICE.copy()), \
-             mock.patch.object(bench, 'output_outside_target'), \
-             mock.patch.object(bench.Runner, 'run') as run, \
-             mock.patch.object(bench.Runner, 'fio') as fio:
-            self.assertEqual(bench.main(['--filename', TARGET, '--allow-partition', '--dry-run',
-                                         '--results-dir', str(output)]), 0)
-        self.assertFalse(output.exists())
-        run.assert_not_called()
-        fio.assert_not_called()
-        self.command.assert_not_called()
-
-
-class JSONStreamTests(unittest.TestCase):
-    def test_warning_with_braces_does_not_hide_next_snapshot(self):
-        stream = bench.JSONStream()
-        self.assertEqual(stream.feed('warning {bad option}\n{"jobs": []}'), [{'jobs': []}])
-
-    def test_chunks_warnings_multiple_objects_and_braces_in_strings(self):
-        stream = bench.JSONStream()
-        payloads = [{'jobs': [{'name': 'literal } { braces', 'error': 0}]}, {'jobs': []}]
-        raw = 'fio warning\n' + json.dumps(payloads[0]) + '\n' + json.dumps(payloads[1])
-        observed = []
-        for char in raw:
-            observed.extend(stream.feed(char))
-        self.assertEqual(observed, payloads)
-
-    def test_incomplete_snapshot_not_returned_as_complete(self):
-        stream = bench.JSONStream()
-        self.assertEqual(stream.feed('{"jobs":['), [])
-        self.assertEqual(stream.feed(']}'), [{'jobs': []}])
+    def test_dry_run_has_full_schedule_and_no_mutation(self):
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            self.assertEqual(self.invoke('--dry-run'), 0)
+        self.assertIn('"schedule"', captured.getvalue())
+        self.assertFalse(self.output.exists())
+        self.assertFalse(self.affinity_changes)
+        self.assertFalse(self.commands)
 
 
 class DeviceSafetyTests(unittest.TestCase):
     """Drive discovery operates exclusively on a fabricated namespace tree."""
 
     def setUp(self):
-        self.args = bench.parse_args(['--filename', TARGET, '--allow-partition'])
+        self.args = bench.parse_args(['--filename', TARGET, '--allow-partition', '--numa-node', '0'])
         self.tree = {'blockdevices': [dict(name='nvme999n1', path='/dev/nvme999n1',
                      type='disk', size=200 * bench.ALIGN, mountpoint=None,
                      children=[dict(name='nvme999n1p1', path='/dev/nvme999n1p1',
@@ -672,8 +722,12 @@ class DeviceSafetyTests(unittest.TestCase):
         path = str(path)
         if path.endswith('/start'):
             return self.start
-        if path.endswith('/thread_siblings_list'):
-            return '0-1'
+        if path.endswith('node0/cpulist') or path.endswith('/cpu/online'):
+            return '0-3'
+        if path.endswith('/physical_package_id'):
+            return '0'
+        if path.endswith('/core_id'):
+            return '0' if 'cpu0/' in path or 'cpu1/' in path else '1'
         if path.endswith('/model'):
             return 'Mock NVMe'
         return None
@@ -764,7 +818,8 @@ class NullRunner(bench.Runner):
     def fio_base(self):
         return ['fio', '--ioengine=null', '--size=1M', '--rw=randrw',
                 '--rwmixread=70', '--numjobs=1',
-                '--time_based=1', '--rate_iops=10000', '--output-format=json+']
+                '--time_based=1', '--rate_iops=10000', '--output-format=json+',
+                '--numa_mem_policy=bind:1', '--cpus_allowed=32']
 
     def telemetry(self, force=False):
         pass
@@ -776,13 +831,14 @@ class NullRunner(bench.Runner):
         return super().fio(args, directory, on_snapshot, deadline)
 
 
-@unittest.skipUnless(shutil.which('fio'), 'fio is required for diskless stream integration')
+@unittest.skipUnless(shutil.which('fio') and {32, 33} <= os.sched_getaffinity(0),
+                     'fio and NUMA1 CPUs 32-33 are required for diskless integration')
 class RealNullEngineTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='nvme-null-stream-')
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name)
-        self.runner = NullRunner(bench.parse_args(['--filename', TARGET]), DEVICE.copy(), self.directory)
+        self.runner = NullRunner(args('--profiles', 'fresh'), DEVICE.copy(), self.directory)
 
     def test_real_process_drains_final_snapshot_and_writes_artifacts(self):
         seen = []
@@ -831,51 +887,19 @@ class RealNullEngineTests(unittest.TestCase):
             self.runner.record_writes(record, None, final['write']['io_bytes'])
         self.assertEqual(record['host_write_accounting'], 'measured_only_lower_bound')
 
-    def test_measure_three_real_null_repeats_generates_median_and_raw_reports(self):
-        args = bench.parse_args(['--filename', TARGET, '--profiles', 'fresh', '--run-count', '3',
-                                 '--runtime', '1s', '--ramp-time', '1s'])
-        runner = NullRunner(args, DEVICE.copy(), self.directory)
-        point = next(p for p in runner.manifest['points'] if p['pattern'] == 'random'
-                     and p['read_pct'] == 50 and p['qd'] == 1 and p['bs'] == 4096)
-        runner.start_deadline()
-        runner.measure(point)
-        self.assertEqual(point['status'], 'complete')
-        self.assertEqual(point['metrics']['run_count'], 3)
-        self.assertEqual(len(point['runs']), 3)
-        rates = []
-        for sample in point['runs']:
-            self.assertEqual(sample['status'], 'complete')
-            self.assertGreater(sample['elapsed_s'], 1.8)
-            artifact = self.directory / sample['relative_dir']
-            final = json.loads((artifact / 'final-job.json').read_text())
-            self.assertGreaterEqual(final['job_runtime'], 950)
-            self.assertLess(final['job_runtime'], 1200)
-            self.assertEqual(sample['metrics']['read']['io_count'], final['read']['total_ios'])
-            self.assertIn('90', sample['metrics']['read']['percentiles_ns'])
-            rates.append(sample['metrics']['read']['iops'])
-            command = json.loads((artifact / 'command.json').read_text())
-            self.assertIn('--ioengine=null', command)
-            self.assertFalse(any(arg.startswith('--filename=') for arg in command))
-        expected = statistics.median(rates)
-        self.assertAlmostEqual(point['metrics']['read']['iops'], expected)
-        manifest = json.loads((self.directory / 'manifest.json').read_text())
-        saved = next(p for p in manifest['points'] if p['id'] == point['id'])
-        self.assertEqual(saved['metrics']['run_count'], 3)
-        with (self.directory / 'results.csv').open() as stream:
-            summary = next(row for row in csv.DictReader(stream)
-                           if row['id'] == point['id'] and row['direction'] == 'read')
-        self.assertAlmostEqual(float(summary['iops']), expected)
-        self.assertEqual(summary['run_count'], '3')
-        self.assertTrue(summary['clat_p90_ns'])
-        with (self.directory / 'raw-runs.csv').open() as stream:
-            raw = [row for row in csv.DictReader(stream) if row['id'] == point['id']]
-        self.assertEqual(len(raw), 6)
-        self.assertEqual({row['run_index'] for row in raw}, {'1', '2', '3'})
-        self.assertTrue(all(row['clat_p90_ns'] for row in raw))
-        html = (self.directory / 'report.html').read_text()
-        self.assertIn('Median kIOPS', html)
-        self.assertIn('3 / 3', html)
-        self.assertIn(f'{expected / 1000:,.2f}', html)
+    def test_multiworker_null_jobs_have_shared_interval_and_all_artifacts(self):
+        from profile_metrics import window_metrics
+        cmd = ['--runtime=2s', '--status-interval=1',
+               '--name=worker_00', '--cpus_allowed=32', '--rw=randread', '--bs=4K', '--iodepth=2', '--size=1M',
+               '--name=worker_01', '--cpus_allowed=33', '--rw=randread', '--bs=4K', '--iodepth=2', '--size=1M']
+        final = self.runner.fio(cmd, self.directory / 'multi')
+        self.assertEqual(set(final), {'worker_00', 'worker_01'})
+        metrics = window_metrics(None, final, expected_names=['worker_00', 'worker_01'])
+        self.assertEqual(metrics['read']['io_count'], sum(j['read']['total_ios'] for j in final.values()))
+        self.assertEqual(metrics['read']['sample_count'], sum(sum(int(n) for n in j['read']['clat_ns']['bins'].values()) for j in final.values()))
+        self.assertEqual(set(metrics['workers']), set(final))
+        self.assertEqual(json.loads((self.directory / 'multi' / 'final-job.json').read_text()), final)
+        self.assertTrue((self.directory / 'multi' / 'fio.stdout').stat().st_size)
 
 
 class NamespaceLockTests(unittest.TestCase):

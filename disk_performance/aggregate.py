@@ -146,7 +146,7 @@ def main():
         from profile_report import render_report
         with open(manifest_path, encoding="utf-8") as handle:
             manifest = json.load(handle)
-        if manifest.get("schema_version") not in (1, 2):
+        if manifest.get("schema_version") not in (1, 2, 3):
             print("unsupported benchmark manifest schema", file=sys.stderr)
             return 1
         paths = render_report(args.results_dir, manifest, plots=True)

@@ -1,166 +1,68 @@
-# NVMe performance measurements
+# Bounded NVMe profile benchmark
 
-Run `fio_device.sh` with a device to get practical NVMe characterization across **fresh, medium, and sustained** profiles. Each profile is prepared once, then measured with repeated, time-bounded fio workloads. Results include per-profile read/write heatmaps, raw repetitions, medians, variation, and device-state drift references.
+`nvme_bench.py` measures a raw NVMe namespace or partition after explicit preparation states. The default `comparison` protocol gives a compact, paired profile comparison. The balanced/full `sweep` matrix describes evolving device state. **Every preparation discards and overwrites the selected target.** A partition run changes only that partition, but namespace state elsewhere is uncontrolled.
 
-## Run
+The runner checks mounts, holders, users, swap, target identity, output location, NUMA placement, physical cores, and fio support before destructive work. It holds a namespace lock, monitors SMART when `nvme-cli` exists, and preserves a partial manifest on failure. Results must go in a new or empty directory outside the target namespace. Root privileges and `--allow-partition` are required when applicable. Python plot dependencies are listed in `requirements.txt`; the runner also needs `fio`, `blkdiscard`, `lsblk`, `blockdev`, `fuser`, `swapon`, and `findmnt`.
 
-**All data on the selected target is discarded and overwritten.** Store results outside the tested NVMe.
-
-```bash
-sudo ./fio_device.sh --filename /dev/nvmeXn1
-```
-
-The script displays identity, configuration, workload counts, preparation budgets, and an estimated time schedule before asking you to type the full target path. `--yes` skips that confirmation. A new timestamped results directory is created by default; `--results-dir` selects another location and must be new or empty.
-
-Partitions require explicit opt-in:
+## Preview and execution
 
 ```bash
-sudo ./fio_device.sh --filename /dev/nvmeXn1p2 --allow-partition \
-  --results-dir /path/on/other/storage/nvme-results
+sudo python3 nvme_bench.py --filename /dev/nvme3n1p2 --allow-partition \
+  --protocol comparison --numa-node 1 --workers 4 --trials 3 \
+  --results-dir /path/on/other/storage/results --dry-run
+
+sudo python3 nvme_bench.py --filename /dev/nvme3n1p2 --allow-partition \
+  --protocol comparison --numa-node 1 --workers 4 --trials 3 \
+  --results-dir /path/on/other/storage/results --yes
 ```
 
-An NVMe namespace (`nvmeXn1`) is the block device exposed by the SSD. A partition (`nvmeXn1p2`) selects a range within it. Writes/discards remain inside the selected partition, but caches, flash management, spare capacity, and temperature are shared with the rest of the device. Occupancy means a percentage of the **test partition**, and allocation elsewhere is uncontrolled. The report records partition/namespace sizes and their ratio. The namespace tree, including sibling partitions, must be free of mounts, swap, holders, and open device users.
+The read-only dry run prints the complete ordered schedule, per-worker ranges, depths, CPU assignments, seeds, minimum write exposure, and finite caps. `--yes` suppresses the target-path confirmation. `--max-run-time` sets a stricter whole-run device-work deadline. Capped preparations with full initialization can yield exploratory measurements, excluded from the qualified comparison. Incomplete initialization stops their observations.
+
+`--numa-node N` defaults to node 0. The runner intersects that node's online CPUs with permitted affinity, binds its own affinity to the effective pool before children, passes `numa_mem_policy=bind:N` to fio, and pins each fio worker to a distinct physical core. The manifest records the pool, chosen cores, memory policy, and controller NUMA separately; controller location does not override the selection. Sustained conditioning always requires four physical cores, even with `--workers 1` or `2`. fio's memory-policy support is checked before discard.
+
+## Default comparison
+
+Defaults are `--protocol comparison --trials 3 --run-count 1 --workers 4 --seed 20260909`. Each profile is discarded and initialized independently in every trial. Trial order rotates F/M/S, M/S/F, S/F/M (fresh, medium, sustained). Further trials repeat the rotation. Each preparation has seven ordered primary anchors and two final read references. Every sample has a five-second excluded ramp and 20 measured seconds.
+
+| Order | Workload | Aggregate QD | Workers |
+| --- | --- | ---: | ---: |
+| 1 | 1 MiB sequential read | 64 | 1 |
+| 2 | 4 KiB random read | 1 | 1 |
+| 3 | 4 KiB random read | 64 | 4 |
+| 4 | 8 KiB random read | 64 | 4 |
+| 5 | 4 KiB random 70% read / 30% write | 32 | 4 |
+| 6 | 4 KiB random write | 64 | 4 |
+| 7 | 4 KiB random write | 1 | 1 |
+| Final | Repeat 4 KiB random read anchors | 1 / 64 | 1 / 4 |
+
+The default schedule has nine preparations, 63 primary samples, and 18 final references. Its nominal whole-run device-work cap is 6 hours 41 minutes 27 seconds: preparation caps, scheduled sample time, two seconds of overhead per sample, and five minutes of general overhead. This is a cap, not an ETA. Initialization and required medium/sustained exposure total about 31.1 TB of host writes on a 3.2 TB target at 80% occupancy, before stability and measurement writes. `--size-percent` may reduce the measurement range but never initialized occupancy; the measurement range cannot exceed occupancy. Sequential measurements are bounded streaming windows, not whole-range scans. The write-QD1 anchor follows write-QD64 and precedes the final read references, so it measures that ordered, write-evolved device state. New comparison manifests record `comparison_protocol_revision: 2`; older schema-3 comparison manifests remain readable.
+
+`--workers` chooses 1, 2, or 4 for random measurements. Actual worker count is `min(requested workers, aggregate QD)`; sequential and QD1 use one. Aggregate QD is split across workers and equal aligned shards cover the eligible range without overlap. Layout stays fixed across profiles/trials. Seeds derive deterministically from trial, workload, worker, and repeat and match across profiles. Per-worker achieved-depth buckets are distinct from requested aggregate QD. Comparison uses ordinary direct `io_uring`; specialized `libaio` and polling options remain sweep-only.
+
+## Preparation and qualification
+
+Every preparation discards the selected target and writes identical occupancy, 80% by default, using one sequential 1 MiB stream at QD32. Full initialization is mandatory. Fresh adds no aging; its cap is 30 minutes including discard/fill. Medium targets random writes of 5% of occupied bytes within 120 seconds, then idles 60 seconds. Its 30-minute cap includes discard/fill, exposure, and recovery. Missing exposure or recovery leaves it unqualified.
+
+Sustained uses four random-write workers at QD32 each (aggregate 128), with one disjoint equal occupied-range shard per worker. Each must write at least its shard size. Only after all four floors are reached does the runner collect approximately 60-second windows. The latest five windows must have throughput and mean completion-latency range/mean at most 20%, fitted change/mean at most 10%, and every worker below 90% CPU in every window. Two consecutive assessments must pass. Missing CPU data cannot qualify. The 60-minute cap includes discard/fill. Write volume does not imply unique block coverage. The stability result describes this conditioning workload only, not universal SSD or SNIA steady state.
+
+Mixed and pure writes intentionally follow reads, so later anchors observe earlier writes. The manifest records preceding writes, including ramps where target kernel counters permit. The final references show local read drift; they cannot establish equivalence or stability throughout the sequence.
+
+## Results
+
+`manifest.json` uses schema 3 with unique trial, preparation, observation, execution, and reference identities and explicit observation-to-preparation links. Each execution retains its fio command, stdout/stderr, and final validated job data. `result.txt`, `report.html`, CSVs, and optional plots expose preparation qualification, exposure, cap headroom, run order, prior writes, CPU, and drift, including partial and exploratory records. `aggregate.py RESULTS_DIR` rerenders schema 3 and remains compatible with schema 1/2 manifests and legacy no-manifest directories.
+
+The comparison report places 4 KiB random-read QD1 completion latency near the top, separating primary anchors from final references, and adds a separate write-QD1 table for the seventh anchor. Mean and p50/p90/p95/p99/p99.9 show median and range across qualified independent trials in microseconds; worst observed run maximum is labeled exact or approximate. Older result manifests without write-QD1 measurements explicitly show it as not measured; write-QD64 latency cannot supply that value. A collapsible table and `result.txt` retain directional latency for every observation. `results.csv` and `raw-runs.csv` include both directions' completion-latency percentiles, means, maxima, total-latency means, and approximation metadata. Run percentiles and pooled histogram percentiles have separate columns. The report's workload key decodes the anchors; mixed `rw4k_qd32` requests 70% reads and 30% writes. Each run's total IOPS sums both directions, while medians across repeats need not add.
+
+Every expected fio job, counter, and histogram is validated. Worker counts and histograms are summed; rates use a shared measured interval; latency means are weighted by samples. Worker time series record their one-second averaging configuration and post-ramp origin; plots sum only intervals covered by every worker before downsampling and label incomplete log coverage. Older logs without interval metadata retain point-timestamp plots. Run percentiles, medians of run percentiles, and pooled histogram percentiles are separate. The report first summarizes local repeats, then the median and range of independent qualified trials and paired profile ratios by matching trial IDs. Preparations are counted separately from repeats. Overlapping ranges and local time windows are not independent evidence. Exit code zero alone does not imply enough qualified trials or acceptance.
+
+`--run-type smoke` reduces duration/range to exercise workflow and worker layouts; it is not a performance comparison. Historical hardware result directories in this repository came from a different target or method and are context only.
+
+## Evolving-state sweep and compatibility
 
 ```bash
-# Read-only checks and preview; no target or result writes.
-sudo ./fio_device.sh --filename /dev/nvmeXn1p2 --allow-partition --dry-run
-
-# Used-state characterization only.
-sudo ./fio_device.sh --filename /dev/nvmeXn1p2 --allow-partition --profiles medium
-
-# Denser optional matrix, with a custom repeat count and measured duration.
-sudo ./fio_device.sh --filename /dev/nvmeXn1 --matrix full \
-  --run-count 3 --ramp-time 3s --measurement-time 10s
+sudo python3 nvme_bench.py --filename /dev/nvme3n1p2 --allow-partition \
+  --protocol sweep --matrix balanced --numa-node 1 \
+  --results-dir /path/on/other/storage/sweep --dry-run
 ```
 
-Ctrl-C stops active work and preserves partial results; it cannot restore discarded data and does not automatically resume the run. No destructive hardware test is part of automated tests.
-
-## Preparation and interpretation
-
-The default occupied and measured ranges are **80% of the target**. `--occupancy-percent` controls the initialized occupancy for medium and sustained; `--size-percent` controls the measured active range and defaults to occupancy. For medium/sustained the measured range cannot exceed initialized occupancy. Ranges round down to whole MiB.
-
-| Profile | One-time preparation | Default preparation cap |
-|---|---|---|
-| `fresh` | Discard, then initialize the measured range once, with no additional aging. | 30 minutes including discard/fill. |
-| `medium` | Discard, initialize 80% once, lightly overwrite randomly for at most 120 seconds **and at most 5% of occupied bytes**, then recover 60 seconds. | 30 minutes including discard/fill/overwrite/recovery. |
-| `sustained` | Discard, initialize 80% once, then apply bounded high-QD 4 KiB random-write conditioning. | 60 minutes **including discard and fill**. |
-
-Measurements do not rebuild preparation between cases or repeats. Device state evolves during a profile; early/late 4 KiB QD1 read references quantify some of that drift separately from matrix samples. Fresh means the initial profile baseline, not that every subsequent write runs on a newly discarded device.
-
-Sustained preparation records whether its conditioning workload appeared stable or reached its time cap. Stability checks use five approximately one-minute windows of write throughput and mean completion latency: range/mean at most 20%, fitted change/mean at most 10%, and two consecutive passing assessments. This can describe a temporary plateau; it does not prove cache exhaustion or long-term steady state. That status is separate from the success of subsequent measurements. There is **no full-capacity write floor for each low-QD test**, and no unlimited conditioning loop. This is practical characterization, **not steady-state certification for every workload or SNIA compliance**. SNIA's distinction between initial and workload-dependent conditioning is useful background, but its standard is a different protocol: [SNIA SSS PTS 2.0.2](https://www.snia.org/sites/default/files/2025-02/SNIA-SSS-PTS-2.0.2.pdf).
-
-If initialization cannot finish within the preparation cap, the run stops before measurements. After a complete fill, capped conditioning or shortened medium recovery can still produce measurements, but those cells carry `*` qualifications and the preparation table explains the incomplete steps. `not_requested` describes fresh preparation or explicitly disabled medium conditioning; skipped conditioning due to insufficient time is recorded as capped.
-
-Discard is the reset mechanism. The script does not format namespaces or change firmware, write cache, IRQ placement, or power settings. Uninitialized space is discarded, so occupancy also affects capacity available to the controller for reclamation. Data elsewhere on a partitioned device can affect results.
-
-## Matrix, repetitions, and runtime
-
-| Preset | Sequential cases | Random cases | Cases/profile |
-|---|---|---|---:|
-| `balanced` (default) | 128 KiB/1 MiB; read/write; QD1/64 | 4 KiB/8 KiB; read% 100,90,70,50,0; QD1,4,16,64 | 48 |
-| `full` | Same eight sequential cases | 4 KiB/8 KiB; read% 100,95,90,80,70,50,30,10,0; QD1,4,16,32,64 | 98 |
-
-Default: **five repeats/case, three-second excluded warmup, ten measured seconds/repeat**. Balanced therefore schedules 240 samples/profile and 720 samples across three profiles. Each profile's sample schedule is `48 × 5 × (3 + 10) = 3,120 seconds`, or **52 minutes**, before process overhead, references, and preparation. Default preparation caps add at most two hours across the three profiles; the printed whole-run budget also allows process overhead. Full matrix schedules approximately 106 minutes/profile before those additions.
-
-`--max-run-time` sets a whole-device-work deadline. When omitted, a finite cap is derived from preparation caps, sample/reference durations, and process-overhead allowances. It is a bound on device work, not a promise that optional report rendering finishes at exactly that deadline. The estimate and budget remain in the manifest/report. A cap or interrupted run can yield partial results; completed repetitions remain visible with their reduced sample count.
-
-With the defaults, the schedule including references and a two-second/sample overhead allowance is **60.5 minutes/profile**; the automatically calculated device-work cap is **5 hours 6 minutes 30 seconds** for all three profiles. Preparation can finish early. This cap is not an ETA or a guarantee under kernel faults: the runner bounds its waits and sends termination signals, but uninterruptible kernel I/O may persist and is reported as an error.
-
-| Preset with default timings | Samples/profile | Measurement schedule/profile, including references and overhead | All three profiles: device-work cap |
-|---|---:|---:|---:|
-| `balanced` | 240 | 60 min 30 sec | **5 h 6 min 30 sec** |
-| `full` | 490 | 123 min | **8 h 14 min** |
-| `--run-type smoke` | 20 | 1 min 28 sec | **12 min 24 sec** |
-
-These totals include all preparation caps plus five minutes of shared allowance. Running only fresh or medium has a default balanced cap of **1 h 35 min 30 sec**; sustained alone has **2 h 5 min 30 sec**. Four saturation probes add one minute per selected profile with default timings. Custom durations, ratios and repeat counts recalculate the cap and can extend it beyond these hours; setting a shorter `--max-run-time` stops the run rather than compressing the matrix.
-
-Preparation feasibility still depends on capacity and write speed: initializing 80% of a 4 TB target within 30 minutes requires at least 1.78 GB/s average, with additional time needed for discard and medium overwrite/recovery. A larger or slower SSD may need higher preparation caps or a smaller initialized/measured range. The preview records the bytes to initialize, and fill progress records the estimated remaining time.
-
-Mixed cases use one fio `randrw` job with `rwmixread`. Ratios describe read/write **operation percentages**; both directions share the total QD and use equal block sizes. Achieved operation/byte ratios are reported separately. Pure endpoints are reused as heatmap rows without duplicate cases.
-
-The ratio × QD layout follows [`../stress_tool/`](../stress_tool/) at commit `b517443f9bceecbb65e3aa4bc63dc62e3af4d342`. That tool's background ratio means writes per read: for equal-size operations, read percentage is `100 / (1 + ratio)`; ratio 0.25 means 80/20, while ratio 1 means 50/50. Its scheduler differs from fio's mixed-job scheduler, so matching axes do not imply identical workloads.
-
-Defaults use one direct-I/O worker, ordinary `io_uring`, explicit seeds/payload policy, independently sampled random offsets, and single-I/O submission batching. CPU placement, achieved depth, and CPU use are recorded. One worker may not saturate every NVMe. `--saturation-probe` adds four single-sample random QD256 diagnostics per profile (4/8 KiB read/write); these are distinct from the main matrix.
-
-## Controls and dependencies
-
-| Option | Default / meaning |
-|---|---|
-| `--profiles` | `fresh,medium,sustained`; unique subset. Old names `used-recovered` and `sustained-steady` are aliases. |
-| `--matrix` | `balanced`; `full` provides the dense optional grid. |
-| `--read-percentages` | Override preset random ratios with unique comma-separated integers 0–100. |
-| `--run-count` | `5` planned repetitions per case; the first failure stops the run and preserves successful repetitions. |
-| `--ramp-time` | `3s`, excluded warmup; zero allowed. |
-| `--measurement-time`, `--runtime` | `10s`, measured time per repetition. |
-| `--occupancy-percent` | `80`, medium/sustained occupancy. |
-| `--size-percent` | Occupancy percentage by default; measured range. |
-| `--medium-conditioning-time` | `120s`, also capped at 5% of occupied bytes; zero allowed. |
-| `--recovery-time` | `60s`, medium recovery; zero allowed. |
-| `--max-preparation-time` | `30m`, all fresh/medium preparation. |
-| `--max-conditioning-time` | `60m`, all sustained preparation, including fill. |
-| `--max-run-time` | Finite automatically calculated whole-run device-work cap. |
-| `--saturation-probe` | Add four QD256 diagnostics/profile. |
-| `--use-aio` | Use `libaio` instead of `io_uring`. |
-| `--polling` | Specialized io_uring polling with registered files and separate physical SQ-poll CPU; requires support and conflicts with `--use-aio`. |
-| `--prefix` | `nvme`, report title label. |
-| `--run-type smoke` | Reduced matrix/range/durations for destructive workflow checks, not performance evidence. **Still discards the entire target.** |
-
-Durations accept seconds or suffixes `s`, `m`, `h`, `d`. `--clean-device` remains a deprecated alias for fresh-only. Standalone probe/random-pass options from the old scripts are not supported. See `--help` for the full interface and [fio's official manual](https://fio.readthedocs.io/en/latest/fio_doc.html) for engine and mixed-I/O semantics.
-
-Required: Linux, Python 3, fio with the chosen engine, plus `blkdiscard`, `lsblk`, `blockdev`, `findmnt`, `swapon`, and `fuser`. `nvme-cli` enables identification and SMART/temperature/health monitoring; missing telemetry is explicitly recorded. The script does not install packages automatically.
-
-**Matplotlib is optional.** HTML heatmap tables, text and CSV work without it; installing it adds embedded PNG heatmaps/QD/time-series plots:
-
-```bash
-python3 -m pip install -r requirements.txt
-```
-
-`sudo` may use another Python environment. An isolated alternative is `python3 -m pip install --target /absolute/dependency/directory -r requirements.txt`, followed by `sudo env PYTHONPATH=/absolute/dependency/directory ./fio_device.sh ...`. There is no hardcoded machine-specific dependency directory.
-
-## Output and statistics
-
-| Artifact | Contents |
-|---|---|
-| `report.html` | Offline profile tables/heatmaps, repeat spread/sample qualifications, preparation progress/status, budget, read-reference drift, device/telemetry, optional embedded plots. |
-| `result.txt` | Terminal-friendly matrices and status summaries. |
-| `results.csv` | One directional summary row per case: median metrics, repeat min/median/max/sample SD, counts, achieved ratios, quality/approximation flags. |
-| `raw-runs.csv` | Separate rows for individual repetitions, including failures, run index, seed, elapsed time, counts, and raw-run metrics. |
-| `manifest.json` | Versioned schema, all point/run records, preparation, budgets, reference measurements, device and telemetry. |
-| `<profile>/<point>/<run>/` | Exact command, fio JSON+ output/stderr, final job result, and one-second throughput logs. Latency histograms are embedded in JSON+; separate histogram log files are not produced. |
-| `preparation/` | One-time preparation records and raw commands/results. |
-
-Heatmaps show **median read/write kIOPS and median per-run read/write p99 completion latency**. A median of run-level p99 values is not a pooled p99. Pooled percentiles from summed histogram counts are separate CSV/raw fields. Rate/latency medians may form a synthetic summary rather than a single representative run; counts sum successful runs, and achieved ratios use pooled counts. Spread uses sample standard deviation (one successful run has SD zero, not evidence of repeatability).
-
-Corresponding heatmaps share scales across profiles. `N/A` means an inactive direction. Results based on successful but incomplete repeats remain numeric with `*` qualifications; absent results stay gray. Advisory tail-sample flags identify sparse percentiles without claiming statistical confidence. Maximum-latency approximations are labeled; median run maximum and maximum observed across runs are distinct fields. CSV units are bytes/s and nanoseconds; displayed units are explicit. Completion latency does not establish application durability or transaction latency.
-
-The manifest updates after every repetition; HTML/CSV/text reports update during preparation, after each case, and at run termination. This keeps report rendering out of active measurements and limits its overhead. No fixed ranking between profiles is assumed: inspect drift, temperature, CPU/depth, achieved ratios, and repeat spread. Fio/device failures and reported critical health changes stop device work and preserve completed samples. A final SMART check runs before declaring completion when telemetry is available. Read-only engine capability failures and run-stop reasons are retained in the manifest and reports. Host writes use target kernel counters when available; missing counters make the reported total a labeled lower bound that may omit warmup writes. Early/late reference writes are included in accounting.
-
-Optional time-series plots show one representative successful repeat per point, selected by total IOPS nearest the point median and labeled explicitly. All repeats remain in raw files. Long logs use bounded min/mean/max downsampling with spike retention; raw logs stay unchanged. Histogram payloads remain in JSON/manifest files rather than the HTML to keep report refreshes small. Optional plotting errors leave HTML tables, CSV, and text usable. CSV also preserves p90 and the scope of the achieved-depth distribution; fio's depth counters can include cumulative job activity rather than only the selected measurement interval.
-
-```bash
-python3 ./aggregate.py /path/to/results
-```
-
-The aggregator accepts current schema 2 and historical schema 1 manifests. Schema 1 keeps its historical measurement semantics. Directories without a manifest retain the old aggregation path, including legacy `--plot` behavior.
-
-The namespace-wide advisory lock is held across preparation, idle recovery, measurements and reporting, preventing another instance of this runner from testing a sibling partition concurrently. It cannot stop unrelated programs from opening the device after validation; keep the device otherwise idle.
-
-## Standalone preparation and development
-
-```bash
-sudo ./precondition.sh --filename /dev/nvmeXn1p2 --allow-partition \
-  --profiles medium --results-dir /path/on/other/storage/preparation
-```
-
-Standalone preparation requires exactly one profile, performs only its bounded baseline preparation, and writes its records. It does not run the measurement matrix or certify steady state for arbitrary later workloads.
-
-Automated tests use fixtures/mocked commands and require no real NVMe:
-
-```bash
-python3 -m unittest discover -p 'test_profile*.py' -v
-python3 -m unittest discover -p 'test_nvme*.py' -v
-```
-
-Tests cover both matrices and all profiles with simulated slow fill/nonconverging conditioning, timeout/interruption paths, preparation qualifications, safety checks and partial reports. When fio is installed, diskless `null` engine tests exercise real subprocess handling and excluded warmup counters. These checks validate orchestration, not hardware performance. Existing schema 1 hardware results do not validate the current schema 2 workflow.
-
-See [aio_vs_uring/README.md](aio_vs_uring/README.md) for separate aio-versus-io_uring experiments.
+`--matrix balanced` and `--matrix full` retain the broad matrix. `--read-percentages`, `--saturation-probe`, `--use-aio`, and `--polling` are sweep-only. Sweep defaults to one preparation/profile, five local samples/case, three seconds ramp, and ten measured seconds. Explicit `--matrix` without `--protocol` selects sweep with a migration notice. The older profile aliases `used-recovered` and `sustained-steady`, `--clean-device`, `--runtime`, `--prepare-only`, `fio_device.sh`, and `precondition.sh` remain available. Sweep heatmaps describe ordered evolving state, not independent starting states.

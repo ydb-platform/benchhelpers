@@ -51,14 +51,41 @@ def _histogram(clat, label):
     return result
 
 
-def snapshot(payload):
-    """Return the validated single fio job, without altering the payload."""
+def snapshot(payload, expected_names=None):
+    """Validate JSON+ jobs and return one legacy job or a named job mapping.
+
+    Explicit names require an exact match. In particular a fio group-reporting
+    row cannot silently stand in for several independently measured workers.
+    """
     if not isinstance(payload, dict):
         raise ValueError("fio payload must be an object")
     jobs = payload.get("jobs")
-    if not isinstance(jobs, list) or len(jobs) != 1 or not isinstance(jobs[0], dict):
-        raise ValueError("expected exactly one fio job")
-    job = jobs[0]
+    if expected_names is None:
+        if not isinstance(jobs, list) or len(jobs) != 1:
+            raise ValueError("expected exactly one fio job")
+        return _validate_job(jobs[0])
+    if isinstance(expected_names, (str, bytes)):
+        raise ValueError("expected_names must be a sequence of unique job names")
+    names = list(expected_names)
+    if not names or any(not isinstance(name, str) or not name for name in names) or len(names) != len(set(names)):
+        raise ValueError("expected_names must be a sequence of unique job names")
+    if not isinstance(jobs, list) or len(jobs) != len(names):
+        raise ValueError(f"expected fio jobs {names!r}, received {len(jobs) if isinstance(jobs, list) else 'invalid jobs'}")
+    result = {}
+    for job in jobs:
+        validated = _validate_job(job)
+        name = validated.get("jobname")
+        if not isinstance(name, str) or not name or name in result:
+            raise ValueError(f"missing or duplicate fio job identity: {name!r}")
+        result[name] = validated
+    if set(result) != set(names):
+        raise ValueError(f"fio job identities differ: expected {sorted(names)!r}, got {sorted(result)!r}")
+    return {name: result[name] for name in names}
+
+
+def _validate_job(job):
+    if not isinstance(job, dict):
+        raise ValueError("fio job must be an object")
     if job.get("error") != 0:
         raise ValueError(f"fio job error: {job.get('error', 'missing')}")
     for direction in ("read", "write"):
@@ -68,15 +95,24 @@ def snapshot(payload):
         for field in ("io_bytes", "total_ios", "runtime"):
             _counter(stats.get(field), f"{direction}.{field}")
         clat = stats.get("clat_ns", {})
+        if not isinstance(clat, dict):
+            raise ValueError(f"{direction}.clat_ns must be an object")
         _histogram(clat, f"{direction}.clat_ns")
         for field in ("mean", "max"):
             _number(clat.get(field, 0), f"{direction}.clat_ns.{field}")
         lat = stats.get("lat_ns", {})
+        if not isinstance(lat, dict):
+            raise ValueError(f"{direction}.lat_ns must be an object")
         _counter(lat.get("N", 0), f"{direction}.lat_ns.N")
         _number(lat.get("mean", 0), f"{direction}.lat_ns.mean")
     for field in ("job_runtime", "usr_cpu", "sys_cpu"):
         if field in job:
             _number(job[field], field)
+    depth = job.get("iodepth_level", {})
+    if not isinstance(depth, dict):
+        raise ValueError("iodepth_level must be an object")
+    for bucket, value in depth.items():
+        _number(value, f"iodepth_level[{bucket}]")
     return job
 
 
@@ -136,12 +172,20 @@ def _tail_quality(sample_counts):
     }
 
 
-def window_metrics(before, after):
+def window_metrics(before, after, expected_names=None, interval_ms=None):
     """Subtract cumulative JSON+ jobs to describe only the selected window.
 
     ``before=None`` measures from the beginning of the fio job. Every call
     validates its input, preventing failed/partial jobs becoming valid results.
     """
+    if expected_names is not None:
+        return _worker_window_metrics(before, after, expected_names, interval_ms)
+    if interval_ms is not None:
+        raise ValueError("interval_ms requires expected_names")
+    return _single_window_metrics(before, after)
+
+
+def _single_window_metrics(before, after):
     snapshot({"jobs": [after]})
     if before is not None:
         snapshot({"jobs": [before]})
@@ -184,6 +228,8 @@ def window_metrics(before, after):
             "percentiles_ns": _percentiles(bins),
             "histogram_ns": {str(k): v for k, v in sorted(bins.items())},
             "lat_mean_ns": _mean_delta(old.get("lat_ns", {}), new.get("lat_ns", {}), f"{direction}.lat_ns"),
+            "lat_sample_count": _delta(old.get("lat_ns", {}).get("N", 0),
+                                       new.get("lat_ns", {}).get("N", 0), f"{direction}.lat_ns.N"),
             "tail_quality": _tail_quality([samples]),
         }
     read, write = result["read"], result["write"]
@@ -197,10 +243,89 @@ def window_metrics(before, after):
         "total_bw_bytes": read["bw_bytes"] + write["bw_bytes"],
         "achieved_read_pct": 100 * read["io_count"] / total_ios if total_ios else None,
         "achieved_read_byte_pct": 100 * read["io_bytes"] / total_bytes if total_bytes else None,
-        "cpu_user": max(0, (after.get("usr_cpu", 0) * new_runtime - before.get("usr_cpu", 0) * old_runtime) / runtime) if runtime else None,
-        "cpu_system": max(0, (after.get("sys_cpu", 0) * new_runtime - before.get("sys_cpu", 0) * old_runtime) / runtime) if runtime else None,
+        "cpu_user": (max(0, (after["usr_cpu"] * new_runtime - before.get("usr_cpu", 0) * old_runtime) / runtime)
+                     if runtime and "usr_cpu" in after and (full_job or "usr_cpu" in before) else None),
+        "cpu_system": (max(0, (after["sys_cpu"] * new_runtime - before.get("sys_cpu", 0) * old_runtime) / runtime)
+                       if runtime and "sys_cpu" in after and (full_job or "sys_cpu" in before) else None),
         "depth": dict(after.get("iodepth_level", {})),
         "depth_scope": "cumulative_job",
+    })
+    return result
+
+
+def _worker_window_metrics(before, after, expected_names, interval_ms):
+    names = list(expected_names)
+    if not isinstance(after, dict):
+        raise ValueError("after must map fio job names to jobs")
+    if set(after) != set(names):
+        raise ValueError("after worker keys differ from expected fio jobs")
+    current = snapshot({"jobs": list(after.values())}, names)
+    if before is None:
+        previous = None
+    else:
+        if not isinstance(before, dict):
+            raise ValueError("before must map fio job names to jobs")
+        if set(before) != set(names):
+            raise ValueError("before worker keys differ from expected fio jobs")
+        previous = snapshot({"jobs": list(before.values())}, names)
+    workers = {name: _single_window_metrics(previous[name] if previous else None, current[name])
+               for name in names}
+    if interval_ms is None:
+        interval_ms = max(
+            _delta((previous[name].get("job_runtime", 0) if previous else 0),
+                   current[name].get("job_runtime", max(current[name][d]["runtime"] for d in ("read", "write"))),
+                   f"{name}.job_runtime") for name in names)
+    interval_ms = _counter(interval_ms, "shared interval_ms")
+    total_count = sum(workers[name][d]["io_count"] for name in names for d in ("read", "write"))
+    if total_count and not interval_ms:
+        raise ValueError("nonzero I/O without shared measurement time")
+    result = {"workers": workers, "worker_names": names, "interval_ms": interval_ms,
+              "depth": {}, "depth_scope": "per_worker_cumulative_job",
+              "cpu_user": sum(workers[name]["cpu_user"] or 0 for name in names),
+              "cpu_system": sum(workers[name]["cpu_system"] or 0 for name in names)}
+    for direction in ("read", "write"):
+        sources = [workers[name][direction] for name in names]
+        bins = {}
+        for source in sources:
+            for bucket, count in source["histogram_ns"].items():
+                bins[int(bucket)] = bins.get(int(bucket), 0) + count
+        counts = sum(source["io_count"] for source in sources)
+        nbytes = sum(source["io_bytes"] for source in sources)
+        samples = sum(source["sample_count"] for source in sources)
+        clat_n = sum(source["clat_sample_count"] for source in sources)
+        lat_n = sum(source["lat_sample_count"] for source in sources)
+
+        def weighted_mean(field, count_field, count):
+            if not count:
+                return None
+            if any(source[field] is None and source[count_field] for source in sources):
+                raise ValueError(f"{direction}.{field}: missing worker latency mean")
+            return sum((source[field] or 0) * source[count_field] for source in sources) / count
+
+        active_maxima = [source["clat_max_ns"] for source in sources if source["clat_max_ns"] is not None]
+        result[direction] = {
+            "iops": counts * 1000 / interval_ms if interval_ms else 0,
+            "bw_bytes": nbytes * 1000 / interval_ms if interval_ms else 0,
+            "io_count": counts, "io_bytes": nbytes,
+            "runtime_ms": interval_ms if counts or nbytes else 0,
+            "sample_count": samples, "clat_sample_count": clat_n,
+            "lat_sample_count": lat_n,
+            "histogram_sample_drift": samples - clat_n,
+            "clat_mean_ns": weighted_mean("clat_mean_ns", "clat_sample_count", clat_n),
+            "lat_mean_ns": weighted_mean("lat_mean_ns", "lat_sample_count", lat_n),
+            "clat_max_ns": max(active_maxima) if active_maxima else None,
+            "clat_max_approximate": any(source["clat_max_approximate"] for source in sources),
+            "percentiles_ns": _percentiles(bins),
+            "histogram_ns": {str(bucket): count for bucket, count in sorted(bins.items())},
+            "tail_quality": _tail_quality([samples]),
+        }
+    read, write = result["read"], result["write"]
+    total_bytes = read["io_bytes"] + write["io_bytes"]
+    result.update({
+        "total_iops": total_count * 1000 / interval_ms if interval_ms else 0,
+        "total_bw_bytes": total_bytes * 1000 / interval_ms if interval_ms else 0,
+        "achieved_read_pct": 100 * read["io_count"] / total_count if total_count else None,
+        "achieved_read_byte_pct": 100 * read["io_bytes"] / total_bytes if total_bytes else None,
     })
     return result
 
@@ -262,6 +387,8 @@ def aggregate_runs(runs):
             result[metric] = stats[metric]["median"]
         for metric in ("io_count", "io_bytes", "runtime_ms", "sample_count", "clat_sample_count"):
             result[metric] = sum(_counter(source.get(metric, 0), f"{direction}.{metric}") for source in sources)
+        result["lat_sample_count"] = sum(_counter(source.get("lat_sample_count", 0),
+                                                  f"{direction}.lat_sample_count") for source in sources)
         result["histogram_sample_drift"] = sum(source.get("histogram_sample_drift", 0) for source in sources)
         result["histogram_ns"] = {str(bucket): count for bucket, count in sorted(bins.items())}
         result["pooled_percentiles_ns"] = _percentiles(bins)
@@ -281,7 +408,134 @@ def aggregate_runs(runs):
     io_bytes = sum(summary[direction]["io_bytes"] for direction in ("read", "write"))
     summary["achieved_read_pct"] = 100 * summary["read"]["io_count"] / io_count if io_count else None
     summary["achieved_read_byte_pct"] = 100 * summary["read"]["io_bytes"] / io_bytes if io_bytes else None
+    if any("workers" in run for run in runs):
+        if not all("workers" in run for run in runs):
+            raise ValueError("cannot mix worker and legacy run metrics")
+        names = list(runs[0]["workers"])
+        if any(set(run["workers"]) != set(names) for run in runs):
+            raise ValueError("worker identities differ between runs")
+        summary["workers"] = {name: aggregate_runs([run["workers"][name] for run in runs]) for name in names}
+        summary["worker_names"] = names
+        summary["depth_scope"] = "per_worker_cumulative_job"
     return summary
+
+
+def _trial_statistics(values):
+    stats = _repeat_statistics(values)
+    stats["range"] = stats["max"] - stats["min"] if stats["min"] is not None else None
+    stats["count"] = sum(value is not None for value in values)
+    return stats
+
+
+def aggregate_trials(trials):
+    """Summarize independent preparation trials after local-run aggregation.
+
+    Trial medians and ranges use one value per preparation. Pooled histograms
+    are supplied separately and never presented as independent trial evidence.
+    """
+    if isinstance(trials, dict):
+        trial_ids = list(trials)
+        values = list(trials.values())
+    else:
+        values = list(trials)
+        trial_ids = list(range(len(values)))
+    if not values:
+        raise ValueError("cannot aggregate empty trials")
+    if any(not isinstance(value, dict) for value in values):
+        raise ValueError("trial summary must be an object")
+    result = {
+        "trial_count": len(values), "independent_preparations": len(values),
+        "local_run_count": sum(_counter(value.get("run_count", 1), "trial.run_count") for value in values),
+        "trial_ids": trial_ids, "trial_statistics": {}, "quality_flags": [],
+        "rate_scope": "median_of_independent_trials",
+        "percentile_scope": "median_of_trial_run_percentiles",
+        "count_scope": "sum_of_local_runs_across_trials",
+        "pooled_percentile_scope": "all_local_run_histograms_descriptive_only",
+    }
+    if len(values) == 1:
+        result["quality_flags"].append("single_independent_trial")
+    for metric in ("total_iops", "total_bw_bytes", "cpu_user", "cpu_system",
+                   "achieved_read_pct", "achieved_read_byte_pct"):
+        stats = _trial_statistics([trial.get(metric) for trial in values])
+        result[metric] = stats["median"]
+        result["trial_statistics"][metric] = stats
+    for direction in ("read", "write"):
+        sources = [trial[direction] for trial in values]
+        result[direction] = {}
+        result["trial_statistics"][direction] = {}
+        for metric in ("iops", "bw_bytes", "clat_mean_ns", "clat_max_ns", "lat_mean_ns"):
+            stats = _trial_statistics([source.get(metric) for source in sources])
+            result[direction][metric] = stats["median"]
+            result["trial_statistics"][direction][metric] = stats
+        for metric in ("io_count", "io_bytes", "sample_count", "clat_sample_count", "lat_sample_count"):
+            result[direction][metric] = sum(_counter(source.get(metric, 0), f"{direction}.{metric}")
+                                            for source in sources)
+        percentiles = {}
+        for p in PERCENTILES:
+            key = str(p)
+            stats = _trial_statistics([source.get("percentiles_ns", {}).get(key) for source in sources])
+            percentiles[key] = stats["median"]
+            result["trial_statistics"][direction].setdefault("percentiles_ns", {})[key] = stats
+        result[direction]["percentiles_ns"] = percentiles
+        bins = {}
+        for source in sources:
+            samples = _counter(source["sample_count"], f"{direction}.sample_count")
+            hist = _histogram({"N": samples, "bins": source.get("histogram_ns", {})}, direction)
+            if sum(hist.values()) != samples:
+                raise ValueError(f"{direction}: trial histogram does not match sample_count")
+            for bucket, count in hist.items():
+                bins[bucket] = bins.get(bucket, 0) + count
+        result[direction]["histogram_ns"] = {str(bucket): count for bucket, count in sorted(bins.items())}
+        result[direction]["pooled_percentiles_ns"] = _percentiles(bins)
+        result[direction]["tail_quality"] = _tail_quality([source["sample_count"] for source in sources])
+        result[direction]["clat_max_approximate"] = any(source.get("clat_max_approximate", True)
+                                                        for source in sources if source.get("clat_max_ns") is not None)
+    if any("workers" in trial for trial in values):
+        if not all("workers" in trial for trial in values):
+            raise ValueError("cannot mix worker and legacy trial summaries")
+        names = list(values[0]["workers"])
+        if any(set(trial["workers"]) != set(names) for trial in values):
+            raise ValueError("worker identities differ between trials")
+        result["workers"] = {name: aggregate_trials([trial["workers"][name] for trial in values])
+                             for name in names}
+        result["worker_names"] = names
+    return result
+
+
+def paired_profile_ratios(profile_trials, baseline_trials):
+    """Compute one profile/baseline ratio per matched independent trial."""
+    if not isinstance(profile_trials, dict) or not isinstance(baseline_trials, dict):
+        raise ValueError("paired trial summaries must be keyed by trial identity")
+    if not profile_trials or set(profile_trials) != set(baseline_trials):
+        raise ValueError("profile and baseline trial identities must match")
+    trial_ids = list(profile_trials)
+
+    def ratios(path):
+        per_trial = {}
+        for trial_id in trial_ids:
+            numerator, denominator = profile_trials[trial_id], baseline_trials[trial_id]
+            for part in path:
+                numerator, denominator = numerator.get(part), denominator.get(part)
+                if numerator is None or denominator is None:
+                    break
+            if numerator is None or denominator is None:
+                per_trial[trial_id] = None
+                continue
+            numerator = _number(numerator, f"profile {'.'.join(path)}")
+            denominator = _number(denominator, f"baseline {'.'.join(path)}")
+            per_trial[trial_id] = numerator / denominator if denominator else None
+        return {"per_trial": per_trial, "statistics": _trial_statistics(list(per_trial.values()))}
+
+    result = {"trial_count": len(trial_ids), "trial_ids": trial_ids,
+              "ratio_scope": "paired_independent_trials",
+              "total_iops": ratios(("total_iops",)),
+              "total_bw_bytes": ratios(("total_bw_bytes",))}
+    for direction in ("read", "write"):
+        result[direction] = {metric: ratios((direction, metric))
+                             for metric in ("iops", "bw_bytes", "clat_mean_ns")}
+        result[direction]["percentiles_ns"] = {
+            str(p): ratios((direction, "percentiles_ns", str(p))) for p in PERCENTILES}
+    return result
 
 
 def check_stability(windows, read_pct):
